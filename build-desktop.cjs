@@ -13,9 +13,27 @@ const DIST_ROOT = path.join(APP_DIR, 'dist');
 const TARGET_DIR = path.join(DIST_ROOT, '视频制作OS-win32-x64');
 const APP_TARGET = path.join(TARGET_DIR, 'resources', 'app');
 
+function findFileRecursive(root, fileName) {
+  if (!fs.existsSync(root)) return null;
+  const stack = [root];
+  while (stack.length) {
+    const current = stack.pop();
+    const entries = fs.readdirSync(current, { withFileTypes: true });
+    for (const entry of entries) {
+      const candidate = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(candidate);
+        continue;
+      }
+      if (entry.isFile() && entry.name === fileName) return candidate;
+    }
+  }
+  return null;
+}
+
 function ensureElectronRuntime() {
   if (process.platform !== 'win32') return;
-  if (fs.existsSync(path.join(ELECTRON_DIST, 'electron.exe'))) return;
+  if (findFileRecursive(ELECTRON_DIST, 'electron.exe')) return;
   const installer = path.join(APP_DIR, 'node_modules', 'electron', 'install.js');
   if (!fs.existsSync(installer)) {
     throw new Error('缺少 Electron 安装脚本 node_modules/electron/install.js，请先执行 npm ci');
@@ -25,7 +43,7 @@ function ensureElectronRuntime() {
   } catch (error) {
     throw new Error(`Electron 运行时补装失败：${error.message}`);
   }
-  if (!fs.existsSync(path.join(ELECTRON_DIST, 'electron.exe'))) {
+  if (!findFileRecursive(ELECTRON_DIST, 'electron.exe')) {
     throw new Error('补装后仍未找到 Electron 运行时（node_modules/electron/dist/electron.exe）');
   }
 }
@@ -100,7 +118,7 @@ function backupLegacyDataBeforeReplace() {
 
 function build() {
   ensureElectronRuntime();
-  if (!fs.existsSync(path.join(ELECTRON_DIST, 'electron.exe'))) {
+  if (!findFileRecursive(ELECTRON_DIST, 'electron.exe')) {
     throw new Error('未找到 Electron 运行时，请先双击“安装桌面版依赖.bat”或执行 npm install');
   }
 
@@ -113,9 +131,13 @@ function build() {
   for (const file of SOURCE_FILES) copySourceEntry(file);
   for (const directory of SOURCE_DIRS) copySourceEntry(directory);
 
-  const electronExe = path.join(TARGET_DIR, 'electron.exe');
-  const productExe = path.join(TARGET_DIR, '视频制作OS.exe');
-  fs.renameSync(electronExe, productExe);
+  const targetExe = findFileRecursive(TARGET_DIR, 'electron.exe');
+  if (!targetExe) {
+    const entries = fs.readdirSync(TARGET_DIR, { withFileTypes: true }).map(entry => entry.name).join(',');
+    throw new Error(`打包副本中未找到 electron.exe，当前目录文件：${entries}`);
+  }
+  const productExe = path.join(path.dirname(targetExe), '视频制作OS.exe');
+  fs.renameSync(targetExe, productExe);
   const runtimeConfig = {
       projectRoot: PROJECT_ROOT,
       dataDir: path.join(APP_DIR, 'data'),
