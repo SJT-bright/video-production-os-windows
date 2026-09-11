@@ -28,14 +28,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Ensure Electron Windows runtime
-        shell: pwsh
-        run: |
-          node node_modules/electron/install.js
-          if (-not (Test-Path "node_modules/electron/dist/electron.exe")) {
-            throw "未找到 node_modules/electron/dist/electron.exe，无法继续打包"
-          }
-
       - name: Build Windows package
         run: npm run build:desktop
 
