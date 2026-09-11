@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const { execFileSync } = require('child_process');
 const path = require('path');
 const crypto = require('crypto');
 const { SOURCE_FILES, SOURCE_DIRS, BUILD_SCHEMA_VERSION } = require('./build-contract.cjs');
@@ -11,6 +12,23 @@ const ELECTRON_DIST = path.join(APP_DIR, 'node_modules', 'electron', 'dist');
 const DIST_ROOT = path.join(APP_DIR, 'dist');
 const TARGET_DIR = path.join(DIST_ROOT, '视频制作OS-win32-x64');
 const APP_TARGET = path.join(TARGET_DIR, 'resources', 'app');
+
+function ensureElectronRuntime() {
+  if (process.platform !== 'win32') return;
+  if (fs.existsSync(path.join(ELECTRON_DIST, 'electron.exe'))) return;
+  const installer = path.join(APP_DIR, 'node_modules', 'electron', 'install.js');
+  if (!fs.existsSync(installer)) {
+    throw new Error('缺少 Electron 安装脚本 node_modules/electron/install.js，请先执行 npm ci');
+  }
+  try {
+    execFileSync(process.execPath, [installer], { stdio: 'inherit' });
+  } catch (error) {
+    throw new Error(`Electron 运行时补装失败：${error.message}`);
+  }
+  if (!fs.existsSync(path.join(ELECTRON_DIST, 'electron.exe'))) {
+    throw new Error('补装后仍未找到 Electron 运行时（node_modules/electron/dist/electron.exe）');
+  }
+}
 // 实时 data（尤其 SQLite/WAL）不能复制进发行包；发行版通过 runtime-config 指回项目的权威数据目录。
 const LEGACY_DATA_NAMES = new Set([
   'agent-knowledge.json', 'asset-meta.json', 'doc-annotations.json',
@@ -81,6 +99,7 @@ function backupLegacyDataBeforeReplace() {
 }
 
 function build() {
+  ensureElectronRuntime();
   if (!fs.existsSync(path.join(ELECTRON_DIST, 'electron.exe'))) {
     throw new Error('未找到 Electron 运行时，请先双击“安装桌面版依赖.bat”或执行 npm install');
   }
