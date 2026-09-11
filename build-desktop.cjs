@@ -21,11 +21,22 @@ function findFileRecursive(root, fileName) {
     const entries = fs.readdirSync(current, { withFileTypes: true });
     for (const entry of entries) {
       const candidate = path.join(current, entry.name);
+      let isFile = false;
       if (entry.isDirectory()) {
         stack.push(candidate);
         continue;
       }
-      if (entry.isFile() && entry.name === fileName) return candidate;
+      if (entry.isFile()) {
+        isFile = true;
+      } else if (entry.isSymbolicLink()) {
+        try {
+          const stat = fs.statSync(candidate);
+          isFile = stat.isFile();
+        } catch (error) {
+          isFile = false;
+        }
+      }
+      if (isFile && entry.name === fileName) return candidate;
     }
   }
   return null;
@@ -126,7 +137,7 @@ function build() {
   const legacyBackup = backupLegacyDataBeforeReplace();
   fs.rmSync(TARGET_DIR, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
   fs.mkdirSync(DIST_ROOT, { recursive: true });
-  fs.cpSync(ELECTRON_DIST, TARGET_DIR, { recursive: true, force: true });
+  fs.cpSync(ELECTRON_DIST, TARGET_DIR, { recursive: true, force: true, dereference: true });
   fs.mkdirSync(APP_TARGET, { recursive: true });
   for (const file of SOURCE_FILES) copySourceEntry(file);
   for (const directory of SOURCE_DIRS) copySourceEntry(directory);
