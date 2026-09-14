@@ -76,7 +76,18 @@ async function run() {
         }
       }
       application = await launched;
-      const page = await application.firstWindow();
+      // A restored website can create its CDP target before the host window.
+      // Select the actual workbench URL, not whichever target appeared first.
+      const windowDeadline = Date.now() + 20000;
+      let page;
+      while (Date.now() < windowDeadline) {
+        page = application.windows().find(candidate => {
+          try { return new URL(candidate.url()).pathname === '/creator.html'; } catch { return false; }
+        });
+        if (page) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      assert.ok(page, `creator host window missing: ${application.windows().map(p => p.url()).join(', ')}`);
       await page.waitForFunction(() => document.body.dataset.ready === 'true', null, { timeout: 30000 });
       assert.equal(await application.evaluate(({ app }) => app.isPackaged), true);
       assert.equal(await application.evaluate(() => process.env.VIDEO_OS_DATA_DIR),
