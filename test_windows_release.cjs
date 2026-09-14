@@ -44,8 +44,38 @@ async function run() {
     for (const key of ['ELECTRON_RUN_AS_NODE', 'VIDEO_OS_DATA_DIR', 'VIDEO_OS_PROJECT_ROOT', 'VIDEO_OS_TEST_PROJECT_ROOT']) delete env[key];
     const { _electron } = require('playwright');
     const launch = async () => {
-      application = await _electron.launch({ executablePath: path.join(packageRoot, '视频制作OS.exe'),
+      const launched = _electron.launch({ executablePath: path.join(packageRoot, '视频制作OS.exe'),
         cwd: root, env, timeout: 45000 });
+      // Packaged apps start before Playwright attaches. Its CDP initialization
+      // waits for every restored WebContents, including intentionally unloaded
+      // background tabs. Wake only this isolated fixture's tabs through MCP.
+      launched.catch(() => {});
+      const sessionFile = path.join(profile, 'creator-browser-session.json');
+      const saved = fs.existsSync(sessionFile) ? JSON.parse(fs.readFileSync(sessionFile, 'utf8')) : null;
+      if (saved?.tabs.length) {
+        const connectionFile = path.join(profile, 'workspace', '视频制作OS', 'data', 'creator-automation-connection.json');
+        const call = async (name, args = {}) => {
+          const c = JSON.parse(fs.readFileSync(connectionFile, 'utf8'));
+          const response = await fetch(`http://127.0.0.1:${c.port}/call`, {
+            method: 'POST', headers: { Authorization: `Bearer ${c.token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, arguments: args }), signal: AbortSignal.timeout(3000),
+          });
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.error);
+          return body.result;
+        };
+        const deadline = Date.now() + 20000;
+        let state;
+        while (Date.now() < deadline) {
+          try { state = await call('browser_state'); if (state.tabs.length === saved.tabs.length) break; } catch {}
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+        assert.equal(state?.tabs.length, saved.tabs.length, 'native MCP reports all restored tabs');
+        for (const tab of saved.tabs) {
+          await call('tab_select', { projectId: state.project.id, tabId: tab.id, expectedUrl: tab.url });
+        }
+      }
+      application = await launched;
       const page = await application.firstWindow();
       await page.waitForFunction(() => document.body.dataset.ready === 'true', null, { timeout: 30000 });
       assert.equal(await application.evaluate(({ app }) => app.isPackaged), true);
