@@ -1,58 +1,32 @@
-# 视频制作 OS - Windows 版本发布说明
+# Windows 下载与发布
 
-本仓库用于 Windows 发行版本隔离发布（与 macOS 主仓库分开维护）。
+[下载最新版](https://github.com/SJT-bright/video-production-os-windows/releases/latest)
 
-## 版本说明
+下载 `VideoProductionOS-Windows-x64.zip`，完整解压后双击 `视频制作OS.exe`。无需安装 Node.js。EXE 必须与旁边的 DLL、resources、locales 等文件保持在一起；旧版只提供单个主 EXE，不能作为完整安装包使用。
 
-- 主程序源码与运行逻辑与 macOS 版一致
-- Windows 发行为 `dist/视频制作OS-win32-x64/视频制作OS.exe`
-- 应用内置的 `compatibilityMode` 会在 Windows 下维持兼容策略，不影响 macOS 主线
+Windows x64 下载版与主项目同步创作浏览器、分剧本资产、音频／成片索引与固定提示词代码。第三方平台仍可能限制内嵌登录。
 
-## 构建 Windows EXE（在 Windows 环境）
+## 数据留存
 
-1. 安装 Node.js 22.12+（建议 22.x LTS）
-2. 打开 PowerShell，进入仓库根目录
-3. 安装依赖：
+- 素材、剧本注册表及数据库：`%APPDATA%\视频制作 OS\workspace`
+- 浏览器登录、标签记忆和网站入口：`%APPDATA%\视频制作 OS`
+- 更新时退出应用，解压新版到新的软件文件夹并启动；原用户目录继续复用。
+- 不包含开发者的剧本、素材、数据库或登录信息。源码绑定构建的数据仍留在原项目目录，不会自动迁入下载版。
+
+## 构建
+
+需要 Node.js 22.12+，在源码目录执行：
 
 ```powershell
 npm ci
+npm run build:windows:release
+node test_windows_release.cjs
 ```
 
-4. 生成 Windows 桌面版：
+输出目录：`dist/视频制作OS-win32-x64`。`--portable` 不记录构建机绝对路径。`npm run build:desktop` 仍用于绑定本机源码项目的开发包。
 
-```powershell
-npm run build:desktop
-```
+## GitHub Release
 
-5. 运行：
+仅 Windows 独立仓库运行 `Release Windows EXE` 工作流。推送 `v*` 标签，或从 Actions 手动输入新版本标签，即执行构建、资源哈希核验、Windows EXE 启动与数据路径检查，发布完整 ZIP 和 `SHA256SUMS.txt`。
 
-```powershell
-cd dist\视频制作OS-win32-x64
-./视频制作OS.exe
-```
-
-## 常用命令
-
-- `npm run browser`：启动浏览器兼容版（不内嵌桌面浏览器）
-- `npm run desktop`：本地开发桌面模式（直接运行当前源码）
-- `npm run build:desktop`：打包 Windows 独立目录
-- `npm run test:desktop-package`：检查桌面发行包文件结构
-
-## 发布建议
-
-- 每次发版前清理旧 dist：`Remove-Item -Recurse -Force .\dist\视频制作OS-win32-x64`
-- 重新执行 `npm run build:desktop`
-- 将 `dist/视频制作OS-win32-x64/视频制作OS.exe` 作为发布产物分发
-
-## 一键发布到 GitHub Release（推荐）
-
-已接入 GitHub Actions 自动发布：
-
-1. 在仓库的 **Actions** 中手动执行 `Release Windows EXE`
-2. 输入发布标签（如 `v1.0.0`）
-3. 等待完成后，Release 页面会出现可直接下载的 `视频制作OS.exe`
-4. 下载后双击即可运行
-
-你也可以在有新 tag 时自动触发发布（符合 `v*` 的 tag 会自动触发）。
-
-注：由于 Windows 打包依赖 Windows 可执行环境，建议在 Windows 机器上进行最终打包与签名流程。
+不要把 GitHub 自动生成的 Source code ZIP 当作可运行软件包。

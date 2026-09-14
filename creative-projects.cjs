@@ -21,6 +21,7 @@ const PROJECT_CATEGORIES = Object.freeze([
   Object.freeze({ id: 'audio', label: '音频', aliases: Object.freeze(['音频']) }),
   Object.freeze({ id: 'generated-images', label: '生成图片', aliases: Object.freeze(['生成图片']) }),
   Object.freeze({ id: 'generated-videos', label: '生成视频', aliases: Object.freeze(['生成视频']) }),
+  Object.freeze({ id: 'finals', label: '成片', aliases: Object.freeze(['成片']) }),
   Object.freeze({
     id: 'frames',
     label: '首帧与尾帧',

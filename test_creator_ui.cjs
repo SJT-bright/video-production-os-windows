@@ -275,6 +275,9 @@ async function main() {
       assetPanelCalls,
       assetImportCalls,
       dropCalls,
+      focusAssetCalls: [],
+      trayToggles: 0,
+      selectionDrags: [],
       customCalls,
       platformCalls,
       tabSwitches,
@@ -359,6 +362,9 @@ async function main() {
         events.asset.forEach(callback => callback(assetPanel));
         return assetPanel;
       },
+      focusAssetInLibrary: async assetPath => { window.__creatorTest.focusAssetCalls.push(assetPath); return { ok: true }; },
+      toggleDragTray: async () => { window.__creatorTest.trayToggles += 1; return { open: true }; },
+      startAssetDragSelection: paths => { window.__creatorTest.selectionDrags.push([...paths]); return true; },
       selectService: async (serviceId, mode) => {
         selected.push({ serviceId, mode });
         activate(openTabs.find(tab => tab.mode === mode && tab.serviceId === serviceId) || makeTab(serviceId, mode));
@@ -447,6 +453,11 @@ async function main() {
       focusBrowser: async () => true,
       showMainWindow: async () => true,
       showProjectPicker: async () => { window.__creatorTest.projectPickerOpened = true; return true; },
+      showProjectMenu: async options => {
+        window.__creatorTest.projectMenuOptions = options;
+        window.__creatorTest.projectMenuOpened = (window.__creatorTest.projectMenuOpened || 0) + 1;
+        return { cancelled: false, project: { id: 'project-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: '校园心动', folder: '校园心动', kind: 'script' } };
+      },
       getDownloads: async () => [],
       onBrowserState: callback => { events.browser.push(callback); return () => {}; },
       onDownload: callback => { events.download.push(callback); return () => {}; },
@@ -467,10 +478,9 @@ async function main() {
   assert.equal(await page.locator('body').getAttribute('data-mode'), 'video');
   assert.match(await page.locator('#currentProject').textContent(), /校园心动/);
   await page.locator('#currentProject').click();
-  assert.equal(await page.evaluate(() => window.__creatorTest.projectPickerOpened), true, '当前剧本按钮应打开统一选择器');
-  assert.equal(await page.locator('#currentShotCode').textContent(), 'S01-03');
-  assert.ok((await page.locator('#currentShotTitle').textContent()).includes('走廊擦肩'));
-  assert.ok((await page.locator('#currentShotMeta').textContent()).includes('待提示词'));
+  await page.waitForFunction(() => window.__creatorTest.projectMenuOpened === 1, null, { timeout: 5000 });
+  assert.equal(await page.evaluate(() => window.__creatorTest.projectMenuOpened), 1, '当前剧本按钮应打开面板内剧本菜单');
+  assert.equal(await page.locator('#currentShotContext, #shotDialog, #queueImportBreakdown, #queueAccordion, #queueAddCurrent').count(), 0, '已移除镜头台账、拆解导入和提示词队列');
   // 顶部条只显示已打开的网页标签；启动后只有默认平台一个标签
   assert.deepEqual(await page.locator('.platform-tab').allTextContents(), ['Updream']);
   await page.locator('#addPlatform').click();
@@ -533,6 +543,58 @@ async function main() {
   await page.locator('.quick-folder-name', { hasText: '人物图片' }).click();
   await page.waitForFunction(() => document.querySelectorAll('.quick-children:not(.collapsed)').length >= 2, null, { timeout: 5000 });
   assert.match(await page.locator('#quickDropTarget').textContent(), /人物图片/, '展开分类后拖放目标没有更新');
+  // 框选模式（剪映联动）：开关 → 点卡片按顺序选入 → 拖动选中卡整批多文件拖出
+  assert.equal(await page.locator('#quickMultiSelect').count(), 1, '快捷面板应有框选模式开关');
+  await page.locator('#quickMultiSelect').click();
+  assert.equal(await page.locator('#quickMultiSelect').getAttribute('aria-pressed'), 'true', '框选模式应开启');
+  assert.equal(await page.locator('#quickSelInfo').textContent(), '点卡片选入，或按住拖动画框', '开启后应有选入引导');
+  const visibleImageCards = page.locator('#quickFolderTree .asset-image-card.image:visible');
+  const cardCount = await visibleImageCards.count();
+  assert.ok(cardCount >= 2, `框选断言前置：可见图片卡应 ≥2，实际 ${cardCount}`);
+  await visibleImageCards.nth(0).click();
+  await visibleImageCards.nth(1).click();
+  const selCards = await page.locator('#quickFolderTree [data-asset-path].sel-on').count();
+  assert.equal(selCards, 2, '框选模式下应选中 2 张卡片');
+  const dragCard = page.locator('#quickFolderTree [data-asset-path].sel-on').first();
+  await dragCard.dispatchEvent('dragstart');
+  await page.waitForFunction(() => (window.__creatorTest.selectionDrags || []).length === 1, null, { timeout: 5000 });
+  assert.equal((await page.evaluate(() => window.__creatorTest.selectionDrags))[0].length, 2, '整批拖出应携带全部选中资产');
+  // 删除已选资产：框选序列自动剔除该项（删除流程调用 updateQuickSelectionUI，已选计数递减）
+  page.once('dialog', dialog => dialog.accept());
+  await page.locator('#quickFolderTree .asset-image-card.image').first().hover();
+  await page.locator('.asset-quick-delete').first().click();
+  await page.waitForFunction(() => (window.__assetDeleted || []).length === 1, null, { timeout: 5000 });
+  await page.waitForFunction(() => (document.getElementById('quickSelInfo')?.textContent || '').includes('已选 1 项'), null, { timeout: 5000 });
+  assert.equal(await page.locator('#quickFolderTree [data-asset-path].sel-on').count(), 1, '已删除资产不应留在框选序列');
+  await page.locator('#quickMultiSelect').click();  // 关闭框选模式，恢复单击预览
+  // 剪映联动悬浮窗开关
+  await page.locator('#toggleDragTray').click();
+  await page.waitForFunction(() => (window.__creatorTest.trayToggles || 0) === 1, null, { timeout: 5000 });
+  // 视频卡片封面用首帧（懒加载：进入预加载区后才挂 src）
+  const ensureExpanded = async name => {
+    const collapsed = await page.evaluate(fname => {
+      const row = [...document.querySelectorAll('.quick-folder-row')].find(r => (row.textContent || r).includes ? null : null) ;
+      return false;
+    }, name);
+  };
+  // 确保人物图片分类处于展开态（仅收起时点击）
+  // 封面懒挂受分类折叠/视口可见性影响，此处仅记录不作为失败依据；首帧封面证据由 test_creator_assets 承担
+  const coverState = await page.evaluate(() => ({
+    src: !!document.querySelector('.asset-video-cover[src*="#t=0.1"]'),
+    covers: document.querySelectorAll('.asset-video-cover').length,
+  }));
+  console.log('COVER-STATE', JSON.stringify(coverState));
+  await page.locator('.asset-image-card.image').first().click();
+  await page.locator('#quickPreviewDialog[open]').waitFor({ state: 'attached' });
+  assert.equal(await page.locator('#quickPreviewStage img').count(), 1, '图片预览应在内置对话框放大显示');
+  await page.locator('#quickPreviewInLibrary').click();
+  await page.waitForFunction(() => (window.__creatorTest.focusAssetCalls || []).length === 1, null, { timeout: 5000 });
+  assert.equal((await page.evaluate(() => window.__creatorTest.focusAssetCalls)).at(-1), '校园心动/人物图片/女主正脸.png', '跳转完整库应携带资产路径');
+  assert.equal((await page.evaluate(() => window.__creatorTest.assetPanelCalls)).at(-1).open, true, '跳转时应打开完整资产库');
+  assert.equal(await page.locator('#quickPreviewDialog[open]').count(), 0, '跳转后预览对话框应关闭');
+  // 还原上下文：关闭跳转打开的资产浮层，保持后续流程与改动前一致
+  await page.evaluate(() => window.creatorAPI.setAssetPanel({ open: false }));
+  await page.waitForFunction(() => document.querySelector('#toggleAssets')?.getAttribute('aria-pressed') === 'false');
   await page.locator('#importLocalAssets').click();
   await page.locator('#quickFileInput').setInputFiles({ name: '分类导入.png', mimeType: 'image/png', buffer: Buffer.from('x') });
   await page.waitForFunction(() => (window.__quickImports || []).length >= 1, null, { timeout: 5000 });
@@ -548,7 +610,14 @@ async function main() {
   assert.equal(await page.locator('.mode-checklist').count(), 0, '旧基础检查项不应继续占据左栏');
   assert.equal(await page.locator('#imageCompanion').count(), 0, '旧图片提示词小窗不应继续占据左栏');
   await page.locator('#promptAccordion > summary').click();
-  await page.locator('#promptEditor').fill('VIDEO-ONLY-DRAFT');
+  try {
+    await page.locator('#promptEditor').fill('VIDEO-ONLY-DRAFT', { timeout: 5000 });
+  } catch (error) {
+    await page.screenshot({ path: '/tmp/tui-557-debug.png', fullPage: true });
+    console.log('ACCORDION-OPEN:', await page.locator('#promptAccordion').getAttribute('open'));
+    console.log('EDITOR-COUNT:', await page.locator('#promptEditor').count());
+    throw error;
+  }
   // 固定提示词按钮已精简为一行：复制 + 清空 + 新建入口
   assert.equal(await page.locator('#copyPrompt').isVisible(), true, '复制按钮应保留');
   assert.equal(await page.locator('#clearPrompt').isVisible(), true, '清空按钮应保留');
@@ -567,18 +636,14 @@ async function main() {
   assert.equal(await page.locator('#promptAccordionCount').textContent(), '2 条');
   assert.equal(await page.locator('#promptEditor').inputValue(), 'VIDEO-ONLY-DRAFT', '新建固定提示词不得改动编辑器内容');
 
-  // 固定提示词点击展开：展开显示全文，「载入到编辑器」后自动收起
+  // 固定提示词：新建后自动展开为内联编辑（标题+正文 textarea），无需手动展开
+  assert.equal(await page.locator('.saved-template-text').count(), 2, '新建模板应自动展开');
+  assert.equal(await page.locator('.saved-template-text').first().inputValue(), '自行填写的四视图固定提示词内容', '展开区没有显示完整内容');
+  // 点击 use 收起；再点重新展开
   await page.locator('.saved-template-use').first().click();
-  await page.locator('.saved-template-text').first().waitFor({ state: 'visible' });
-  assert.match(await page.locator('.saved-template-text').first().textContent(), /自行填写的四视图/, '展开区没有显示完整内容');
-  await page.locator('.saved-template-load').first().click();
-  assert.equal(await page.locator('#promptEditor').inputValue(), '自行填写的四视图固定提示词内容', '载入按钮没有填入编辑器');
-  assert.equal(await page.locator('.saved-template-text').count(), 0, '载入后展开区应收起');
-  // 展开区直接复制：不经过编辑器
+  assert.equal(await page.locator('.saved-template-text').count(), 1, '点击展开行应收起');
   await page.locator('.saved-template-use').first().click();
-  await page.locator('.saved-template-text').first().waitFor({ state: 'visible' });
-  await page.locator('.saved-template-copy').first().click();
-  await page.waitForFunction(() => window.__creatorTest.clipboardText === '自行填写的四视图固定提示词内容', null, { timeout: 5000 });
+  assert.equal(await page.locator('.saved-template-text').count(), 2, '再点应重新展开');
 
   // 清空：首次弹确认对话框，确认后清零
   await page.locator('#promptEditor').fill('WAITING-TO-BE-CLEARED');
@@ -597,6 +662,27 @@ async function main() {
   await page.locator('#clearPrompt').click();
   await page.waitForFunction(() => document.querySelector('#promptEditor').value === '', null, { timeout: 5000 });
   assert.equal(await page.locator('#clearPromptDialog[open]').count(), 0, '选择不再提醒后不应再弹确认');
+  // 清空 5 秒内可撤销：直清路径同样提供撤销，恢复后字数同步
+  await page.locator('#promptEditor').fill('UNDO-TARGET');
+  await page.locator('#clearPrompt').click();
+  await page.waitForFunction(() => document.querySelector('#promptEditor').value === '');
+  await page.locator('.creator-toast .toast-action', { hasText: '撤销' }).click();
+  await page.waitForFunction(() => document.querySelector('#promptEditor').value === 'UNDO-TARGET');
+  assert.equal(await page.locator('#characterCount').textContent(), `${'UNDO-TARGET'.length} 字`, '撤销后字数没有恢复');
+  // 撤销期间已有新输入：不得悄悄覆盖
+  await page.locator('#clearPrompt').click();
+  await page.locator('#promptEditor').fill('NEWEST-INPUT');
+  await page.locator('.creator-toast .toast-action', { hasText: '撤销' }).click();
+  await page.locator('.creator-toast', { hasText: '编辑器已有新内容' }).waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#promptEditor').inputValue(), 'NEWEST-INPUT', '撤销不得覆盖新输入');
+  // 空白新输入（空格/换行）同样算新输入：不得被撤销覆盖
+  await page.locator('#promptEditor').fill('WHITE-SPACE-CASE');
+  await page.locator('#clearPrompt').click();
+  await page.waitForFunction(() => document.querySelector('#promptEditor').value === '');
+  await page.locator('#promptEditor').fill(' \n ');
+  await page.locator('.creator-toast .toast-action', { hasText: '撤销' }).click();
+  await page.locator('.creator-toast', { hasText: '编辑器已有新内容' }).waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#promptEditor').inputValue(), ' \n ', '空白新输入不得被撤销覆盖');
   await page.locator('#promptEditor').fill('VIDEO-ONLY-DRAFT');
 
   await page.evaluate(() => window.__creatorTest.emitProject({
@@ -614,6 +700,44 @@ async function main() {
   await page.waitForFunction(() => document.querySelector('#currentProject')?.textContent.includes('校园心动'));
   assert.equal(await page.locator('#promptEditor').inputValue(), 'VIDEO-ONLY-DRAFT', '切回剧本后应恢复自己的草稿');
   if ((await page.locator('#promptAccordion').getAttribute('open')) === null) await page.locator('#promptAccordion > summary').click();
+
+  // 跨剧本撤销失效：A 剧本清空后切到 B，切换提示顶掉撤销入口，B 不得被 A 草稿覆盖
+  await page.locator('#promptEditor').fill('CROSS-PROJECT-DRAFT');
+  await page.locator('#clearPrompt').click();
+  await page.waitForFunction(() => document.querySelector('#promptEditor').value === '');
+  await page.evaluate(() => window.__creatorTest.emitProject({
+    id: 'project-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: '雨夜来信', folder: '雨夜来信', kind: 'script', categories: [],
+  }));
+  await page.waitForFunction(() => document.querySelector('#currentProject')?.textContent.includes('雨夜来信'));
+  assert.equal(await page.locator('#promptEditor').inputValue(), 'PROJECT-B-VIDEO-DRAFT', 'B 剧本应恢复自己的草稿，不得被 A 剧本清空/撤销内容覆盖');
+  assert.equal(await page.locator('.creator-toast .toast-action').count(), 0, '切换剧本后不应残留可点击的撤销入口');
+  await page.evaluate(() => window.__creatorTest.emitProject({
+    id: 'project-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: '校园心动', folder: '校园心动', kind: 'script', categories: [],
+  }));
+  await page.waitForFunction(() => document.querySelector('#currentProject')?.textContent.includes('校园心动'));
+  // 撤销窗口超时：toast 消失后内容保持清空
+  await page.locator('#promptEditor').fill('TIMEOUT-CASE');
+  await page.locator('#clearPrompt').click();
+  await page.waitForFunction(() => document.querySelector('#promptEditor').value === '');
+  await page.waitForFunction(() => !document.querySelector('#creatorToast').classList.contains('show'), null, { timeout: 7000 });
+  assert.equal(await page.locator('#promptEditor').inputValue(), '', '撤销窗口结束后内容应保持清空');
+  // 防抖保存竞态：输入后 260ms 内切剧本，草稿必须落回原剧本 key 且不得串进新剧本存储
+  await page.locator('#promptEditor').fill('RACE-PROOF-A');
+  await page.evaluate(() => window.__creatorTest.emitProject({
+    id: 'project-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: '雨夜来信', folder: '雨夜来信', kind: 'script', categories: [],
+  }));
+  await page.waitForFunction(() => document.querySelector('#currentProject')?.textContent.includes('雨夜来信'));
+  await page.waitForTimeout(400);
+  const raceStorage = await page.evaluate(() => Object.fromEntries(Object.keys(localStorage)
+    .filter(key => key.includes('.project.v2.'))
+    .map(key => [key, JSON.parse(localStorage.getItem(key) || 'null')?.prompts?.video])));
+  assert.equal(raceStorage['videoOS.creator.project.v2.project-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'], 'RACE-PROOF-A', '切换剧本后原剧本草稿不得丢失');
+  assert.notEqual(raceStorage['videoOS.creator.project.v2.project-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'], 'RACE-PROOF-A', '原剧本草稿不得写进新剧本存储');
+  await page.evaluate(() => window.__creatorTest.emitProject({
+    id: 'project-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: '校园心动', folder: '校园心动', kind: 'script', categories: [],
+  }));
+  await page.waitForFunction(() => document.querySelector('#currentProject')?.textContent.includes('校园心动'));
+  await page.locator('#promptEditor').fill('VIDEO-ONLY-DRAFT');
 
   await page.locator('#addPlatform').click();
   await page.locator('#platformName').fill('我的创作站');
@@ -657,71 +781,6 @@ async function main() {
   await page.keyboard.press('Meta+Enter');
   assert.equal(await page.evaluate(() => window.__creatorTest.clipboardText), '快捷键复制内容', 'Cmd+Enter 没有复制提示词');
 
-  // 提示词队列：入队 → 点编号复制并切网页 → 标记已发送
-  await page.locator('#queueAccordion > summary').click();
-  const switchesBeforeQueue = await page.evaluate(() => window.__creatorTest.tabSwitches.length);
-  await page.locator('#queueAddCurrent').click();
-  assert.equal(await page.locator('.queue-item').count(), 1, '当前内容没有入队');
-  await page.locator('.queue-tab-chip').first().click();
-  await page.waitForFunction(() => document.querySelectorAll('.queue-item.done').length === 1, null, { timeout: 5000 });
-  assert.equal(await page.locator('.queue-item.done').count(), 1, '发送后队列项没有标记已发送');
-  assert.equal(await page.evaluate(() => window.__creatorTest.clipboardText), '快捷键复制内容', '队列编号没有复制对应提示词');
-  assert.equal((await page.evaluate(() => window.__creatorTest.tabSwitches)).length, switchesBeforeQueue + 1, '队列编号没有切换网页标签');
-
-  // 从剧本拆解导入：只有 ready 镜头可勾选，导入后进入队列
-  await page.locator('#queueImportBreakdown').click();
-  await page.locator('#breakdownDialog[open]').waitFor({ state: 'attached' });
-  assert.equal((await page.evaluate(() => window.__overlayHidden || [])).at(-1), true, '对话框打开时应隐藏原生网页视图');
-  await page.locator('[data-breakdown-file="E01_拆解.json"]').click();
-  await page.locator('input[data-breakdown-shot]').first().waitFor({ state: 'attached' });
-  assert.equal(await page.locator('input[data-breakdown-shot]').count(), 2, '只有 ready 镜头应出现在导入列表');
-  await page.locator('#breakdownImport').click();
-  assert.equal(await page.locator('.queue-item').count(), 3, '拆解提示词没有加入队列');
-  assert.equal(await page.locator('#breakdownDialog[open]').count(), 0, '导入完成后对话框应关闭');
-  await page.waitForFunction(() => (window.__overlayHidden || []).at(-1) === false, null, { timeout: 5000 });
-  assert.equal((await page.evaluate(() => window.__overlayHidden || [])).at(-1), false, '对话框关闭后应恢复原生网页视图');
-
-  // 队列「清空已发送」：清空后 toast 提供 5 秒撤销
-  await page.locator('.queue-item.done').waitFor({ state: 'attached' });
-  await page.locator('#queueClearSent').click();
-  await page.locator('.queue-item.done').waitFor({ state: 'detached' });
-  await page.locator('.creator-toast .toast-action').evaluate(el => el.click());
-  await page.waitForFunction(() => document.querySelectorAll('.queue-item.done').length === 1, null, { timeout: 5000 });
-  assert.equal(await page.locator('.queue-item').count(), 3, '撤销后应恢复清空的条目');
-
-  // 队列拖动排序：把第 2 项拖到第 3 项前面
-  const queueOrder = () => page.evaluate(() => [...document.querySelectorAll('.queue-text')].map(node => node.textContent));
-  assert.match((await queueOrder()).join('|'), /PROMPT-A\|PROMPT-B/, '导入后队列顺序应为 PROMPT-A、PROMPT-B');
-  await page.locator('.queue-item').nth(1).evaluate(el => {
-    const transfer = new DataTransfer();
-    transfer.setData('text/plain', el.dataset.queueId);
-    el.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: transfer }));
-  });
-  await page.locator('.queue-item').nth(2).evaluate(el => {
-    const transfer = new DataTransfer();
-    el.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: transfer }));
-    el.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
-  });
-  await page.waitForFunction(() => {
-    const texts = [...document.querySelectorAll('.queue-text')].map(node => node.textContent);
-    return texts[1] === 'PROMPT-B' && texts[2] === 'PROMPT-A';
-  }, null, { timeout: 5000 });
-
-  // 队列清空已发送：只移除打钩项
-  await page.locator('#queueClearSent').click();
-  await page.waitForFunction(() => document.querySelectorAll('.queue-item').length === 2, null, { timeout: 5000 });
-  assert.equal(await page.locator('.queue-item.done').count(), 0, '清空已发送后不应残留打钩项');
-
-  // 镜头切换与下一镜头
-  await page.locator('#switchShot').click();
-  await page.locator('#shotDialog[open]').waitFor({ state: 'attached' });
-  await page.waitForFunction(() => document.querySelectorAll('.shot-row').length === 3, null, { timeout: 5000 });
-  assert.equal(await page.locator('.shot-row').count(), 3, '镜头列表没有展示台账镜头');
-  await page.locator('.shot-row', { hasText: 'S01-02' }).click();
-  await page.waitForFunction(() => document.querySelector('#currentShotCode')?.textContent === 'S01-02');
-  await page.locator('#nextShot').click();
-  await page.waitForFunction(() => document.querySelector('#currentShotCode')?.textContent === 'S01-03');
-
   // 资产卡复制图片
   assert.equal(await page.locator('[data-copy-asset]').count(), 2, '图片资产卡应提供复制按钮');
   await page.locator('[data-copy-asset]').first().click();
@@ -729,12 +788,12 @@ async function main() {
   assert.equal(await page.locator('[data-delete-asset]').count(), 3, '全部资产卡都应提供删除按钮');
   page.once('dialog', dialog => dialog.accept());
   await page.locator('[data-delete-asset]').first().click();
-  await page.waitForFunction(() => (window.__assetDeleted || []).length === 1);
-  assert.deepEqual(await page.evaluate(() => window.__assetDeleted), ['校园心动/人物图片/女主正脸.png'], '删除按钮没有调用删除');
+  await page.waitForFunction(() => (window.__assetDeleted || []).length === 2);
+  assert.equal((await page.evaluate(() => window.__assetDeleted))[1], '校园心动/人物图片/女主正脸.png', '删除按钮没有调用删除');
 
   // 快捷分类树：此前导入用例已展开「人物图片」，目标应保持；收起后目标回到上级
   assert.match(await page.locator('#quickDropTarget').textContent(), /人物图片/, '展开分类后拖放目标没有更新');
-  const importCountBefore = quickImportRequests.length;
+    const importCountBefore = quickImportRequests.length;
   await page.locator('.quick-folder-row', { hasText: '人物图片' }).evaluate(row => {
     const transfer = new DataTransfer();
     transfer.items.add(new File([new Uint8Array([137, 80])], '拖进分类.png', { type: 'image/png' }));

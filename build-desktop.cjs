@@ -12,6 +12,7 @@ const PROJECT_ROOT = path.dirname(APP_DIR);
 const DIST_ROOT = path.join(APP_DIR, 'dist');
 const PRODUCT_NAME = '视频制作OS';
 const TARGET_DIR = path.join(DIST_ROOT, `${PRODUCT_NAME}-win32-x64`);
+const PORTABLE_RELEASE = process.argv.includes('--portable');
 
 // 实时 data（尤其 SQLite/WAL）不能复制进发行包；发行版通过 runtime-config 指回项目的权威数据目录。
 const LEGACY_DATA_NAMES = new Set([
@@ -95,8 +96,10 @@ async function build() {
     for (const directory of SOURCE_DIRS) copyEntry(stageDir, directory);
 
     const runtimeConfig = {
-      projectRoot: PROJECT_ROOT,
-      dataDir: path.join(APP_DIR, 'data'),
+      ...(PORTABLE_RELEASE ? { dataLocation: 'userData' } : {
+        projectRoot: PROJECT_ROOT,
+        dataDir: path.join(APP_DIR, 'data'),
+      }),
       compatibilityMode: true,
       buildSchemaVersion: BUILD_SCHEMA_VERSION,
       platform: 'win32',
@@ -160,7 +163,9 @@ async function build() {
         '这是独立桌面窗口，不会自动跳转到系统浏览器。',
         '网页兼容版仍可从源码目录的“启动OS-浏览器版.bat”单独启动。',
         '',
-        `当前项目目录：${PROJECT_ROOT}`,
+        PORTABLE_RELEASE
+          ? '请先完整解压整个文件夹，再双击 EXE。不能单独移动 EXE。无需另装 Node.js。数据保存在 %APPDATA%/视频制作 OS/workspace，更新软件不会清空素材。'
+          : `当前项目目录：${PROJECT_ROOT}`,
       ].join('\r\n'),
       'utf-8',
     );

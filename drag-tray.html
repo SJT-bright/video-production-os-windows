@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>剪映拖拽助手</title>
+  <link rel="stylesheet" href="drag-tray.css">
+</head>
+<body>
+  <header class="tray-head">
+    <div class="tray-title">
+      <strong>拖到剪映</strong>
+      <small id="trayProject">读取中…</small>
+    </div>
+    <div class="tray-actions">
+      <button id="traySelectMode" class="tray-btn" type="button" title="选择模式：点卡片按顺序选中，一次复制到剪映">选</button>
+      <button id="trayRefresh" class="tray-btn" type="button" title="刷新资产列表">⟳</button>
+      <button id="trayClose" class="tray-btn" type="button" title="关闭（Alt+Shift+D 重新打开）">×</button>
+    </div>
+  </header>
+  <div class="tray-tip">拖卡片进剪映 · 点卡片复制后 ⌘V 粘贴</div>
+  <div class="tray-chips" id="trayChips" role="tablist" aria-label="资产类型筛选">
+    <button class="chip on" data-filter="all" type="button">全部</button>
+    <button class="chip" data-filter="image" type="button">图片</button>
+    <button class="chip" data-filter="video" type="button">视频</button>
+    <button class="chip" data-filter="audio" type="button">音频</button>
+  </div>
+  <div class="tray-list" id="trayList" role="list" aria-label="可拖拽资产">
+    <div class="tray-state">正在读取资产…</div>
+  </div>
+  <div class="tray-batch" id="trayBatch" hidden>
+    <span class="tray-batch-hint" id="trayBatchHint">拖动任一选中卡，整批拖进剪映</span>
+    <button class="tray-clear-btn" id="trayClearSelection" type="button">清空</button>
+  </div>
+  <div class="tray-toast" id="trayToast" role="status" aria-live="polite"></div>
+  <script src="drag-tray.js"></script>
+</body>
+</html>

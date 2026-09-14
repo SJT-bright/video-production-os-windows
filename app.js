@@ -291,8 +291,7 @@ function renderMD(text, container) {
 const Store = {
   scan: null,
   knowledge: null,
-  production: null,
-  breakdowns: null,
+
   async loadScan(force) {
     if (this.scan && !force) return this.scan;
     const data = await requestJson('/api/scan');
@@ -310,37 +309,7 @@ const Store = {
     this.knowledge = data;
     return this.knowledge;
   },
-  async loadProduction(force) {
-    if (this.production && !force) return this.production;
-    const data = await requestJson('/api/production');
-    if (!data || typeof data.available !== 'boolean' || !Array.isArray(data.shots) || !Array.isArray(data.inbox)) {
-      throw new Error('制作台账数据格式无效');
-    }
-    this.production = data;
-    return data;
-  },
-  async loadBreakdowns(force) {
-    if (this.breakdowns && !force) return this.breakdowns;
-    const data = await requestJson('/api/script-breakdowns');
-    if (!data || !Array.isArray(data.items) || !Array.isArray(data.invalid) || typeof data.schemaVersion !== 'string') {
-      throw new Error('剧本拆解索引格式无效');
-    }
-    this.breakdowns = data;
-    this.updateChips();
-    return data;
-  },
-  async loadBreakdown(filename) {
-    const data = await requestJson(`/api/script-breakdown?p=${encodeURIComponent(filename)}`);
-    if (!data || !data.document || !data.summary) throw new Error('剧本拆解文件格式无效');
-    return data;
-  },
-  async importBreakdown(filename, document) {
-    return requestJson('/api/script-breakdowns', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'import', filename, document }),
-    });
-  },
+
   async loadObsidianNotes(force) {
     if (this.obsidianNotes && !force) return this.obsidianNotes;
     const data = await requestJson('/api/obsidian/tree');
@@ -391,7 +360,7 @@ const Store = {
       audio: `${c.audio} 条音频`,
       distill: `${this.scan.docs.length} 份文档`,
       finals: `${this.scan.files.filter(f => !f.hidden && f.type === 'video' && f.meta && f.meta.isFinal === true && !f.meta.rejected).length} 条成片`,
-      scripts: `${this.breakdowns ? this.breakdowns.items.length : 0} 份拆解`,
+
     };
     $$('[data-app-count]').forEach(el => {
       const text = iconSubs[el.dataset.appCount];
@@ -410,20 +379,21 @@ const Store = {
 
 /* ---------- 图标 ---------- */
 const ICONS = Object.freeze({
-  assets: UIIcons.html('library'),
+  assets: UIIcons.html('media-index'),
+  creativeAssets: UIIcons.html('library'),
   creator: UIIcons.html('studio'),
   script: UIIcons.html('document'),
   agent: UIIcons.html('sparkle'),
   distill: UIIcons.html('knowledge'),
-  obsidian: UIIcons.html('knowledge'),
+  obsidian: UIIcons.html('obsidian'),
   film: UIIcons.html('film'),
   video: UIIcons.html('video'),
   image: UIIcons.html('image'),
   audio: UIIcons.html('audio'),
   doc: UIIcons.html('document'),
-  overview: UIIcons.html('studio'),
+  overview: UIIcons.html('overview'),
   projects: UIIcons.html('film'),
-  help: UIIcons.html('knowledge'),
+  help: UIIcons.html('help'),
   import: UIIcons.html('import'),
 });
 // 注入渐变 defs
@@ -742,11 +712,120 @@ Object.assign(WM, {
 });
 
 /* ---------- 应用：素材库 ---------- */
+const LibraryView = {
+  importFiles(kind, projectId) {
+    if (!projectId || ['all', 'unassigned'].includes(projectId)) { toast('请先选择音频或视频所属的剧本'); return; }
+    const input = h('input', { type: 'file', accept: kind === 'audio' ? 'audio/*,.mp3,.wav,.m4a' : 'video/*', multiple: '' });
+    input.addEventListener('change', async () => {
+      let count = 0;
+      const failed = [];
+      for (const file of input.files || []) {
+        try {
+          await requestJson('/api/library-import?' + new URLSearchParams({ project: projectId, kind, name: file.name }),
+            { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+          count++;
+        } catch (error) { failed.push(error.message); }
+      }
+      await refreshMediaLibraries().catch(error => failed.push(error.message));
+      toast(failed.length ? `已导入 ${count} 项；${failed[0]}` : `已导入 ${count} 项，保存在所选剧本`);
+    });
+    input.click();
+  },
+  projectKey(file) { return file.projectId || 'unassigned'; },
+  select(value, onChange) {
+    return h('select', { class: 'field', 'aria-label': '按剧本筛选', onchange: event => onChange(event.target.value) },
+      h('option', { value: 'all', selected: value === 'all' ? '' : null }, '全部剧本'),
+      ...(Store.scan?.projects || []).map(project => h('option', { value: project.id, selected: value === project.id ? '' : null }, project.name)),
+      h('option', { value: 'unassigned', selected: value === 'unassigned' ? '' : null }, '未归属'),
+    );
+  },
+  groups(files, renderFile, gridClass) {
+    const groups = new Map();
+    files.forEach(file => {
+      const key = this.projectKey(file);
+      if (!groups.has(key)) groups.set(key, { name: file.projectName || '未归属', files: [] });
+      groups.get(key).files.push(file);
+    });
+    return [...groups.entries()].sort(([a], [b]) => a === 'unassigned' ? 1 : b === 'unassigned' ? -1 : 0).map(([key, group]) =>
+      h('details', { class: 'library-project-group', open: '', 'data-project': key },
+        h('summary', {}, h('strong', {}, group.name), h('span', {}, `${group.files.length} 项`)),
+        h('div', { class: gridClass }, ...group.files.map(renderFile)),
+      ));
+  },
+  async configure(purpose = 'media', selectedId = '') {
+    try { await Store.loadScan(true); } catch (error) { toast(error.message); return; }
+    const sources = (Store.scan.sources || []).filter(source => source.id !== 'creative-assets');
+    const selected = sources.find(source => source.id === selectedId);
+    const dialog = h('dialog', { class: 'library-source-dialog' });
+    const project = h('select', { class: 'field', 'aria-label': '归属剧本' },
+      h('option', { value: '' }, '请选择归属剧本'),
+      ...(Store.scan.projects || []).map(item => h('option', { value: item.id, selected: item.id === selected?.projectId ? '' : null }, item.name)));
+    const sourceSelect = h('select', { class: 'field', 'aria-label': '索引文件夹' },
+      h('option', { value: '' }, '新增文件夹'),
+      ...sources.map(source => h('option', { value: source.id, selected: source.id === selectedId ? '' : null }, source.label)));
+    const usage = h('select', { class: 'field', 'aria-label': '目录用途' },
+      h('option', { value: 'media', selected: (selected?.purpose || purpose) === 'media' ? '' : null }, '普通素材'),
+      h('option', { value: 'finals', selected: (selected?.purpose || purpose) === 'finals' ? '' : null }, '成片目录'));
+    const folder = h('input', { class: 'field', placeholder: '粘贴文件夹完整路径，或使用下方选择按钮', 'aria-label': '文件夹完整路径' });
+    const status = h('p', { class: 'library-source-status', role: 'status' });
+    const save = h('button', { class: 'btn primary', type: 'submit' }, '保存索引');
+    const pick = h('button', { class: 'btn', type: 'button' }, '选择文件夹并关联');
+    pick.hidden = !window.desktopOS?.addMediaSource;
+    const remove = h('button', { class: 'btn', type: 'button' }, '停止索引');
+    const sync = () => {
+      const source = sources.find(item => item.id === sourceSelect.value);
+      folder.hidden = !!source;
+      pick.hidden = !!source || !window.desktopOS?.addMediaSource;
+      remove.hidden = !source?.removable;
+      if (source) { project.value = source.projectId || ''; usage.value = source.purpose || purpose; }
+    };
+    sourceSelect.addEventListener('change', sync);
+    const commit = async usePicker => {
+      if (usage.value === 'finals' && !project.value) { status.textContent = '请先选择成片的归属剧本'; return; }
+      save.disabled = pick.disabled = true;
+      try {
+        let id = sourceSelect.value;
+        if (usePicker) {
+          const result = await window.desktopOS.addMediaSource('folder');
+          if (result?.cancelled) return;
+          id = result.id;
+        }
+        await requestJson('/api/library-sources', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: id ? 'save' : 'add', id, rootPath: folder.value.trim(), projectId: project.value, purpose: usage.value }) });
+        await refreshMediaLibraries();
+        dialog.close();
+        toast('文件夹索引已保存');
+      } catch (error) { status.textContent = error.message; }
+      finally { save.disabled = pick.disabled = false; }
+    };
+    const form = h('form', { onsubmit: event => { event.preventDefault(); commit(false); } },
+      h('h2', {}, '文件夹索引'),
+      h('label', {}, '文件夹', sourceSelect, folder),
+      h('label', {}, '归属剧本', project),
+      h('label', {}, '用途', usage),
+      h('p', {}, '成片目录中的视频自动收录。停止索引只取消关联，保留原文件。'), status,
+      h('div', { class: 'library-source-actions' }, pick, save, remove,
+        h('button', { class: 'btn', type: 'button', onclick: () => dialog.close() }, '取消')));
+    pick.addEventListener('click', () => commit(true));
+    remove.addEventListener('click', async () => {
+      remove.disabled = true;
+      try {
+        await requestJson('/api/library-sources', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'remove', id: sourceSelect.value }) });
+        await refreshMediaLibraries(); dialog.close(); toast('已停止索引，原文件保留');
+      } catch (error) { status.textContent = error.message; }
+      finally { remove.disabled = false; }
+    });
+    dialog.append(form); document.body.append(dialog);
+    dialog.addEventListener('close', () => dialog.remove(), { once: true });
+    sync(); dialog.showModal();
+  },
+};
+
 const AssetsApp = {
-  id: 'assets', title: '媒体索引', pageTitle: '媒体索引', eyebrow: 'MEDIA LIBRARY', subtitle: '工作台、项目与自选目录', icon: ICONS.assets, width: 940, height: 600,
+  id: 'assets', title: '图片与视频', pageTitle: '图片与视频', eyebrow: 'ASSET CENTER', subtitle: '按剧本归属的统一媒体索引', icon: ICONS.assets, width: 940, height: 600,
   async mount(root, win) {
     const S = win.state;
-    S.filter = 'all'; S.source = 'all'; S.query = ''; S.showHidden = false; S.sort = 'newest';
+    S.filter = 'all'; S.source = 'all'; S.project = 'all'; S.query = ''; S.showHidden = false; S.sort = 'newest';
     S.tag = ''; S.selected = new Set(); S.lastSelIndex = -1;
     root.replaceChildren(h('div', { class: 'assets-app' },
       S.collections = h('div', { class: 'asset-collections' }),
@@ -766,42 +845,9 @@ const AssetsApp = {
   },
   buildCollections(root, win) {
     const S = win.state;
-    const media = Store.scan.files.filter(file => ['video', 'image'].includes(file.type));
-    const sources = Array.isArray(Store.scan.sources) && Store.scan.sources.length
-      ? Store.scan.sources
-      : [{ id: 'project-assets', label: Store.scan.assetRoot || '素材库', removable: false, available: Store.scan.assetAvailable !== false }];
-    const sourceCard = source => {
-      const files = media.filter(file => file.sourceId === source.id || (source.id === 'project-assets' && !file.sourceId));
-      const card = h('div', { class: `collection-card media-source-card${S.source === source.id ? ' on' : ''}` },
-        h('button', { class: 'media-source-select', type: 'button', onclick: () => {
-          S.source = S.source === source.id ? 'all' : source.id;
-          this.buildCollections(root, win);
-          this.render(root, win);
-        } },
-          h('div', { class: 'collection-name' }, source.label),
-          h('div', { class: 'collection-total' }, `${files.length}`),
-          h('div', { class: 'collection-types' },
-            h('span', {}, source.available === false ? '离线' : `${files.filter(file => file.type === 'video').length} 视频`),
-            h('span', {}, `${files.filter(file => file.type === 'image').length} 图片`),
-            source.truncated ? h('span', { class: 'source-warning' }, '已达上限')
-              : source.status === 'partial' ? h('span', { class: 'source-warning' }, '部分可读') : null,
-          ),
-        ),
-      );
-      if (source.removable && window.desktopOS?.removeMediaSource) {
-        card.appendChild(h('button', { class: 'media-source-remove', type: 'button', title: `停止索引 ${source.label}`, onclick: () => this.removeSource(source, root, win) }, '×'));
-      }
-      return card;
-    };
     S.collections.replaceChildren(
-      h('div', { class: 'media-source-heading' },
-        h('h2', {}, '媒体来源'),
-        h('div', { class: 'media-source-actions' },
-          h('button', { class: 'btn small', type: 'button', onclick: () => this.addSource('downloads', root, win) }, '＋ Downloads'),
-          h('button', { class: 'btn small', type: 'button', onclick: () => this.addSource('folder', root, win) }, '＋ 选择文件夹'),
-        ),
-      ),
-      ...sources.map(sourceCard),
+      LibraryView.select(S.project || 'all', value => { S.project = value; this.render(root, win); }),
+      h('button', { class: 'btn small', onclick: () => LibraryView.configure() }, '管理文件夹索引'),
     );
   },
   async addSource(kind, root, win) {
@@ -871,20 +917,36 @@ const AssetsApp = {
       h('button', { class: 'btn small', onclick: openAssetFolder }, '打开文件夹'),
       S.count = h('span', { class: 'assets-count' }),
     );
+    const extra = h('div', { class: 'library-advanced-controls', id: 'mediaExtraFilters', hidden: S.advancedOpen ? null : '' });
+    const advanced = h('button', {
+      class: 'btn small library-advanced-toggle', type: 'button',
+      'aria-expanded': String(!!S.advancedOpen), 'aria-controls': 'mediaExtraFilters',
+      onclick: () => {
+        S.advancedOpen = !S.advancedOpen;
+        advanced.setAttribute('aria-expanded', String(S.advancedOpen));
+        extra.hidden = !S.advancedOpen;
+      },
+    }, '更多筛选');
+    const chipBar = S.toolbar.querySelector('.chipbar');
+    [...chipBar.children].slice(3).forEach(button => extra.append(button));
+    [...S.toolbar.children].filter(element => element.title === '按标签筛选'
+      || element.title.includes('隐藏子目录') || element.textContent === '打开文件夹').forEach(element => extra.append(element));
+    S.toolbar.insertBefore(h('button', {
+      class: 'btn small', 'data-reflash': '1', title: '刷新素材索引',
+      onclick: () => refreshMediaLibraries().then(() => toast('扫描完成')).catch(error => toast(error.message)),
+    }, '刷新'), S.count);
+    S.toolbar.insertBefore(advanced, S.count);
+    S.toolbar.append(extra);
   },
   importFiles(root, win) {
-    MediaImporter.choose('video', async () => {
-      await Store.loadScan(true);
-      this.buildCollections(root, win);
-      this.buildToolbar(root, win);
-      this.render(root, win);
-    });
+    LibraryView.importFiles('video', win.state.project);
   },
   render(root, win) {
     const S = win.state;
     const scan = Store.scan;
     let files = scan.files.filter(f => ['video', 'image'].includes(f.type) && (S.showHidden || !f.hidden));
-    if (S.source !== 'all') files = files.filter(f => f.sourceId === S.source || (S.source === 'project-assets' && !f.sourceId));
+    if (S.source !== 'all') files = files.filter(f => f.sourceId === S.source || f.linkedSourceId === S.source || (S.source === 'project-assets' && !f.sourceId));
+    if (S.project && S.project !== 'all') files = files.filter(file => LibraryView.projectKey(file) === S.project);
     // 废片默认不混入正常视图，只有「废片」筛选里能看到
     if (S.filter === 'rejected') files = files.filter(f => f.meta && f.meta.rejected);
     else files = files.filter(f => !(f.meta && f.meta.rejected));
@@ -917,20 +979,11 @@ const AssetsApp = {
           S.filter === 'rejected' ? '还没有废片。' : '当前筛选条件下没有媒体。'));
       }
     }
-    files.forEach((f, idx) => S.grid.appendChild(this.card(root, win, f, idx)));
+    S.grid.classList.add('project-grouped-grid');
+    S.grid.append(...LibraryView.groups(files, file => this.card(root, win, file, files.indexOf(file)), 'project-media-grid'));
     this.renderSelbar(root, win);
 
-    if (![...S.toolbar.children].some(c => c.dataset && c.dataset.reflash)) {
-      S.toolbar.appendChild(h('button', {
-        class: 'btn small', 'data-reflash': '1', title: '重新扫描专用素材库文件夹',
-        onclick: async () => {
-          try {
-            await Store.loadScan(true);
-            this.buildCollections(root, win); this.buildToolbar(root, win); this.render(root, win); toast('扫描完成');
-          } catch (err) { toast('扫描失败：' + err.message); }
-        },
-      }, '⟳ 刷新'));
-    }
+
   },
   /* ---- 多选与批量操作 ---- */
   toggleSel(root, win, f, idx, shiftKey) {
@@ -1077,7 +1130,7 @@ const AudioApp = {
   id: 'audio', title: '音频素材', pageTitle: '音频素材', eyebrow: 'AUDIO LIBRARY', subtitle: '对白、音效与配乐素材', icon: ICONS.audio, width: 980, height: 630,
   async mount(root, win) {
     const S = win.state;
-    S.query = ''; S.folder = 'all'; S.sort = 'newest'; S.showHidden = true;
+    S.query = ''; S.folder = 'all'; S.project = 'all'; S.sort = 'newest'; S.showHidden = false;
     S.durSpans = {};
     root.replaceChildren(h('div', { class: 'audio-app' },
       S.hero = h('div', { class: 'audio-hero' }),
@@ -1100,75 +1153,39 @@ const AudioApp = {
   },
   render(root, win) {
     const S = win.state;
-    const allAudio = this.all();
-    const analysisCount = allAudio.filter(f => f.hidden).length;
-    const totalBytes = allAudio.reduce((sum, f) => sum + f.size, 0);
-    S.hero.replaceChildren(
-      h('div', { class: 'audio-hero-icon', html: ICONS.audio }),
-      h('div', { class: 'audio-hero-copy' },
-        h('h3', {}, '音频素材'),
-        h('p', {}, '自动收录工作台与素材库中的音频，保留剧本和文件夹归属。'),
-      ),
-      h('div', { class: 'audio-stat' }, h('b', {}, String(allAudio.length)), h('span', {}, '全部音频')),
-      h('div', { class: 'audio-stat' }, h('b', {}, String(allAudio.length - analysisCount)), h('span', {}, '常规目录')),
-      h('div', { class: 'audio-stat' }, h('b', {}, String(analysisCount)), h('span', {}, '分析目录')),
-      h('div', { class: 'audio-stat wide' }, h('b', {}, fmtBytes(totalBytes)), h('span', {}, '总大小')),
-    );
-
+    S.hero.replaceChildren(h('div', { class: 'audio-hero-copy' }, h('h3', {}, '音频素材')),
+      h('span', {}, `${this.all().length} 项 · 与工作台同步`));
     S.toolbar.replaceChildren(
-      h('input', { class: 'field', placeholder: '搜索音频名称或路径…', value: S.query,
-        oninput: e => { S.query = e.target.value; this.renderList(root, win); } }),
-      h('select', { class: 'field', title: '音频排序', onchange: e => { S.sort = e.target.value; this.renderList(root, win); } },
-        h('option', { value: 'newest', selected: S.sort === 'newest' ? 'selected' : null }, '最新修改'),
-        h('option', { value: 'oldest', selected: S.sort === 'oldest' ? 'selected' : null }, '最早修改'),
-        h('option', { value: 'name', selected: S.sort === 'name' ? 'selected' : null }, '按名称'),
-        h('option', { value: 'size', selected: S.sort === 'size' ? 'selected' : null }, '按大小'),
-        h('option', { value: 'folder', selected: S.sort === 'folder' ? 'selected' : null }, '按文件夹'),
-      ),
-      h('button', { class: 'chip' + (S.showHidden ? ' on' : ''),
-        title: '包含 .analysis 等分析目录中的音频',
-        onclick: () => { S.showHidden = !S.showHidden; S.folder = 'all'; this.render(root, win); } },
-        S.showHidden ? '分析目录：已包含' : '分析目录：已排除'),
-      h('button', { class: 'btn small', onclick: async () => {
-        try { await Store.loadScan(true); this.render(root, win); toast('音频索引已刷新'); }
-        catch (err) { toast('音频扫描失败：' + err.message); }
-      }}, '⟳ 刷新'),
+      h('input', { class: 'field', placeholder: '搜索音频…', value: S.query, oninput: e => { S.query = e.target.value; this.renderList(root, win); } }),
+      h('select', { class: 'field', 'aria-label': '音频排序', onchange: e => { S.sort = e.target.value; this.renderList(root, win); } },
+        h('option', { value: 'newest', selected: S.sort === 'newest' ? '' : null }, '最新修改'),
+        h('option', { value: 'name', selected: S.sort === 'name' ? '' : null }, '按名称')),
       h('button', { class: 'btn small', onclick: () => this.importFiles(root, win) }, '＋ 导入音频'),
-      h('button', { class: 'btn small', onclick: openAssetFolder }, '打开文件夹'),
+      h('button', { class: 'btn small', onclick: () => window.EditorExports.open({ projectId: S.project }) }, '剪映导出'),
+      h('button', { class: 'btn small', onclick: () => LibraryView.configure() }, '文件夹索引'),
+      h('button', { class: 'btn small', onclick: () => refreshMediaLibraries().catch(error => toast(error.message)) }, '刷新'),
       S.count = h('span', { class: 'assets-count' }),
     );
     this.renderFolders(root, win);
     this.renderList(root, win);
   },
   available(win) {
-    return this.all().filter(f => win.state.showHidden || !f.hidden);
+    return this.all().filter(f => (win.state.showHidden || !f.hidden) && (!win.state.project || win.state.project === 'all' || LibraryView.projectKey(f) === win.state.project));
   },
   renderFolders(root, win) {
     const S = win.state;
-    const files = this.available(win);
-    const folders = new Map();
-    files.forEach(f => {
-      const folder = parentFolderOf(f.displayPath || f.path);
-      folders.set(folder, (folders.get(folder) || 0) + 1);
-    });
-    if (S.folder !== 'all' && !folders.has(S.folder)) S.folder = 'all';
-    const button = (id, label, count) => h('button', {
-      class: 'audio-folder' + (S.folder === id ? ' on' : ''),
-      title: id === 'all' ? '查看所有音频' : id,
-      onclick: () => { S.folder = id; this.renderFolders(root, win); this.renderList(root, win); },
-    }, h('span', { class: 'audio-folder-name' }, label), h('b', {}, String(count)));
-    S.folders.replaceChildren(
-      h('div', { class: 'audio-folders-title' }, '音频文件夹'),
-      button('all', '全部文件夹', files.length),
-      ...Array.from(folders.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN'))
-        .map(([folder, count]) => button(folder, folder, count)),
+    const all = this.all();
+    const entries = [['all', '全部剧本'], ...(Store.scan.projects || []).map(project => [project.id, project.name]), ['unassigned', '未归属']];
+    S.folders.replaceChildren(h('div', { class: 'audio-folders-title' }, '归属剧本'),
+      ...entries.map(([id, name]) => h('button', {
+        class: 'audio-folder' + (S.project === id ? ' on' : ''), onclick: () => {
+          S.project = id; S.folder = 'all'; this.renderFolders(root, win); this.renderList(root, win);
+        },
+      }, h('span', { class: 'audio-folder-name' }, name), h('b', {}, String(all.filter(file => id === 'all' || LibraryView.projectKey(file) === id).length)))),
     );
   },
   importFiles(root, win) {
-    MediaImporter.choose('audio', async () => {
-      await Store.loadScan(true);
-      this.render(root, win);
-    });
+    LibraryView.importFiles('audio', win.state.project);
   },
   renderList(root, win) {
     const S = win.state;
@@ -1197,7 +1214,7 @@ const AudioApp = {
       }
       return;
     }
-    S.list.replaceChildren(...files.map(f => this.row(root, win, f)));
+    S.list.replaceChildren(...LibraryView.groups(files, file => this.row(root, win, file), 'project-audio-list'));
   },
   row(root, win, f) {
     const S = win.state;
@@ -1211,11 +1228,11 @@ const AudioApp = {
       h('div', { class: 'audio-row-icon', html: ICONS.audio }),
       h('div', { class: 'audio-row-main' },
         h('button', { class: 'audio-name', title: '打开音频详情', onclick: openDetail }, f.name),
-        h('div', { class: 'audio-path', title: f.displayPath || f.path }, f.displayPath || f.path),
+        h('div', { class: 'audio-path', title: f.displayPath || f.path }, f.projectName || '未归属'),
         h('div', { class: 'audio-row-meta' },
           S.durSpans[f.path] = h('span', { class: 'audio-dur' }, ''),
-          h('span', {}, f.sizeText), h('span', {}, fmtDate(f.mtime)),
-          f.hidden ? h('span', { class: 'tag pink' }, '分析目录') : h('span', { class: 'tag green' }, '常规素材'),
+          h('span', {}, f.sizeText),
+          h('span', { class: 'tag green' }, f.audioRole === 'bgm' ? 'BGM' : f.audioRole === 'sfx' ? '音效' : f.exportKind === 'voice' ? '人物音频' : '对白 / 音频'),
           ...tags.map(tag => h('span', { class: 'tag blue' }, tag)),
         ),
       ),
@@ -1236,6 +1253,7 @@ const AudioApp = {
           catch (err) { toast('收藏保存失败：' + err.message); }
         }}, meta.starred ? '★ 已收藏' : '☆ 收藏'),
         h('button', { class: 'btn small', onclick: openDetail }, '详情'),
+        h('button', { class: 'btn small', onclick: () => window.AssetSources.open({ file: f, projectId: f.projectId }) }, '用于本剧'),
       ),
     );
   },
@@ -1274,9 +1292,7 @@ const ObsidianApp = {
     try {
       S.data = await requestJson('/api/obsidian/tree');
       if (!S.data.available || !S.data.tree) throw new Error('未找到本机 Obsidian Vault');
-      if (firstLoad && this.findFolder(S.data.tree, 'ai创作短剧/韩剧制作')) {
-        S.currentPath = 'ai创作短剧/韩剧制作';
-      } else if (!this.findFolder(S.data.tree, S.currentPath)) {
+      if (!this.findFolder(S.data.tree, S.currentPath)) {
         S.currentPath = '';
       }
       this.build(root, win);
@@ -1405,7 +1421,7 @@ const ObsidianApp = {
     ));
     const shown = items.slice(0, 600);
     for (const item of shown) {
-      const icon = item.kind === 'folder' ? ICONS.assets : item.kind === 'note' ? ICONS.doc : item.previewable ? ICONS.image : ICONS.doc;
+      const icon = item.kind === 'folder' ? ICONS.creativeAssets : item.kind === 'note' ? ICONS.doc : item.previewable ? ICONS.image : ICONS.doc;
       const label = item.kind === 'note' ? item.name.replace(/\.md$/i, '') : item.name;
       S.entries.appendChild(h('button', {
         class: `obsidian-entry ${item.kind}`,
@@ -1475,7 +1491,8 @@ const ObsidianApp = {
     S.viewer.replaceChildren(
       h('header', { class: 'obsidian-viewer-head' },
         h('div', {}, h('h2', {}, item.name), h('p', {}, item.path)),
-        h('div', { class: 'obsidian-viewer-meta' }, h('span', {}, item.sizeText || '')),
+        h('div', { class: 'obsidian-viewer-meta' }, h('span', {}, item.sizeText || ''),
+          h('button', { class: 'btn', onclick: () => window.AssetSources.open({ file: { ...item, origin: 'obsidian' } }) }, '用于本剧')),
       ),
       h('div', { class: 'obsidian-media-stage' }, media),
     );
@@ -1971,7 +1988,7 @@ const AgentApp = {
 };
 
 /* ---------- 应用：创作浏览器 ---------- */
-const HEHUI_PROJECT_URL = 'https://hehui.dawncoreai.com/drama/project-manage/project-details/project-role?id=1704&project_name=%E7%9F%AD%E5%89%A7+%E3%80%8A%E9%99%86%E6%80%BB%EF%BC%8C%E5%88%AB%E8%BF%BD%E4%BA%86%E3%80%8B';
+const HEHUI_PROJECT_URL = 'https://hehui.dawncoreai.com/';
 const INSPIRATION_PROJECT_ID = 'inspiration';
 
 const CreatorEntry = {
@@ -2247,7 +2264,7 @@ const CreatorEntry = {
 };
 
 const CreatorApp = {
-  id: 'creator', title: '创作工作台', pageTitle: '创作工作台', eyebrow: 'GENERATION STUDIO', subtitle: '把已通过门禁的提示词送入生成平台', icon: ICONS.creator, width: 900, height: 590,
+  id: 'creator', title: '创作工作台', pageTitle: '创作工作台', eyebrow: 'GENERATION STUDIO', subtitle: '在常用 AI 网页创作，按剧本管理素材', icon: ICONS.creator, width: 900, height: 590,
   mount(root) {
     const isDesktop = !!window.desktopOS?.isElectron;
     const openMode = mode => CreatorEntry.open({ preferredMode: mode });
@@ -2306,344 +2323,13 @@ const CreatorApp = {
   },
 };
 
-/* ---------- 应用：剧本拆解工作台 ---------- */
-const SCRIPT_BREAKDOWN_SCHEMA = 'video-production-os.script-breakdown.v1';
-const SCRIPT_CODEX_REQUEST = `请按本项目根目录的《SCRIPT-BREAKDOWN-PROTOCOL.md》处理我接下来提供的剧本。
 
-你必须：
-1. 先忠实拆成固定七字段的表演节拍分组，再编译为逐镜生产单元；不改写原台词、事件顺序或人物关系。
-2. 每个镜头只承担一个主要状态变化，并按 AGENTS.md、MEMORY-MANIFEST.md 与 TOOL-001 的门禁判断 Seedance／Grok 路由。
-3. 必要尾帧、站位、逐字台词、真实资产名或授权信息缺失时，把 generation.status 写为 needs-input，列出 missingInputs，并保持 prompt 为空；不得用占位符伪装可复制成品。
-4. 输出 schemaVersion=${SCRIPT_BREAKDOWN_SCHEMA} 的唯一 JSON 文件，并写入 视频制作OS/data/script-breakdowns/。
-5. 写入后完成格式自检，并回复文件名、分组数、镜头数、ready 数和 needs-input 数。
-
-剧本如下：
-[把剧本粘贴在这里]`;
-
-const ScriptWorkbenchApp = {
-  id: 'scripts', title: '剧本拆解', pageTitle: '剧本拆解工作台', eyebrow: 'CODEX SCRIPT PIPELINE',
-  subtitle: 'Codex 固定格式落盘 · 自动校验 · 逐镜提示词', icon: ICONS.script, width: 1180, height: 720,
-  async mount(root, win) {
-    const S = win.state;
-    S.selectedFilename = S.selectedFilename || '';
-    S.selectedShotId = S.selectedShotId || '';
-    S.detail = null;
-    S.error = '';
-    root.replaceChildren(h('div', { class: 'script-loading', role: 'status' }, '正在连接 Codex 剧本交接目录…'));
-    await this.refresh(root, win, { preserveSelection: true });
-  },
-  async refresh(root, win, { preserveSelection = true, preferredFilename = '' } = {}) {
-    const S = win.state;
-    try {
-      await Store.loadBreakdowns(true);
-      const items = Store.breakdowns.items;
-      const previous = preserveSelection ? S.selectedFilename : '';
-      S.selectedFilename = preferredFilename
-        || (items.some(item => item.filename === previous) ? previous : (items[0]?.filename || ''));
-      S.error = '';
-      if (S.selectedFilename) {
-        const payload = await Store.loadBreakdown(S.selectedFilename);
-        S.detail = payload.document;
-        if (!S.detail.shots.some(shot => shot.id === S.selectedShotId)) {
-          S.selectedShotId = S.detail.shots[0]?.id || '';
-        }
-      } else {
-        S.detail = null;
-        S.selectedShotId = '';
-      }
-    } catch (error) {
-      S.error = error.message;
-      S.detail = null;
-    }
-    this.render(root, win);
-  },
-  async selectDocument(root, win, filename) {
-    const S = win.state;
-    if (S.selectedFilename === filename && S.detail) return;
-    S.selectedFilename = filename;
-    S.selectedShotId = '';
-    S.detail = null;
-    S.error = '';
-    this.render(root, win);
-    try {
-      const payload = await Store.loadBreakdown(filename);
-      S.detail = payload.document;
-      S.selectedShotId = S.detail.shots[0]?.id || '';
-    } catch (error) {
-      S.error = error.message;
-    }
-    this.render(root, win);
-  },
-  chooseImport(root, win) {
-    const input = h('input', { type: 'file', accept: '.json,application/json', class: 'hidden' });
-    input.addEventListener('change', async () => {
-      const file = input.files?.[0];
-      input.remove();
-      if (!file) return;
-      if (file.size > 2 * 1024 * 1024) { toast('拆解文件不能超过 2 MB'); return; }
-      try {
-        const document = JSON.parse(await file.text());
-        const result = await Store.importBreakdown(file.name, document);
-        toast('剧本拆解已通过校验并导入');
-        await this.refresh(root, win, { preserveSelection: false, preferredFilename: result.item.filename });
-      } catch (error) {
-        toast('导入失败：' + error.message);
-      }
-    }, { once: true });
-    document.body.appendChild(input);
-    input.click();
-  },
-  async openFolder() {
-    try {
-      const data = await requestJson('/api/open-script-breakdown-folder');
-      toast(data.ok ? '已打开剧本拆解目录' : (data.message || '当前系统不支持打开目录'));
-    } catch (error) {
-      toast('打开目录失败：' + error.message);
-    }
-  },
-  async sendToCreator(shot) {
-    const prompt = shot?.generation?.prompt || '';
-    if (!prompt || shot.generation.status !== 'ready') return;
-    const mode = shot.generation.tool === 'GPT Image' ? 'image' : 'video';
-    try {
-      localStorage.setItem('vos.pendingPrompt', JSON.stringify({
-        title: `${shot.shotNo}｜${shot.title}`,
-        body: prompt,
-        mode,
-        source: 'script-workbench',
-        at: Date.now(),
-      }));
-      CreatorEntry.open({ preferredMode: mode });
-      toast('提示词已暂存；选择剧本后会进入对应工作台');
-    } catch (error) {
-      toast('发送失败：' + error.message);
-    }
-  },
-  render(root, win) {
-    const S = win.state;
-    const index = Store.breakdowns || { items: [], invalid: [], directory: '' };
-    const items = index.items || [];
-    const selectedSummary = items.find(item => item.filename === S.selectedFilename) || null;
-    const documentData = S.detail;
-    const selectedShot = documentData?.shots.find(shot => shot.id === S.selectedShotId) || documentData?.shots[0] || null;
-    const totalReady = items.reduce((sum, item) => sum + item.ready, 0);
-    const totalNeedsInput = items.reduce((sum, item) => sum + item.needsInput, 0);
-    const pipelineState = items.length
-      ? `${items.length} 份已索引 · ${totalReady} 镜可生成${totalNeedsInput ? ` · ${totalNeedsInput} 镜待补` : ''}`
-      : '等待 Codex 写入第一份拆解';
-    const productionStateClass = !items.length ? '' : totalNeedsInput ? 'warning' : totalReady ? 'complete' : 'current';
-
-    const header = h('header', { class: 'script-header' },
-      h('div', { class: 'script-header-copy' },
-        h('div', { class: 'script-kicker' }, 'CODEX FILE BRIDGE'),
-        h('h2', {}, '从剧本事实，到可生成镜头'),
-        h('p', {}, 'Codex 按固定 Schema 写入本地目录；工作台自动校验分组、连续性、输入门禁和每镜提示词状态。'),
-      ),
-      h('div', { class: 'script-header-actions' },
-        h('button', { class: 'shell-btn secondary', type: 'button', onclick: () => copyText(SCRIPT_CODEX_REQUEST) }, '复制给 Codex'),
-        h('button', { class: 'shell-btn secondary', type: 'button', onclick: () => this.chooseImport(root, win) }, '导入 JSON'),
-        h('button', { class: 'shell-btn primary', type: 'button', onclick: () => this.openFolder() }, '打开交接目录'),
-      ),
-    );
-
-    const pipeline = h('section', { class: 'script-pipeline', 'aria-label': '剧本拆解流水线状态' },
-      h('div', { class: 'pipeline-state complete' }, h('b', {}, '1'), h('span', {}, '固定格式'), h('small', {}, SCRIPT_BREAKDOWN_SCHEMA)),
-      h('div', { class: `pipeline-state ${items.length ? 'complete' : 'current'}` }, h('b', {}, '2'), h('span', {}, 'Codex 落盘'), h('small', {}, items.length ? `${items.length} 份文件` : '等待输出')),
-      h('div', { class: `pipeline-state ${items.length && !index.invalid.length ? 'complete' : index.invalid.length ? 'warning' : ''}` }, h('b', {}, '3'), h('span', {}, 'Schema 校验'), h('small', {}, index.invalid.length ? `${index.invalid.length} 份异常` : items.length ? '全部通过' : '尚未校验')),
-      h('div', { class: `pipeline-state ${productionStateClass}` }, h('b', {}, '4'), h('span', {}, '逐镜生产'), h('small', {}, pipelineState)),
-    );
-
-    let content;
-    if (S.error) {
-      content = errorView('剧本工作台加载失败：' + S.error, () => this.refresh(root, win));
-    } else if (!items.length) {
-      content = h('section', { class: 'script-empty' },
-        h('div', { class: 'script-empty-symbol', 'aria-hidden': 'true' }, '⌘'),
-        h('div', {},
-          h('span', {}, '第一步'),
-          h('h3', {}, '在 Codex 对话里粘贴剧本'),
-          h('p', {}, '说“分析这个剧本并拆成可直接生成的逐镜提示词”。项目规则会要求 Codex 写入固定 JSON；文件完成后会自动出现在这里。'),
-          h('code', {}, index.directory || '视频制作OS/data/script-breakdowns'),
-        ),
-        h('div', { class: 'script-empty-actions' },
-          h('button', { class: 'shell-btn primary', onclick: () => copyText(SCRIPT_CODEX_REQUEST) }, '复制固定拆解指令'),
-          h('button', { class: 'shell-btn secondary', onclick: () => this.chooseImport(root, win) }, '已有 JSON，直接导入'),
-        ),
-      );
-    } else {
-      content = this.workspace(root, win, items, index.invalid || [], selectedSummary, documentData, selectedShot);
-    }
-
-    root.replaceChildren(h('div', { class: 'script-app' }, header, pipeline, content));
-  },
-  workspace(root, win, items, invalid, selectedSummary, documentData, selectedShot) {
-    const S = win.state;
-    const libraryList = h('div', { class: 'script-library-list' });
-    const search = h('input', {
-      class: 'field script-library-search', type: 'search', placeholder: '搜索剧本或集数', 'aria-label': '搜索剧本拆解',
-      oninput: event => {
-        const query = event.target.value.trim().toLowerCase();
-        $$('[data-script-search]', libraryList).forEach(item => {
-          item.hidden = !!query && !item.dataset.scriptSearch.includes(query);
-        });
-      },
-    });
-    for (const item of items) {
-      libraryList.appendChild(h('button', {
-        class: `script-library-item ${item.filename === S.selectedFilename ? 'selected' : ''}`,
-        type: 'button', 'data-script-search': `${item.title} ${item.episode} ${item.filename}`.toLowerCase(),
-        'aria-pressed': String(item.filename === S.selectedFilename),
-        onclick: () => this.selectDocument(root, win, item.filename),
-      },
-        h('span', { class: 'script-doc-icon', html: ICONS.script, 'aria-hidden': 'true' }),
-        h('span', { class: 'script-doc-copy' },
-          h('strong', {}, item.title),
-          h('small', {}, `${item.episode} · ${item.shots} 镜 · ${item.ready} 可生成`),
-        ),
-        item.needsInput ? h('span', { class: 'script-alert-count', title: '待补输入镜头' }, String(item.needsInput)) : null,
-      ));
-    }
-    if (invalid.length) {
-      libraryList.appendChild(h('div', { class: 'script-invalid-heading' }, '格式异常'));
-      invalid.forEach(item => libraryList.appendChild(h('div', { class: 'script-invalid-item', title: item.error },
-        h('strong', {}, item.filename), h('small', {}, item.error),
-      )));
-    }
-
-    const library = h('aside', { class: 'script-library', 'aria-label': '剧本拆解文件' },
-      h('div', { class: 'script-pane-title' }, h('strong', {}, '剧本与版本'), h('span', {}, String(items.length))),
-      search,
-      libraryList,
-      h('div', { class: 'script-library-foot' },
-        h('span', {}, '自动监听本地目录'),
-        h('button', { class: 'text-link', onclick: () => this.refresh(root, win) }, '刷新'),
-      ),
-    );
-
-    let outline;
-    if (!documentData) {
-      outline = h('main', { class: 'script-outline' }, h('div', { class: 'script-loading' }, '正在读取拆解文件…'));
-    } else {
-      const groups = new Map(documentData.groups.map(group => [group.id, group]));
-      const timeline = h('div', { class: 'script-timeline' });
-      for (const group of documentData.groups) {
-        const shots = documentData.shots.filter(shot => shot.groupId === group.id);
-        const section = h('section', { class: 'script-group' },
-          h('header', { class: 'script-group-head' },
-            h('div', {}, h('span', {}, group.id), h('h4', {}, group.title)),
-            h('small', {}, `${group.durationSec} 秒 · ${shots.length} 镜`),
-          ),
-          h('p', { class: 'script-group-function' }, group.storyFunction),
-        );
-        for (const shot of shots) {
-          const status = shot.generation.status;
-          section.appendChild(h('button', {
-            class: `script-shot-card ${shot.id === selectedShot?.id ? 'selected' : ''}`,
-            type: 'button', 'aria-pressed': String(shot.id === selectedShot?.id),
-            onclick: () => {
-              const scrollTop = root.querySelector('.script-outline')?.scrollTop || 0;
-              S.selectedShotId = shot.id;
-              this.render(root, win);
-              const nextOutline = root.querySelector('.script-outline');
-              if (nextOutline) nextOutline.scrollTop = scrollTop;
-              root.querySelector('.script-shot-card.selected')?.focus({ preventScroll: true });
-            },
-          },
-            h('span', { class: `shot-ready-dot ${status}`, 'aria-hidden': 'true' }),
-            h('span', { class: 'script-shot-main' },
-              h('span', { class: 'script-shot-topline' },
-                h('strong', {}, `${shot.shotNo} · ${shot.title}`),
-                h('span', {}, `${shot.durationSec}s`),
-              ),
-              h('small', {}, shot.storyTask),
-              h('span', { class: 'script-shot-meta' }, `${shot.generation.tool} · ${groups.get(shot.groupId)?.scene || shot.scene}`),
-            ),
-            h('span', { class: 'script-chevron', 'aria-hidden': 'true' }, '›'),
-          ));
-        }
-        timeline.appendChild(section);
-      }
-      outline = h('main', { class: 'script-outline' },
-        h('header', { class: 'script-document-head' },
-          h('div', {}, h('span', {}, `${documentData.episode} · ${documentData.source.mode}`), h('h3', {}, documentData.title), h('p', {}, documentData.summary.logline)),
-          h('div', { class: 'script-document-stats' },
-            h('span', {}, h('b', {}, String(documentData.groups.length)), ' 分组'),
-            h('span', {}, h('b', {}, String(documentData.shots.length)), ' 镜头'),
-            h('span', {}, h('b', {}, String(selectedSummary?.durationSec || 0)), ' 秒预算'),
-          ),
-        ),
-        timeline,
-      );
-    }
-
-    const inspector = this.inspector(selectedShot, S.selectedFilename);
-    return h('section', { class: 'script-workspace' }, library, outline, inspector);
-  },
-  inspector(shot, filename) {
-    if (!shot) return h('aside', { class: 'script-inspector' }, h('div', { class: 'script-inspector-empty' }, '选择一个镜头查看提示词与连续性。'));
-    const generation = shot.generation;
-    const ready = generation.status === 'ready';
-    const statusText = ready ? '可直接生成' : generation.status === 'needs-input' ? '待补输入' : '仅规划';
-    const copyMissingRequest = () => copyText(`请继续处理 ${filename} 中的 ${shot.shotNo}｜${shot.title}。补齐以下输入后，按 SCRIPT-BREAKDOWN-PROTOCOL.md 更新原 JSON 文件：\n- ${generation.missingInputs.join('\n- ')}\n不得编造尾帧、站位、台词、资产名或授权状态。`);
-    return h('aside', { class: 'script-inspector', 'aria-label': '镜头检查器' },
-      h('header', { class: 'script-inspector-head' },
-        h('div', {}, h('span', {}, shot.shotNo), h('h3', {}, shot.title)),
-        h('span', { class: `script-status ${generation.status}` }, statusText),
-      ),
-      h('section', { class: 'inspector-section' },
-        h('h4', {}, '镜头事实'),
-        h('dl', { class: 'script-facts' },
-          h('div', {}, h('dt', {}, '剧情任务'), h('dd', {}, shot.storyTask)),
-          h('div', {}, h('dt', {}, '场景'), h('dd', {}, shot.scene)),
-          h('div', {}, h('dt', {}, '时长'), h('dd', {}, `${shot.durationSec} 秒`)),
-          h('div', {}, h('dt', {}, '人物'), h('dd', {}, shot.characters.join('、') || '无人物')),
-        ),
-      ),
-      h('section', { class: 'inspector-section' },
-        h('h4', {}, '表演与摄影'),
-        h('p', {}, shot.action),
-        h('p', { class: 'inspector-secondary' }, shot.performance),
-        h('p', { class: 'inspector-camera' }, shot.camera),
-      ),
-      h('section', { class: 'inspector-section continuity-block' },
-        h('h4', {}, '连续性接口'),
-        h('div', {}, h('span', {}, '开始'), h('p', {}, shot.startState)),
-        h('div', {}, h('span', {}, '落点'), h('p', {}, shot.endState)),
-      ),
-      h('section', { class: 'inspector-section prompt-block' },
-        h('div', { class: 'inspector-section-head' }, h('h4', {}, '生成编译'), h('span', {}, generation.tool)),
-        generation.referenceAssets.length
-          ? h('ul', { class: 'script-reference-list' }, ...generation.referenceAssets.map(item => h('li', {}, item)))
-          : null,
-        ready
-          ? h('pre', { class: 'script-prompt' }, generation.prompt)
-          : h('div', { class: 'script-missing' },
-              h('strong', {}, generation.status === 'needs-input' ? '补齐这些事实后才能生成提示词' : '该镜头暂不交给生成模型'),
-              generation.missingInputs.length
-                ? h('ul', {}, ...generation.missingInputs.map(item => h('li', {}, item)))
-                : h('p', {}, '当前只保留制作计划。'),
-            ),
-        h('div', { class: 'inspector-actions' },
-          ready ? h('button', { class: 'shell-btn primary', onclick: () => this.sendToCreator(shot) }, '送入创作工作台') : null,
-          ready ? h('button', { class: 'shell-btn secondary', onclick: () => copyText(generation.prompt) }, '复制提示词') : null,
-          generation.status === 'needs-input'
-            ? h('button', { class: 'shell-btn secondary', onclick: copyMissingRequest }, '复制补全请求')
-            : null,
-        ),
-      ),
-      h('section', { class: 'inspector-section acceptance-block' },
-        h('h4', {}, '验收清单'),
-        h('ul', {}, ...shot.acceptance.map(item => h('li', {}, item))),
-      ),
-    );
-  },
-};
 
 /* ---------- 应用：资产中心 / 创作资产 ---------- */
 const CreativeAssetsApp = {
   id: 'creative-assets', title: '创作资产', pageTitle: '创作资产', eyebrow: 'ASSET CENTER',
   subtitle: '生成前输入 · 角色、场景、色卡、音频与视频参考',
-  icon: ICONS.assets,
+  icon: ICONS.creativeAssets,
   width: 1180, height: 720,
   mount(root) {
     const frame = h('iframe', {
@@ -2659,7 +2345,7 @@ const CreativeAssetsApp = {
           h('strong', {}, '导入一次，各栏目自动收录。'),
           ' 工作台的图片、视频和音频会同步到媒体索引与音频素材，原文件仍按剧本保存；确认的最终视频才进入成片库。',
         ),
-        h('button', { class: 'text-link', type: 'button', onclick: () => WM.open('assets') }, '查看视频素材'),
+        h('button', { class: 'text-link', type: 'button', onclick: () => window.AssetSources.open() }, '外部来源'),
       ),
       frame,
     ));
@@ -2676,11 +2362,7 @@ const HelpApp = {
 
 一套跑在本机项目文件夹上的「创作操作系统」，集中管理素材、音频、经验和蒸馏知识：
 
-### ⌘ 剧本拆解工作台
-- 在 Codex 对话中说“分析这个剧本并拆成可直接生成的逐镜提示词”，项目根目录的 \`AGENTS.md\` 会触发固定交付协议。
-- Codex 按 \`SCRIPT-BREAKDOWN-PROTOCOL.md\` 先拆七字段表演节拍，再编译逐镜生产单元，写入 \`视频制作OS/data/script-breakdowns\`。
-- 工作台自动校验格式，并以“剧本库 → 分组与镜头 → 镜头检查器”展示连续性、生成工具、缺失输入、完整提示词与验收项。
-- 只有 **可直接生成** 的镜头能送入创作工作台；待补输入镜头只能复制补全请求，不会用占位符冒充成品提示词。
+
 
 ### 📦 资产中心
 - **创作资产**与**视频素材、音频素材、成片、Obsidian 资产**统一放在侧栏“资产中心”类别中，入口和操作语言保持一致。
@@ -2720,14 +2402,14 @@ const HelpApp = {
 - 支持全文渲染、大纲锚点、代码块复制、全文复制；未登记进清单的文档会标「未登记」提醒。
 
 ### 🔍 全局搜索
-- 顶部搜索框或 **⌘K**：同时搜剧本拆解、专用素材库中的视频／音频、项目知识和 Agent 规则。
+- 顶部搜索框或 **⌘K**：同时搜素材、项目知识和 Agent 规则。
 
 ### 启动方式
 Mac 桌面完整版双击项目里的 \`视频制作OS/启动OS-mac.command\`；首次使用先运行 \`安装桌面版依赖-mac.command\`。开发时也可以在终端运行：
 
     cd 视频制作OS && npm run desktop
 
-本地服务器只监听本机（127.0.0.1）。Codex 交接只读取固定 JSON 文件，不抓取聊天窗口。创作浏览器只访问你主动打开的第三方网页，只有你在这些平台提交或上传的内容会交给对应平台。`, body);
+本地服务器只监听本机（127.0.0.1）。提示词在 GPT 等网页中制作，软件不要求拆解文件或镜头台账。创作浏览器只访问你主动打开的第三方网页，只有你在这些平台提交或上传的内容会交给对应平台。`, body);
     root.replaceChildren(body);
   },
 };
@@ -2757,7 +2439,7 @@ const dashboardMediaCard = (file, list) => {
 };
 
 const OverviewApp = {
-  id: 'overview', title: '总览', pageTitle: '视频制作总览', eyebrow: 'CONTENT PRODUCTION', subtitle: '从剧本拆解继续到镜头生成与成片归档',
+  id: 'overview', title: '总览', pageTitle: '视频制作总览', eyebrow: 'CONTENT PRODUCTION', subtitle: '网页创作、分剧本素材与成片归档',
   icon: ICONS.overview,
   mount(root, win) { this.render(root, win); },
   render(root) {
@@ -2772,8 +2454,7 @@ const OverviewApp = {
     const finals = videos.filter(file => file.meta && file.meta.isFinal === true);
     const recent = sortAssets(visible, 'newest').slice(0, 8);
     const docs = scan.docs.length;
-    const breakdowns = Store.breakdowns?.items || [];
-    const readyShots = breakdowns.reduce((sum, item) => sum + item.ready, 0);
+
     const stat = (value, label, route, countKey) => h('button', {
       class: 'overview-stat', type: 'button', onclick: () => WM.open(route),
     }, h('strong', { 'data-stat': countKey || '' }, String(value)), h('span', {}, label));
@@ -2794,12 +2475,12 @@ const OverviewApp = {
     root.replaceChildren(h('div', { class: 'overview-app' },
       h('section', { class: 'overview-hero' },
         h('div', { class: 'hero-copy' },
-          h('span', { class: 'hero-kicker' }, breakdowns.length ? `${breakdowns.length} 份剧本拆解已索引 · ${readyShots} 镜可生成` : '从 Codex 剧本拆解开始'),
-          h('h2', {}, '从一段剧本，', h('br'), '走到每一个可生成镜头'),
-          h('p', {}, '拆解、逐镜提示词、生成资产与成片，共用同一套本机生产上下文。'),
+          h('span', { class: 'hero-kicker' }, '你的本地创作空间'),
+          h('h2', {}, '专注创作，', h('br'), '让素材各归其位'),
+          h('p', {}, '在 GPT 等网页中准备提示词，图片、视频和音频按剧本保存。'),
           h('div', { class: 'hero-actions' },
-            h('button', { class: 'hero-btn light', type: 'button', onclick: () => WM.open('scripts') }, breakdowns.length ? '继续剧本拆解' : '开始剧本拆解'),
-            h('button', { class: 'hero-btn ghost', type: 'button', onclick: () => WM.open('projects') }, '打开镜头台账 →'),
+            h('button', { class: 'hero-btn light', type: 'button', onclick: () => CreatorEntry.open({ preferredMode: 'image' }) }, '进入创作'),
+            h('button', { class: 'hero-btn ghost', type: 'button', onclick: () => WM.open('creative-assets') }, '打开创作资产 →'),
           ),
         ),
         h('div', { class: 'overview-system-map', 'aria-label': '创作系统' },
@@ -2826,8 +2507,7 @@ const OverviewApp = {
         ),
       ),
       h('section', { class: 'overview-stats', 'aria-label': '真实索引统计' },
-        stat(1, '当前项目', 'projects', 'projects'),
-        stat(breakdowns.length, '剧本拆解', 'scripts', 'scripts'),
+        stat(visible.filter(file => file.type === 'image').length, '图片素材', 'assets', 'images'),
         stat(videos.length, '视频素材', 'assets', 'videos'),
         stat(finals.length, '已标记成片', 'finals', 'finals'),
         stat(audios.length, '音频素材', 'audio', 'audio'),
@@ -2846,364 +2526,54 @@ const OverviewApp = {
   },
 };
 
-const SHOT_STATUS_LABELS = {
-  planned: '待提示词', generating: '生成中', review: '待验收', approved: '已通过', blocked: '需返工',
-};
 
-const ProjectsApp = {
-  id: 'projects', title: '镜头台账', pageTitle: '镜头台账', eyebrow: 'SHOT LEDGER', subtitle: '当前镜头、生产阶段与下载归属',
-  icon: ICONS.projects,
-  editorDrafts: new Map(),
-  skipDraftCapture: new Set(),
-  createDraft: null,
-  skipCreateDraftCapture: false,
-  mount(root, win) { this.render(root, win); },
-  rememberCreateDraft(form) {
-    if (!form) return;
-    form.dataset.dirty = 'true';
-    this.createDraft = Object.fromEntries(new FormData(form).entries());
-  },
-  rememberEditorDraft(shotId, form) {
-    if (!shotId || !form) return;
-    form.dataset.dirty = 'true';
-    const previous = this.editorDrafts.get(shotId);
-    this.editorDrafts.set(shotId, {
-      values: Object.fromEntries(new FormData(form).entries()),
-      // This baseline is frozen on the first local edit.  A production SSE may
-      // refresh the rendered shot, but must never silently rebase a dirty form.
-      baseRevision: Number(previous?.baseRevision || form.dataset.baseRevision || form.dataset.revision || 0),
-      conflictCode: previous?.conflictCode || '',
-      latestServerRevision: Number(previous?.latestServerRevision || 0),
-    });
-  },
-  markEditorDraftConflict(shotId, code, latestServerRevision) {
-    const draft = this.editorDrafts.get(shotId);
-    if (!draft) return;
-    this.editorDrafts.set(shotId, {
-      ...draft,
-      conflictCode: code || 'REVISION_CONFLICT',
-      latestServerRevision: Number(latestServerRevision || draft.latestServerRevision || 0),
-    });
-  },
-  captureEditorDrafts(root) {
-    const active = document.activeElement;
-    let focus = null;
-    if (active && root.contains(active)) {
-      const form = active.closest('form.shot-editor-form[data-shot-id]');
-      if (form && active.name) focus = { shotId: form.dataset.shotId, field: active.name };
-      const createForm = active.closest('form.shot-create-form');
-      if (createForm && active.name) focus = { create: true, field: active.name };
-    }
-    const createForm = root.querySelector('form.shot-create-form');
-    if (this.skipCreateDraftCapture) {
-      this.createDraft = null;
-      this.skipCreateDraftCapture = false;
-    } else if (createForm?.dataset.dirty === 'true') {
-      this.rememberCreateDraft(createForm);
-    }
-    root.querySelectorAll('form.shot-editor-form[data-shot-id]').forEach(form => {
-      const shotId = form.dataset.shotId;
-      if (this.skipDraftCapture.has(shotId)) {
-        this.editorDrafts.delete(shotId);
-        return;
-      }
-      if (form.dataset.dirty === 'true') this.rememberEditorDraft(shotId, form);
-    });
-    this.skipDraftCapture.clear();
-    return focus;
-  },
-  restoreEditorFocus(root, focus) {
-    if (!focus?.field) return;
-    requestAnimationFrame(() => {
-      const form = focus.create
-        ? root.querySelector('form.shot-create-form')
-        : root.querySelector(`form.shot-editor-form[data-shot-id="${CSS.escape(focus.shotId || '')}"]`);
-      const field = form?.querySelector(`[name="${CSS.escape(focus.field)}"]`);
-      if (field) field.focus();
-    });
-  },
-  async mutate(endpoint, body, root, successMessage, options = {}) {
-    try {
-      await requestJson(endpoint, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-      });
-      if (options.draftId) this.skipDraftCapture.add(options.draftId);
-      if (options.clearCreateDraft) this.skipCreateDraftCapture = true;
-      await Store.loadProduction(true);
-      this.render(root);
-      if (successMessage) toast(successMessage);
-      return true;
-    } catch (error) {
-      if (error.status === 409 && error.code === 'REVISION_CONFLICT' && options.draftId) {
-        this.markEditorDraftConflict(options.draftId, error.code, options.latestServerRevision);
-      }
-      if (error.status === 409) {
-        try { await Store.loadProduction(true); this.render(root); } catch {}
-      }
-      toast(error.message || '制作台账操作失败');
-      return false;
-    }
-  },
-  async setCurrentShot(shot, root, enterCreator) {
-    const context = Store.production && Store.production.context;
-    const ok = await this.mutate('/api/context', {
-      activeShotId: shot ? shot.id : null,
-      expectedRevision: context && context.revision,
-      ...(enterCreator ? { mode: 'video' } : {}),
-    }, root, shot ? `当前镜头已切换为 ${shot.shot_no}` : '已取消当前镜头');
-    if (!ok || !enterCreator) return;
-    if (!window.desktopOS?.isElectron) {
-      toast('镜头已设为当前；内嵌创作平台需要桌面版');
-      return;
-    }
-    try {
-      const projectId = Store.production?.projectId || Store.production?.context?.project_id || '';
-      await window.desktopOS.openCreatorBrowser({ mode: 'video', projectId });
-    }
-    catch (error) { toast(`创作浏览器打开失败：${error.message}`); }
-  },
-  renderShotLedger(root, production) {
-    if (!production || !production.available) {
-      return h('section', { class: 'shot-ledger unavailable', 'aria-labelledby': 'shotLedgerHeading' },
-        h('div', { class: 'shot-ledger-head' },
-          h('div', {}, h('span', {}, 'SHOT LEDGER'), h('h3', { id: 'shotLedgerHeading' }, '镜头台账')),
-        ),
-        h('div', { class: 'ledger-empty' },
-          h('strong', {}, '制作台账暂不可用'),
-          h('p', {}, production && production.error ? production.error : '当前 Node 运行时无法打开 SQLite；素材与知识库仍可正常使用。'),
-        ),
-      );
-    }
-    const shots = production.shots || [];
-    const context = production.context || {};
-    const statuses = production.stats?.statuses || {};
-    const createValues = this.createDraft || {};
-    const createValue = (key, fallback = '') => createValues[key] === undefined ? fallback : createValues[key];
-    const createForm = h('form', {
-      class: 'shot-create-form',
-      'data-dirty': this.createDraft ? 'true' : 'false',
-      oninput: event => this.rememberCreateDraft(event.currentTarget),
-      onchange: event => this.rememberCreateDraft(event.currentTarget),
-      onsubmit: async event => {
-        event.preventDefault();
-        const form = event.currentTarget;
-        const data = Object.fromEntries(new FormData(form).entries());
-        const button = form.querySelector('button[type="submit"]');
-        button.disabled = true;
-        const ok = await this.mutate('/api/shots', { action: 'create', ...data }, root, `已新建镜头 ${data.shotNo}`, { clearCreateDraft: true });
-        if (!ok) button.disabled = false;
-      },
-    },
-      h('label', {}, h('span', {}, '镜号'), h('input', { name: 'shotNo', required: '', maxlength: '40', placeholder: 'S01', value: createValue('shotNo') })),
-      h('label', { class: 'shot-create-title' }, h('span', {}, '镜头任务'), h('input', { name: 'title', required: '', maxlength: '160', placeholder: '例如：走廊擦肩后回头', value: createValue('title') })),
-      h('label', {}, h('span', {}, '集'), h('input', { name: 'episode', maxlength: '40', placeholder: '1', value: createValue('episode') })),
-      h('label', {}, h('span', {}, '秒数'), h('input', { name: 'durationSec', type: 'number', min: '1', max: '900', placeholder: '10', value: createValue('durationSec') })),
-      h('button', { class: 'shell-btn primary', type: 'submit' }, '＋ 新建镜头'),
-    );
-    const tableBody = h('tbody');
-    for (const shot of shots) {
-      const isCurrent = context.active_shot_id === shot.id;
-      const editorId = `shot-editor-${shot.id}`;
-      const draft = this.editorDrafts.get(shot.id);
-      const values = draft?.values || {};
-      const hasDraft = !!draft;
-      const baseRevision = Number(draft?.baseRevision || shot.revision || 0);
-      const draftValue = (key, fallback = '') => values[key] === undefined ? fallback : values[key];
-      const statusSelect = h('select', {
-        class: 'shot-status-select', 'aria-label': `${shot.shot_no} 状态`,
-        onchange: event => this.mutate('/api/shots', {
-          action: 'update', id: shot.id, status: event.currentTarget.value, expectedRevision: shot.revision,
-        }, root, `${shot.shot_no} 状态已更新`),
-      }, ...Object.entries(SHOT_STATUS_LABELS).map(([value, label]) => h('option', {
-        value, selected: shot.status === value ? '' : null,
-      }, label)));
-      const editorRow = h('tr', { class: 'shot-editor-row', id: editorId, hidden: hasDraft ? null : '' },
-        h('td', { colspan: '7' },
-          h('form', {
-            class: `shot-editor-form${hasDraft ? ' has-draft' : ''}`,
-            'data-shot-id': shot.id,
-            'data-revision': shot.revision,
-            'data-base-revision': baseRevision,
-            'data-dirty': hasDraft ? 'true' : 'false',
-            oninput: event => this.rememberEditorDraft(shot.id, event.currentTarget),
-            onchange: event => this.rememberEditorDraft(shot.id, event.currentTarget),
-            onsubmit: async event => {
-              event.preventDefault();
-              const form = event.currentTarget;
-              // Ensure even a click-only submit has a stable version token.
-              this.rememberEditorDraft(shot.id, form);
-              const data = Object.fromEntries(new FormData(form).entries());
-              const currentDraft = this.editorDrafts.get(shot.id);
-              await this.mutate('/api/shots', {
-                action: 'update', id: shot.id, expectedRevision: Number(currentDraft?.baseRevision || form.dataset.baseRevision || shot.revision || 0), ...data,
-              }, root, `${shot.shot_no} 详情已保存`, { draftId: shot.id, latestServerRevision: shot.revision });
-            },
-          },
-            hasDraft ? h('div', { class: `shot-draft-notice${draft.conflictCode ? ' is-conflict' : ''}`, role: 'status' },
-              h('p', {}, draft.conflictCode
-                ? '服务器上的镜头已被其他操作更新。本地草稿仍保留，系统没有覆盖服务器内容。请先核对或放弃草稿后加载最新版本。'
-                : '存在未保存草稿；生产状态刷新不会覆盖你的输入。'),
-              draft.conflictCode ? h('button', {
-                class: 'shell-btn subtle', type: 'button',
-                onclick: async () => {
-                  this.skipDraftCapture.add(shot.id);
-                  this.editorDrafts.delete(shot.id);
-                  try { await Store.loadProduction(true); this.render(root); toast('已放弃本地草稿并加载服务器最新版本'); }
-                  catch (error) { toast(`加载服务器版本失败：${error.message}`); }
-                },
-              }, '放弃草稿并加载最新') : null,
-            ) : null,
-            h('label', {}, h('span', {}, '镜头任务'), h('input', { name: 'title', required: '', maxlength: '160', value: draftValue('title', shot.title) })),
-            h('label', { class: 'shot-editor-task' }, h('span', {}, '唯一剧情任务'), h('textarea', { name: 'task', maxlength: '4000', rows: '2' }, draftValue('task', shot.task || ''))),
-            h('label', {}, h('span', {}, '场景'), h('input', { name: 'scene', maxlength: '120', value: draftValue('scene', shot.scene || '') })),
-            h('label', {}, h('span', {}, '当前环节'), h('input', { name: 'stage', maxlength: '80', value: draftValue('stage', shot.stage || 'prompt') })),
-            h('label', {}, h('span', {}, '尾帧状态'), h('select', { name: 'tailFrameStatus' },
-              h('option', { value: 'none', selected: draftValue('tailFrameStatus', shot.tail_frame_status) === 'none' ? '' : null }, '未设置'),
-              h('option', { value: 'pending', selected: draftValue('tailFrameStatus', shot.tail_frame_status) === 'pending' ? '' : null }, '待确认'),
-              h('option', { value: 'confirmed', selected: draftValue('tailFrameStatus', shot.tail_frame_status) === 'confirmed' ? '' : null }, '已确认真实尾帧'),
-            )),
-            h('div', { class: 'shot-editor-actions' },
-              h('button', { class: 'shell-btn primary', type: 'submit' }, '保存详情'),
-              h('button', {
-                class: 'shell-btn danger', type: 'button',
-                onclick: async () => {
-                  if (!confirm(`确定删除 ${shot.shot_no}「${shot.title}」？有关联入库结果时系统会拒绝删除。`)) return;
-                  await this.mutate('/api/shots', { action: 'delete', id: shot.id, expectedRevision: shot.revision }, root, `已删除 ${shot.shot_no}`, { draftId: shot.id, latestServerRevision: shot.revision });
-                },
-              }, '删除镜头'),
-            ),
-          ),
-        ),
-      );
-      const mainRow = h('tr', { class: `shot-row${isCurrent ? ' is-current' : ''}`, 'data-current': String(isCurrent) },
-        h('td', {}, h('span', { class: 'shot-code' }, shot.shot_no), isCurrent ? h('small', { class: 'current-shot-label' }, '当前') : null),
-        h('td', { class: 'shot-task' }, h('strong', {}, shot.title), h('small', {}, [shot.episode && `第 ${shot.episode} 集`, shot.scene].filter(Boolean).join(' · ') || '未填写场景')),
-        h('td', {}, h('span', { class: 'shot-state', 'data-state': shot.status }, SHOT_STATUS_LABELS[shot.status] || shot.status), statusSelect),
-        h('td', { class: 'shot-stage' }, shot.stage || '提示词'),
-        h('td', { class: 'shot-latest', title: shot.latest_asset || '' }, shot.latest_asset || '尚无文件'),
-        h('td', { class: 'shot-updated' }, fmtDate(shot.updated_at)),
-        h('td', { class: 'shot-actions' },
-          h('button', { class: 'table-action primary', type: 'button', onclick: () => this.setCurrentShot(shot, root, true) }, isCurrent ? '继续制作' : '进入此镜头'),
-          !isCurrent ? h('button', { class: 'table-action', type: 'button', onclick: () => this.setCurrentShot(shot, root, false) }, '设为当前') : null,
-          h('button', {
-            class: 'table-action', type: 'button', 'aria-expanded': hasDraft ? 'true' : 'false', 'aria-controls': editorId,
-            onclick: event => {
-              editorRow.hidden = !editorRow.hidden;
-              event.currentTarget.setAttribute('aria-expanded', String(!editorRow.hidden));
-              event.currentTarget.textContent = editorRow.hidden ? '编辑' : '收起';
-            },
-          }, hasDraft ? '收起' : '编辑'),
-        ),
-      );
-      tableBody.append(mainRow, editorRow);
-    }
-    const table = shots.length ? h('div', { class: 'shot-ledger-table-wrap', tabindex: '0', 'aria-label': '镜头台账，可横向滚动' },
-      h('table', { class: 'shot-ledger-table' },
-        h('thead', {}, h('tr', {}, ...['镜号', '镜头任务', '状态', '当前环节', '最新入库', '更新时间', '操作'].map(label => h('th', { scope: 'col' }, label)))),
-        tableBody,
-      ),
-    ) : h('div', { class: 'ledger-empty' },
-      h('strong', {}, '还没有镜头'),
-      h('p', {}, '先建立镜号和唯一剧情任务；开始创作前把一镜设为当前，下载结果就会自动关联到它。'),
-    );
-    return h('section', { class: 'shot-ledger', 'aria-labelledby': 'shotLedgerHeading' },
-      h('div', { class: 'shot-ledger-head' },
-        h('div', {}, h('span', {}, 'SHOT LEDGER'), h('h3', { id: 'shotLedgerHeading' }, '镜头台账')),
-        h('div', { class: 'shot-ledger-summary' },
-          h('span', {}, `${shots.length} 镜`),
-          h('span', {}, `${statuses.generating || 0} 镜生成中`),
-          h('span', {}, `${statuses.review || 0} 镜待验收`),
-          context.active_shot_id ? h('button', { class: 'text-link', type: 'button', onclick: () => this.setCurrentShot(null, root, false) }, '取消当前镜头') : null,
-        ),
-      ),
-      createForm,
-      table,
-    );
-  },
-  render(root) {
-    const scan = Store.scan;
-    if (!scan) { root.replaceChildren(h('div', { class: 'overview-loading' }, '正在读取项目…')); return; }
-    const activeFiles = scan.files.filter(file => !file.hidden && !(file.meta && file.meta.rejected));
-    const videos = activeFiles.filter(file => file.type === 'video');
-    const audios = activeFiles.filter(file => file.type === 'audio');
-    const finals = videos.filter(file => file.meta && file.meta.isFinal === true);
-    const production = Store.production || { available: false, shots: [], inbox: [], error: '正在连接制作台账…' };
-    const focus = this.captureEditorDrafts(root);
-    root.replaceChildren(h('div', { class: 'library-page project-page' },
-      h('header', { class: 'library-intro' },
-        h('div', {}, h('span', {}, 'ACTIVE PRODUCTION'), h('h2', {}, '当前项目')),
-        h('p', {}, '项目库保存镜头状态与当前创作上下文，不复制素材文件。当前本地 OS 只连接一个真实项目根目录。'),
-      ),
-      h('article', { class: 'project-card' },
-        h('div', { class: 'project-card-main' },
-          h('span', { class: 'project-state' }, '制作中'),
-          h('h3', {}, scan.rootName || '青春校园短剧'),
-          h('p', {}, '创作资产库管理生成前输入 · 素材库索引生成后的视频与音频 · Obsidian 继续作为既有只读图库'),
-          h('div', { class: 'project-metrics' },
-            h('span', {}, h('b', {}, String(production.stats?.shots || 0)), ' 镜头'),
-            h('span', {}, h('b', {}, String(videos.length)), ' 视频'),
-            h('span', {}, h('b', {}, String(audios.length)), ' 音频'),
-            h('span', {}, h('b', {}, String(finals.length)), ' 成片'),
-            h('span', {}, h('b', {}, String(production.stats?.unassigned || 0)), ' 待关联'),
-          ),
-        ),
-        h('div', { class: 'project-card-actions' },
-          h('button', { class: 'shell-btn primary', type: 'button', onclick: () => CreatorEntry.open({ preferredMode: 'video' }) }, '继续创作'),
-          h('button', { class: 'shell-btn secondary', type: 'button', onclick: () => WM.open('creative-assets') }, '创作资产'),
-          h('button', { class: 'shell-btn secondary', type: 'button', onclick: () => WM.open('assets') }, '查看素材'),
-          h('button', { class: 'shell-btn secondary', type: 'button', onclick: () => WM.open('obsidian') }, '查看 Obsidian 资产'),
-        ),
-      ),
-      this.renderShotLedger(root, production),
-      h('aside', { class: 'truth-note' },
-        h('strong', {}, '多项目边界'),
-        h('p', {}, `当前统计只代表 ${scan.rootName || '当前项目'}。系统不会把素材库里的子文件夹伪装成独立项目；等建立真实多项目注册表后再开放新增项目。`),
-      ),
-    ));
-    this.restoreEditorFocus(root, focus);
-  },
-};
 
 const FinalsApp = {
-  id: 'finals', title: '成片库', pageTitle: '成片库', eyebrow: 'APPROVED OUTPUTS', subtitle: '只收录你明确确认的最终视频',
+  id: 'finals', title: '成片库', pageTitle: '成片库', eyebrow: 'APPROVED OUTPUTS', subtitle: '按剧本归档的成片与指定目录',
   icon: ICONS.projects,
-  mount(root, win) { this.render(root, win); },
-  render(root) {
+  async mount(root, win) { win.state.project = 'all'; await Store.loadScan(); this.render(root, win); },
+  render(root, win) {
     const scan = Store.scan;
-    const finals = scan ? sortAssets(scan.files.filter(file => !file.hidden && file.type === 'video' && file.meta && file.meta.isFinal === true && !file.meta.rejected), 'newest') : [];
-    const content = finals.length
-      ? h('div', { class: 'finals-grid' }, ...finals.map(file => dashboardMediaCard(file, finals)))
-      : h('div', { class: 'library-empty' },
-        h('span', { class: 'library-empty-mark', html: ICONS.film, 'aria-hidden': 'true' }),
-        h('h3', {}, '还没有标记为成片的视频'),
-        h('p', {}, '普通视频不会自动进入成片库。在素材预览中确认后点击“标记为成品”，它才会出现在这里。'),
-        h('button', { class: 'shell-btn primary', type: 'button', onclick: () => WM.open('assets') }, '前往视频素材库'),
-      );
+    const selected = win?.state.project || 'all';
+    const finals = scan ? sortAssets(scan.files.filter(file => !file.hidden && file.type === 'video' && file.meta?.isFinal && !file.meta.rejected
+      && (selected === 'all' || LibraryView.projectKey(file) === selected)), 'newest') : [];
+    const sources = (scan?.sources || []).filter(source => source.purpose === 'finals');
     root.replaceChildren(h('div', { class: 'library-page finals-page' },
-      h('header', { class: 'library-intro' },
-        h('div', {}, h('span', {}, 'FINAL LIBRARY'), h('h2', {}, `成片 ${finals.length}`)),
-        h('p', {}, '这里只收录你明确确认的最终视频，不按格式或文件夹名称自动判断。'),
+      h('header', { class: 'library-intro compact-library-intro' },
+        h('h2', {}, `成片 ${finals.length}`),
+        LibraryView.select(selected, value => { win.state.project = value; this.render(root, win); }),
+        h('button', { class: 'btn primary', onclick: () => window.EditorExports.open({ projectId: selected }) }, '剪映导出'),
+        h('button', { class: 'btn', onclick: () => LibraryView.configure('finals') }, '＋ 关联成片文件夹'),
+        h('button', { class: 'btn', onclick: () => refreshMediaLibraries().catch(error => toast(error.message)) }, '刷新'),
       ),
-      content,
+      sources.length ? h('div', { class: 'linked-final-folders' }, ...sources.map(source =>
+        h('button', { class: 'btn small', onclick: () => LibraryView.configure('finals', source.id) },
+          `${source.label} · ${(scan.projects || []).find(project => project.id === source.projectId)?.name || '未归属'}${source.available ? '' : ' · 离线'}`))) : null,
+      finals.length ? h('div', { class: 'grouped-finals' }, ...LibraryView.groups(finals, file => dashboardMediaCard(file, finals), 'finals-grid'))
+        : h('div', { class: 'library-empty' },
+          h('span', { class: 'library-empty-mark', html: ICONS.film, 'aria-hidden': 'true' }),
+          h('h3', {}, '把第一条成片导出到这里'),
+          h('p', {}, '复制本剧成片目录，设为剪映的导出位置，完成后自动收录。'),
+          h('button', { class: 'btn primary', onclick: () => window.EditorExports.open({ projectId: selected }) }, '设置导出位置'),
+        ),
     ));
   },
 };
 
 const APPS = {};
-[OverviewApp, ScriptWorkbenchApp, ProjectsApp, FinalsApp, CreatorApp, CreativeAssetsApp, AssetsApp, AudioApp, ObsidianApp, DistillApp, AgentApp, HelpApp]
+[OverviewApp, FinalsApp, CreatorApp, CreativeAssetsApp, AssetsApp, AudioApp, ObsidianApp, DistillApp, AgentApp, HelpApp]
   .forEach(a => APPS[a.id] = a);
 
 const SHELL_NAV_GROUPS = [
   { label: '创作', items: [['creator-image', '图片创作'], ['creator-video', '视频创作']] },
-  { label: '工作台', items: [['scripts', '剧本拆解'], ['projects', '镜头台账'], ['creative-assets', '创作资产']] },
+  { label: '资产中心', items: [['creative-assets', '本剧资产'], ['assets', '图片与视频'], ['audio', '音频素材'], ['finals', '成片库'], ['asset-sources', '外部来源']] },
 ];
-// 一切从简：低频模块收进「更多功能」，默认折叠，不删除任何能力。
+// 低频模块收进「更多功能」，默认折叠。
 const SHELL_NAV_MORE_ITEMS = [
-  ['overview', '总览'], ['assets', '媒体索引'], ['audio', '音频素材'], ['obsidian', 'Obsidian 资产'],
-  ['finals', '成片库'], ['distill', '项目知识'], ['agent', 'Agent 与规则'], ['help', '使用说明'],
+  ['overview', '总览'], ['distill', '项目知识'], ['agent', 'Agent 与规则'], ['help', '使用说明'],
 ];
 const SHELL_NAV_MORE_KEY = 'videoOS.nav.showMore.v1';
-const SHELL_NAV_COUNT_KEYS = { assets: 'assets', audio: 'audio', finals: 'finals', distill: 'distill', obsidian: 'obsidian', scripts: 'scripts' };
+const SHELL_NAV_COUNT_KEYS = { assets: 'assets', audio: 'audio', finals: 'finals', distill: 'distill', obsidian: 'obsidian' };
 
 function openSidebar() {
   const sidebar = $('#sidebar');
@@ -3229,13 +2599,15 @@ function navItemButton(id, label) {
   const app = APPS[id];
   const countKey = SHELL_NAV_COUNT_KEYS[id] || null;
   const opensCreator = id === 'creator-image' || id === 'creator-video';
+  const icon = id === 'creator-image' ? ICONS.image
+    : id === 'creator-video' ? ICONS.video : id === 'asset-sources' ? ICONS.obsidian : app?.icon || ICONS.doc;
   return h('button', {
     class: 'side-nav-item', type: 'button', 'data-app': id,
     onclick: () => opensCreator
       ? CreatorEntry.open({ preferredMode: id === 'creator-video' ? 'video' : 'image' })
-      : WM.open(id),
+      : id === 'asset-sources' ? window.AssetSources.open() : WM.open(id),
   },
-    h('span', { class: 'side-nav-icon', html: app?.icon || ICONS.film, 'aria-hidden': 'true' }),
+    h('span', { class: 'side-nav-icon', html: icon, 'aria-hidden': 'true' }),
     h('span', { class: 'side-nav-text' }, label),
     countKey ? h('span', { class: 'side-nav-count', 'data-app-count': countKey }, '0') : null,
   );
@@ -3295,8 +2667,10 @@ const Lightbox = {
       `<b>大小</b>：${f.sizeText} <span id="lbDur"></span><br><b>修改</b>：${fmtDate(f.mtime)}<br><b>路径</b>：${esc(f.path)}` +
       (meta.note ? `<br><b>备注</b>：${esc(meta.note)}` : '');
     $('#lbStar').textContent = meta.starred ? '★ 已收藏' : '☆ 收藏';
-    $('#lbFinal').textContent = meta.isFinal ? '取消成品标记' : '标记为成品';
+    $('#lbFinal').textContent = f.finalSource ? '由成片目录收录' : meta.isFinal ? '取消成品标记' : '标记为成品';
+    $('#lbFinal').disabled = !!f.finalSource;
     $('#lbReject').textContent = meta.rejected ? '↩ 恢复（取消废片）' : '✕ 标为废片';
+    $('#lbUse').hidden = !!asDoc || !['image', 'video', 'audio'].includes(f.type);
     $('#lbNoteArea').value = meta.note || '';
 
     // 评分
@@ -3491,10 +2865,10 @@ const SearchPanel = {
   async render(q) {
     const renderId = ++this.renderId;
     const box = $('#spResults');
-    box.replaceChildren(h('div', { class: 'empty-tip' }, q ? '搜索中…' : '输入关键词：剧本拆解 / 素材 / Obsidian / 项目知识 / Agent 规则（↑↓ 选择，回车打开）'));
+    box.replaceChildren(h('div', { class: 'empty-tip' }, q ? '搜索中…' : '输入关键词：素材 / Obsidian / 项目知识 / Agent 规则（↑↓ 选择，回车打开）'));
     if (!q.trim()) return;
     try {
-      await Promise.all([Store.loadScan(), Store.loadKnowledge(), Store.loadObsidianNotes(), Store.loadBreakdowns()]);
+      await Promise.all([Store.loadScan(), Store.loadKnowledge(), Store.loadObsidianNotes()]);
     } catch (err) {
       if (renderId === this.renderId) box.replaceChildren(errorView('搜索失败：' + err.message));
       return;
@@ -3518,8 +2892,7 @@ const SearchPanel = {
       (n.name + ' ' + n.path).toLowerCase().includes(ql)).slice(0, 6);
     const docs = Store.scan.docs.filter(d =>
       (d.title + d.id + (d.manifest ? d.manifest.purpose : '') + d.summary).toLowerCase().includes(ql)).slice(0, 6);
-    const scripts = (Store.breakdowns?.items || []).filter(item =>
-      `${item.title} ${item.episode} ${item.logline} ${item.filename}`.toLowerCase().includes(ql)).slice(0, 6);
+
     const kCards = [];
     for (const sec of Store.knowledge.sections) {
       for (const item of sec.items) {
@@ -3531,7 +2904,7 @@ const SearchPanel = {
       if (kCards.length >= 6) break;
     }
 
-    if (!files.length && !notes.length && !docs.length && !scripts.length && !kCards.length) {
+    if (!files.length && !notes.length && !docs.length && !kCards.length) {
       box.replaceChildren(h('div', { class: 'empty-tip' }, '没有找到「' + esc(q) + '」'));
       return;
     }
@@ -3581,25 +2954,7 @@ const SearchPanel = {
         box.appendChild(el);
       }
     }
-    if (scripts.length) {
-      box.appendChild(h('div', { class: 'sp-group-title' }, '剧本拆解'));
-      for (const script of scripts) {
-        const el = h('div', {
-          class: 'sp-item',
-          onclick: () => {
-            this.close();
-            const w = WM.open('scripts');
-            ScriptWorkbenchApp.refresh(w.el.querySelector('.win-body'), w, { preserveSelection: false, preferredFilename: script.filename });
-          },
-        },
-          h('span', { class: 'doc-id tool' }, script.episode),
-          h('span', { class: 'sp-name', html: mark(script.title) }),
-          h('span', { class: 'sp-sub' }, `${script.shots} 镜 · ${script.ready} 可生成`),
-        );
-        addItem(el);
-        box.appendChild(el);
-      }
-    }
+
     if (kCards.length) {
       box.appendChild(h('div', { class: 'sp-group-title' }, 'Agent 经验'));
       for (const { sec, item } of kCards) {
@@ -3627,12 +2982,14 @@ function refreshMediaLibraries() {
     do {
       mediaRefreshPending = false;
       await Store.loadScan(true);
-      for (const id of ['overview', 'projects', 'finals', 'assets', 'audio']) {
+      for (const id of ['overview', 'finals', 'assets', 'audio']) {
         const win = WM.windows.get(id);
         if (!win) continue;
         const body = win.el.querySelector('.win-body');
         if (!body) continue;
         const scrollTop = body.scrollTop;
+        const playingAudio = [...body.querySelectorAll('audio')].filter(player => !player.paused)
+          .map(player => ({ player, src: player.getAttribute('src') }));
         if (id === 'assets') {
           if (!win.state.grid) continue;
           AssetsApp.buildCollections(body, win);
@@ -3640,6 +2997,11 @@ function refreshMediaLibraries() {
         }
         if (id === 'audio' && !win.state.list) continue;
         APPS[id].render?.(body, win);
+        for (const { player, src } of playingAudio) {
+          const replacement = [...body.querySelectorAll('audio')].find(item => item.getAttribute('src') === src);
+          if (replacement) { replacement.replaceWith(player); if (player.paused) player.play().catch(() => {}); }
+          else player.pause();
+        }
         body.scrollTop = scrollTop;
       }
     } while (mediaRefreshPending);
@@ -3654,6 +3016,7 @@ async function boot() {
   const shortcutHint = $('#shortcutHint');
   if (shortcutHint) shortcutHint.textContent = isMac ? '⌘ K' : 'Ctrl K';
   WM.init();
+  window.addEventListener('asset-library-used', () => refreshMediaLibraries().catch(error => toast(error.message)));
 
   // 创作浏览器与资产面板中的“切换剧本”复用主壳的同一个归属选择器。
   window.desktopOS?.onOpenProjectPicker?.(({ mode } = {}) => {
@@ -3738,6 +3101,12 @@ async function boot() {
       toast(data && data.ok ? '已请求在文件管理器中显示' : ((data && data.message) || '当前系统不支持此操作'));
     } catch (err) { toast('打开文件管理器失败：' + err.message); }
   });
+  $('#lbUse').addEventListener('click', () => {
+    const file = Lightbox.current;
+    if (!file) return;
+    Lightbox.close();
+    window.AssetSources.open({ file, projectId: file.projectId });
+  });
   $('#lbNoteArea').addEventListener('change', () => Lightbox.patch('note'));
   $('#lbTagInput').addEventListener('keydown', async e => {
     if (e.key !== 'Enter') return;
@@ -3770,6 +3139,7 @@ async function boot() {
   // 素材文件夹监听：文件落盘后自动刷新索引（SSE）
   try {
     const es = new EventSource('/api/events');
+    es.addEventListener('audio-library', () => refreshMediaLibraries().catch(error => toast(error.message)));
     es.addEventListener('rescan', async () => {
       try {
         await refreshMediaLibraries();
@@ -3779,33 +3149,13 @@ async function boot() {
       // 断线重连后补上期间的素材变动；首次加载仍由 boot 负责。
       if (Store.scan) refreshMediaLibraries().catch(() => {});
     });
-    es.addEventListener('production', async () => {
-      try {
-        await Store.loadProduction(true);
-        const projectWindow = WM.windows.get('projects');
-        if (projectWindow) ProjectsApp.render(projectWindow.el.querySelector('.win-body'), projectWindow);
-      } catch {}
-    });
-    es.addEventListener('breakdowns', async () => {
-      try {
-        const scriptWindow = WM.windows.get('scripts');
-        if (scriptWindow) {
-          await ScriptWorkbenchApp.refresh(scriptWindow.el.querySelector('.win-body'), scriptWindow, { preserveSelection: true });
-        } else {
-          await Store.loadBreakdowns(true);
-        }
-        toast('Codex 剧本拆解已更新并重新索引');
-      } catch {}
-    });
+
   } catch {}
 
   // 初始数据
   try {
-    await Promise.all([Store.loadScan(), Store.loadBreakdowns()]);
-    try { await Store.loadProduction(); }
-    catch (error) {
-      Store.production = { available: false, shots: [], inbox: [], stats: {}, context: null, error: error.message };
-    }
+
+    await Store.loadScan();
     const notes = await Store.loadObsidianNotes();
     const obsidianCount = document.querySelector('[data-app-count="obsidian"]');
     if (obsidianCount) obsidianCount.textContent = String(notes.length);
@@ -3820,6 +3170,11 @@ async function boot() {
   // 恢复上次工作模块；未知或已删除的路由回到总览。
   const initialRoute = WM.savedLayout?.active && APPS[WM.savedLayout.active] ? WM.savedLayout.active : 'creator';
   WM.open(initialRoute);
+  const pickerMode = new URLSearchParams(location.search).get('projectPicker');
+  if (['image', 'video'].includes(pickerMode)) {
+    history.replaceState(null, '', location.pathname);
+    CreatorEntry.open({ preferredMode: pickerMode });
+  }
 
   // 关页前保存当前模块，供后续版本扩展会话恢复。
   window.addEventListener('beforeunload', () => WM.saveLayout());

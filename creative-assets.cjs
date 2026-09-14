@@ -96,7 +96,7 @@ function formatBytes(bytes) {
   return `${bytes} B`;
 }
 
-function buildCreativeAssetTree(root, { maxEntries = 20000, scopePath = '' } = {}) {
+function buildCreativeAssetTree(root, { maxEntries = 20000, scopePath = '', includeFile = null } = {}) {
   const realRoot = ensureCreativeAssetRoot(root);
   const normalizedScope = normalizeRelativePath(String(scopePath || ''), { allowRoot: true });
   if (normalizedScope === null) throw new Error('创作资产范围无效');
@@ -135,6 +135,7 @@ function buildCreativeAssetTree(root, { maxEntries = 20000, scopePath = '' } = {
       let stat;
       try { stat = fs.statSync(childAbsolute); } catch { continue; }
       remaining--;
+      if (includeFile && !includeFile(childRelative, stat, type)) continue;
       fileCount++;
       stats.files++;
       stats[type]++;

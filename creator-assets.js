@@ -71,16 +71,22 @@ const state = {
   preview: null,
   renderLimit: RENDER_BATCH,
   collapsedFolders: new Set(),
+  knownFolders: new Set(),
   selectedPaths: new Set(),
   lastCheckedPath: '',
   compactWidth: PANEL_COMPACT_WIDTH,
   folderParent: '',
+  audioKind: '',
+  audioItems: [],
+  audioBusy: false,
+  importBusy: false,
 };
 
 const el = Object.fromEntries([
-  'resizeHandle', 'librarySummary', 'expandPanel', 'closePanel', 'importAssets', 'normalizeNames', 'newScriptFolder',
+  'resizeHandle', 'librarySummary', 'expandPanel', 'closePanel', 'importAssets', 'normalizeNames', 'switchScript',
+  'scriptSwitchDialog', 'scriptSwitchList', 'scriptSwitchClose', 'scriptSwitchCancel',
   'newSubfolder', 'openLibrary', 'assetFileInput', 'assetSearch', 'clearSearch', 'collapseFolders',
-  'folderTree', 'currentPath', 'assetHeading', 'assetCount', 'assetSort', 'assetGrid', 'assetStatus', 'capabilityNote',
+  'folderTree', 'currentPath', 'assetHeading', 'assetCount', 'assetSort', 'assetCollapse', 'assetGrid', 'assetStatus', 'capabilityNote',
   'previewDialog', 'previewName', 'previewPath', 'previewCanvas', 'previewMedia', 'closePreview',
   'zoomControls', 'zoomOut', 'zoomRange', 'zoomIn', 'zoomValue', 'captureFirstFrame', 'captureTailFrame', 'previewCopy', 'previewShow',
   'folderDialog', 'folderForm', 'folderDialogTitle', 'folderDialogParent', 'folderName',
@@ -90,10 +96,73 @@ const el = Object.fromEntries([
   'selectionBar', 'selectionCount', 'selectVisible', 'batchMove', 'batchDelete', 'clearSelection',
 ].map(id => [id, document.getElementById(id)]));
 
+const libraryPaneEl = document.querySelector('.library-pane');
+const GRID_COLLAPSE_KEY = 'videoOS.creatorAssets.gridCollapsed.v1';
+// 资产列表折叠状态按资产类型分别记忆（常用/图片/视频…），重开面板时还原。
+const gridCollapsedState = (() => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(GRID_COLLAPSE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch { return {}; }
+})();
+
+function applyGridCollapse() {
+  const collapsed = !state.audioKind && gridCollapsedState[state.filter] === true;
+  libraryPaneEl.classList.toggle('grid-collapsed', collapsed);
+  el.assetCollapse.setAttribute('aria-expanded', String(!collapsed));
+  el.assetCollapse.setAttribute('aria-controls', state.audioKind ? 'audioLibrary' : 'assetGrid');
+  el.assetCollapse.title = state.audioKind
+    ? `收起${state.audioKind === 'bgm' ? ' BGM' : '音效'}`
+    : collapsed ? '展开资产列表' : '收起资产列表，把空间留给文件夹';
+  el.assetCollapse.setAttribute('aria-label', el.assetCollapse.title);
+  el.assetGrid.inert = collapsed;
+}
+
+function setGridCollapsed(collapsed) {
+  if (collapsed) gridCollapsedState[state.filter] = true;
+  else delete gridCollapsedState[state.filter];
+  try { localStorage.setItem(GRID_COLLAPSE_KEY, JSON.stringify(gridCollapsedState)); } catch {}
+  applyGridCollapse();
+}
+
 let toastTimer = null;
 let searchTimer = null;
 let resizeFrame = null;
 let reloadTimer = null;
+let libraryRequestId = 0;
+let projectRefreshNeeded = false;
+
+function adoptProject(project) {
+  if (!project || project.id === state.config?.project?.id) return;
+  libraryRequestId++;
+  if (el.previewDialog.open) closePreviewNow();
+  window.AssetSources?.close();
+  state.config = { ...state.config, project, rootName: project.name };
+  state.selectedFolder = project.folder;
+  state.audioItems = [];
+  state.assets = [];
+  state.tree = null;
+  state.knownFolders.clear();
+  state.collapsedFolders.clear();
+  el.folderTree.replaceChildren();
+  el.assetGrid.replaceChildren();
+  el.librarySummary.textContent = `${project.name} · 正在读取…`;
+}
+
+function scheduleLibraryReload(projectChanged = false) {
+  projectRefreshNeeded ||= projectChanged;
+  clearTimeout(reloadTimer);
+  reloadTimer = setTimeout(async () => {
+    try {
+      if (projectRefreshNeeded) {
+        projectRefreshNeeded = false;
+        const config = await API.getConfig();
+        adoptProject(config.project);
+      }
+      await loadLibrary({ select: state.selectedFolder });
+    } catch (error) { showToast(`资产刷新失败：${error.message}`); }
+  }, 180);
+}
 
 function showToast(message) {
   el.assetToast.textContent = message;
@@ -121,8 +190,11 @@ function collectTree(root) {
   const knownPaths = new Set();
   const walk = (node, depth = 0, parentPath = '') => {
     if (!node || node.kind !== 'folder') return;
-    const childFolders = (node.children || []).filter(child => child.kind === 'folder');
-    folders.push({ node, depth, parentPath, hasChildren: childFolders.length > 0 });
+    if (!state.knownFolders.has(node.path)) {
+      state.knownFolders.add(node.path);
+      if (depth > 0) state.collapsedFolders.add(node.path);
+    }
+    folders.push({ node, depth, parentPath, hasChildren: true });
     knownPaths.add(node.path || '');
     for (const child of node.children || []) {
       if (child.kind === 'folder') walk(child, depth + 1, node.path || '');
@@ -136,6 +208,7 @@ function collectTree(root) {
 }
 
 function selectFolder(folderPath) {
+  setAudioMode('');
   state.selectedFolder = folderPath || '';
   state.query = '';
   state.renderLimit = RENDER_BATCH;
@@ -199,15 +272,10 @@ function buildFolderRow(folder) {
   button.className = `folder-button${state.selectedFolder === key ? ' active' : ''}`;
   button.setAttribute('aria-pressed', String(state.selectedFolder === key));
   button.title = key || state.config?.rootPath || '创作资产库';
-  const icon = document.createElement('span');
-  icon.className = 'folder-icon';
-  icon.setAttribute('aria-hidden', 'true');
-  if (folder.depth) icon.textContent = '→';
-  else icon.innerHTML = UIIcons.html('library');
   const name = document.createElement('span');
   name.className = 'folder-name';
   name.textContent = folder.depth ? folder.node.name : '全部资产';
-  button.append(icon, name);
+  button.append(name);
   button.addEventListener('click', () => {
     selectFolder(key);
     // Obsidian 习惯：选中收起中的文件夹时自动展开；收起只由箭头控制，避免误收。
@@ -237,15 +305,68 @@ function appendFolderRows(parent, folders, parentPath, rendered) {
     inner.className = 'folder-children-inner';
     wrapper.appendChild(inner);
     appendFolderRows(inner, folders, key, done);
+    const files = state.assets.filter(item => item.folderPath === key);
+    const addFiles = () => {
+      const start = inner.querySelectorAll(':scope > .folder-file').length;
+      files.slice(start, start + 60).forEach(item => inner.appendChild(buildFolderFile(item)));
+      if (start + 60 < files.length) {
+        const more = document.createElement('button');
+        more.className = 'text-button';
+        more.textContent = '显示更多文件';
+        more.addEventListener('click', () => { more.remove(); addFiles(); });
+        inner.appendChild(more);
+      }
+    };
+    addFiles();
+    if (!inner.childElementCount) {
+      const empty = document.createElement('span');
+      empty.className = 'folder-empty';
+      empty.textContent = '暂无资产';
+      inner.appendChild(empty);
+    }
     parent.appendChild(wrapper);
   }
 }
 
+function buildFolderFile(item) {
+  const file = document.createElement('button');
+  file.type = 'button';
+  file.className = 'folder-file';
+  file.title = item.name;
+  file.draggable = true;
+  let icon;
+  if (item.type === 'video') {
+    icon = videoCoverNode(item, 'folder-video-cover', 'tree');
+  } else {
+    icon = document.createElement('img');
+    icon.src = item.type === 'image' ? assetUrl(item.path) : TYPE_ICON[item.type];
+    icon.alt = '';
+    icon.loading = 'lazy';
+    icon.draggable = false;
+  }
+  const name = document.createElement('span');
+  name.textContent = item.name;
+  file.append(icon, name);
+  file.addEventListener('click', () => openPreview(item));
+  file.addEventListener('dragstart', event => {
+    if (NATIVE_API) { event.preventDefault(); API.startDrag(item.path); }
+    else if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'copy';
+      event.dataTransfer.setData('text/uri-list', new URL(assetUrl(item.path), location.href).href);
+      event.dataTransfer.setData('text/plain', item.name);
+    }
+  });
+  return file;
+}
+
 function renderFolders() {
+  const scrollTop = el.folderTree.scrollTop;
+  resetCoverObserver('tree');  // 树重建：只解除树内封面登记，不影响网格
   el.folderTree.replaceChildren();
   const fragment = document.createDocumentFragment();
   appendFolderRows(fragment, state.folders, '');
   el.folderTree.appendChild(fragment);
+  el.folderTree.scrollTop = scrollTop;
   el.newSubfolder.disabled = !state.selectedFolder;
 }
 
@@ -276,6 +397,62 @@ function createMediaIcon(type) {
   return glyph;
 }
 
+// 视频封面懒加载：元素进入预加载区（视口外扩 200px，属预载缓冲而非严格可见边界）才挂 src，
+// 减少网格卡片批量打开时的集中请求。登记集按容器作用域拆分（grid=资产网格，tree=文件夹树）：
+// 网格重建（筛选/搜索）与树重建各自只清理自己的登记，避免一侧重建把另一侧已登记、
+// 尚未进入预加载区的封面解除观察（否则树内缩略图在筛选切换后永远不再懒挂）。
+const coverObserver = ('IntersectionObserver' in window) ? new IntersectionObserver(entries => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    const video = entry.target;
+    coverObserver.unobserve(video);
+    for (const set of Object.values(trackedCovers)) set.delete(video);
+    const coverSrc = video.dataset.coverSrc;
+    if (coverSrc) {
+      delete video.dataset.coverSrc;
+      video.src = coverSrc;
+    }
+  }
+}, { rootMargin: '200px' }) : null;
+const trackedCovers = { grid: new Set(), tree: new Set() };
+
+function resetCoverObserver(scope) {
+  if (!coverObserver) return;
+  const set = trackedCovers[scope];
+  if (!set) return;
+  for (const video of set) coverObserver.unobserve(video);
+  set.clear();
+}
+// 只读观测口（测试/诊断用）：登记集大小与懒加载可用性，验证重建后登记被显式释放与重建。
+window.__coverObserverDebug = () => ({ tracked: trackedCovers.grid.size + trackedCovers.tree.size, grid: trackedCovers.grid.size, tree: trackedCovers.tree.size, supported: !!coverObserver });
+
+function registerCoverLazy(video, coverUrl, scope = 'grid') {
+  if (!coverObserver) { video.src = coverUrl; return; }  // 无 IntersectionObserver 环境降级为急加载
+  video.dataset.coverSrc = coverUrl;
+  coverObserver.observe(video);
+  (trackedCovers[scope] || trackedCovers.grid).add(video);
+}
+
+function videoCoverNode(item, className, scope = 'grid') {
+  // 视频封面：#t=0.1 让浏览器 seek 到开头附近的帧作为封面画面（约等于首帧，非严格第 0 帧）。
+  // preload=metadata 只是加载提示，seek 时浏览器会按需下载视频开头的一段数据，实际用量随容器/编码而异。
+  const video = document.createElement('video');
+  video.className = className;
+  registerCoverLazy(video, `${assetUrl(item.path)}#t=0.1`, scope);
+  video.preload = 'metadata';
+  video.muted = true;
+  video.defaultMuted = true;
+  video.playsInline = true;
+  video.tabIndex = -1;
+  video.setAttribute('aria-hidden', 'true');
+  video.draggable = false;
+  video.addEventListener('error', () => {
+    // 封面解码失败（如损坏文件）：保留黑底占位并标记，不再退回 3D 图标。
+    video.classList.add('cover-failed');
+  }, { once: true });
+  return video;
+}
+
 function mediaPreviewNode(item) {
   if (item.type === 'image') {
     const image = document.createElement('img');
@@ -284,6 +461,17 @@ function mediaPreviewNode(item) {
     image.loading = 'lazy';
     image.draggable = false;
     return image;
+  }
+  if (item.type === 'video') {
+    const cover = videoCoverNode(item, 'video-cover', 'grid');
+    const wrap = document.createElement('span');
+    wrap.className = `media-placeholder video video-cover-wrap`;
+    wrap.appendChild(cover);
+    const badge = document.createElement('span');
+    badge.className = 'play-badge';
+    badge.setAttribute('aria-hidden', 'true');
+    wrap.appendChild(badge);
+    return wrap;
   }
   const placeholder = document.createElement('span');
   placeholder.className = `media-placeholder ${item.type}`;
@@ -445,7 +633,7 @@ async function normalizeNames() {
     showToast('请先在左侧选择一个分类文件夹');
     return;
   }
-  if (!confirm('扫描当前分类里的平台乱名文件（UUID 命名），按“生成图片-001”顺序重命名？血缘提示文件与镜头台账记录会一并更新。')) return;
+  if (!confirm('扫描当前分类里的平台乱名文件（UUID 命名），按“生成图片-001”顺序重命名？相关素材索引会一并更新。')) return;
   el.normalizeNames.disabled = true;
   try {
     const response = await fetch(`/api/creative-assets/normalize?project=${encodeURIComponent(activeProjectId())}`, {
@@ -507,6 +695,7 @@ function clearPreview() {
   const image = el.previewMedia.querySelector('img');
   if (image) image.src = PREVIEW_PLACEHOLDER;
   el.previewMedia.replaceChildren();
+  el.previewDialog.classList.remove('video-review');
   state.preview = null;
 }
 
@@ -518,6 +707,8 @@ function closePreviewNow() {
 function openPreview(item) {
   clearPreview();
   state.preview = item;
+  // 视频走“展开审核”形态：对话框放大、循环播放便于反复审看。
+  el.previewDialog.classList.toggle('video-review', item.type === 'video');
   el.previewName.textContent = item.name;
   el.previewPath.textContent = `${item.folderPath || '创作资产库'} · ${item.sizeText || ''}`;
   el.previewCopy.hidden = item.type !== 'image';
@@ -535,6 +726,7 @@ function openPreview(item) {
     const media = document.createElement(item.type);
     media.controls = true;
     media.preload = 'metadata';
+    if (item.type === 'video') media.loop = true; // 审核场景：循环播放便于反复看动作与节奏
     media.src = assetUrl(item.path);
     media.setAttribute('aria-label', `${item.name} ${TYPE_COPY[item.type]}预览`);
     el.previewMedia.appendChild(media);
@@ -716,6 +908,8 @@ function createAssetCard(item) {
 }
 
 function renderAssets({ preserveScroll = false } = {}) {
+  if (state.audioKind) { renderAudioLibrary(); return; }
+  resetCoverObserver('grid');  // 网格重建：只解除网格封面登记，不影响树
   const previousScrollTop = el.assetGrid.scrollTop;
   const allItems = visibleAssets();
   const items = allItems.slice(0, state.renderLimit);
@@ -723,6 +917,7 @@ function renderAssets({ preserveScroll = false } = {}) {
   el.assetCount.textContent = `${allItems.length} 项`;
   el.currentPath.textContent = state.query ? `搜索“${state.query}”` : folderLabel(state.selectedFolder);
   el.assetHeading.textContent = state.filter === 'all' ? '常用资产' : `${TYPE_COPY[state.filter]}资产`;
+  applyGridCollapse();
 
   if (!allItems.length) {
     const empty = document.createElement('div');
@@ -848,20 +1043,313 @@ async function createFolder() {
   showToast(`已创建：${data.folder?.path || name}`);
 }
 
-async function importFiles(files) {
+function setAudioMode(kind) {
+  if (state.audioKind && state.audioKind !== kind) {
+    document.querySelectorAll('#audioLibrary audio').forEach(audio => audio.pause());
+  }
+  state.audioKind = kind;
+  applyGridCollapse();
+  document.body.dataset.audioMode = String(!!kind);
+  document.getElementById('audioLibrary').hidden = !kind;
+  document.querySelectorAll('[data-audio-kind]').forEach(button => {
+    const expanded = button.dataset.audioKind === kind;
+    button.setAttribute('aria-pressed', String(expanded));
+    button.setAttribute('aria-expanded', String(expanded));
+    button.title = `${expanded ? '收起' : '展开'}${button.dataset.audioKind === 'bgm' ? ' BGM' : '音效'}`;
+  });
+  if (kind) {
+    state.selectedPaths.clear();
+    el.selectionBar.hidden = true;
+    el.assetSearch.value = state.query = '';
+    el.clearSearch.hidden = true;
+    document.querySelectorAll('.folder-button.active').forEach(button => {
+      button.classList.remove('active');
+      button.setAttribute('aria-pressed', 'false');
+    });
+    renderAudioLibrary();
+    loadAudioLibrary().catch(error => showToast(error.message));
+  }
+}
+
+async function audioRequest(suffix = '', options = {}, project = activeProjectId()) {
+  const response = await fetch(`/api/audio-library${suffix}${suffix.includes('?') ? '&' : '?'}project=${encodeURIComponent(project)}`, { cache: 'no-store', ...options });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `音乐音效库读取失败（${response.status}）`);
+  return data;
+}
+
+async function loadAudioLibrary() {
+  const project = activeProjectId();
+  const data = await audioRequest('', {}, project);
+  if (project !== activeProjectId()) return;
+  state.audioItems = data.items || [];
+  if (!state.audioBusy && !document.querySelector('.audio-entry input:focus')) renderAudioLibrary();
+}
+
+async function saveAudioEntry(body) {
+  await audioRequest('', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  await loadAudioLibrary();
+}
+
+function audioButton(label, action) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'quiet-button';
+  button.textContent = label;
+  button.addEventListener('click', () => Promise.resolve().then(action).catch(error => showToast(error.message)));
+  return button;
+}
+
+function bindAudioDrop(target, entryId = '') {
+  for (const type of ['dragenter', 'dragover', 'dragleave', 'drop']) {
+    target.addEventListener(type, event => {
+      if (![...(event.dataTransfer?.types || [])].includes('Files')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (type === 'dragenter' || type === 'dragover') {
+        event.dataTransfer.dropEffect = 'copy';
+        target.classList.add('is-audio-drop');
+      } else if (type === 'drop') {
+        target.classList.remove('is-audio-drop');
+        importAudioFiles(event.dataTransfer.files, entryId);
+      } else if (!target.contains(event.relatedTarget)) target.classList.remove('is-audio-drop');
+    });
+  }
+}
+
+function pickAudioFile(entryId = '') {
+  const input = document.getElementById('audioFileInput');
+  input.dataset.entry = entryId;
+  input.multiple = !entryId;
+  input.value = '';
+  input.click();
+}
+
+async function importAudioFiles(files, entryId = '') {
+  if (state.audioBusy) { showToast('正在导入，请稍候'); return; }
+  const list = Array.from(files || []);
+  if (!list.length) return;
+  if (entryId && list.length !== 1) { showToast('一个名称对应一个音频，请拖入一个文件'); return; }
+  const kind = state.audioKind;
+  if (!kind) return;
+  const project = activeProjectId();
+  state.audioBusy = true;
+  let imported = 0;
+  const errors = [];
+  try {
+    for (const file of list) {
+      try {
+        if (!/\.(mp3|wav|m4a|aac|flac|ogg|aiff|aif|opus|wma)$/i.test(file.name)) throw new Error('请选择音频文件');
+        el.assetStatus.textContent = `正在导入：${file.name}`;
+        const query = new URLSearchParams({ kind, entry: entryId, name: file.name });
+        await audioRequest(`/upload?${query}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file }, project);
+        imported++;
+      } catch (error) { errors.push(`${file.name}：${error.message}`); }
+    }
+  } finally { state.audioBusy = false; }
+  await loadLibrary({ select: state.selectedFolder }).catch(error => errors.push(error.message));
+  const message = errors.length ? `已导入 ${imported} 项；${errors[0]}` : entryId ? '音频已绑定到名称' : `已导入 ${imported} 项音频`;
+  el.assetStatus.textContent = message;
+  showToast(message);
+}
+
+function renderAudioLibrary() {
+  if (!state.audioKind) return;
+  if (document.querySelector('.audio-entry input:focus')) return;
+  el.currentPath.textContent = state.config?.project?.name || '本剧资产';
+  el.assetHeading.textContent = state.audioKind === 'bgm' ? 'BGM · 背景音乐' : '常用音效';
+  const items = state.audioItems.filter(item => item.kind === state.audioKind && `${item.name} ${item.filename || ''}`.toLowerCase().includes(state.query.toLowerCase()));
+  el.assetCount.textContent = `${items.length} 项`;
+  const container = document.getElementById('audioEntries');
+  const playing = [...container.querySelectorAll('audio')].filter(audio => !audio.paused);
+  container.replaceChildren();
+  for (const item of items) {
+    const card = document.createElement('article');
+    card.className = 'audio-entry';
+    card.dataset.entry = item.id;
+    bindAudioDrop(card, item.id);
+    const form = document.createElement('form');
+    const name = document.createElement('input');
+    name.value = item.name;
+    name.maxLength = 120;
+    name.required = true;
+    name.setAttribute('aria-label', '编辑名称');
+    const save = document.createElement('button');
+    save.className = 'quiet-button';
+    save.type = 'submit';
+    save.textContent = '保存';
+    form.append(name, save);
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      save.disabled = true;
+      try {
+        await saveAudioEntry({ action: 'rename', id: item.id, name: name.value });
+        name.blur();
+        renderAudioLibrary();
+        showToast('名称已保存');
+      } catch (error) { showToast(error.message); }
+      finally { save.disabled = false; }
+    });
+    const label = document.createElement('span');
+    label.className = 'audio-file-label';
+    label.textContent = item.available ? item.filename : item.path ? '文件已移走，可重新拖入绑定' : '将音频拖到这里，与名称绑定';
+    label.title = label.textContent;
+    card.append(form, label);
+    if (item.available) {
+      const audio = document.createElement('audio');
+      audio.controls = true;
+      audio.preload = 'none';
+      audio.src = assetUrl(item.path);
+      audio.addEventListener('play', () => container.querySelectorAll('audio').forEach(other => { if (other !== audio) other.pause(); }));
+      card.append(audio);
+    }
+    const actions = document.createElement('div');
+    actions.className = 'audio-entry-actions';
+    actions.append(audioButton(item.available ? '更换音频' : '添加音频', () => pickAudioFile(item.id)));
+    if (item.available) {
+      const drag = audioButton('拖出音频', () => showToast('按住此按钮，拖到创作平台'));
+      drag.draggable = true;
+      drag.addEventListener('dragstart', event => {
+        if (NATIVE_API) { event.preventDefault(); API.startDrag(item.path); }
+        else {
+          event.dataTransfer.effectAllowed = 'copy';
+          event.dataTransfer.setData('text/uri-list', new URL(assetUrl(item.path), location.href).href);
+          event.dataTransfer.setData('text/plain', item.name);
+        }
+      });
+      actions.append(drag);
+    }
+    const remove = audioButton('移除条目', async () => {
+      await saveAudioEntry({ action: 'remove', id: item.id });
+      showToast('条目已移除，原音频文件保留在资产文件夹');
+    });
+    remove.title = '仅移除条目，保留音频文件';
+    actions.append(remove);
+    card.append(actions);
+    container.append(card);
+  }
+  for (const audio of playing) {
+    const replacement = [...container.querySelectorAll('audio')].find(item => item.src === audio.src);
+    if (replacement) { replacement.replaceWith(audio); if (audio.paused) audio.play().catch(() => {}); }
+    else audio.pause();
+  }
+  if (!items.length) {
+    const empty = document.createElement('p');
+    empty.className = 'audio-file-label';
+    empty.textContent = state.query ? '没有匹配的音频' : '先写名称，或直接拖入音频';
+    container.append(empty);
+  }
+}
+
+function bindAudioLibrary() {
+  document.querySelectorAll('[data-audio-kind]').forEach(button => button.addEventListener('click', () => {
+    if (state.audioKind === button.dataset.audioKind) selectFolder(state.selectedFolder);
+    else setAudioMode(button.dataset.audioKind);
+  }));
+  const dropzone = document.getElementById('audioDropzone');
+  bindAudioDrop(dropzone);
+  dropzone.addEventListener('click', () => pickAudioFile());
+  document.getElementById('audioFileInput').addEventListener('change', event => importAudioFiles(event.target.files, event.target.dataset.entry));
+  document.getElementById('audioNameForm').addEventListener('submit', async event => {
+    event.preventDefault();
+    const input = document.getElementById('audioNameInput');
+    const button = event.target.querySelector('button');
+    button.disabled = true;
+    try {
+      await saveAudioEntry({ action: 'create', kind: state.audioKind, name: input.value });
+      input.value = '';
+      showToast('名称已保存，可以把音频拖到该条目');
+    } catch (error) { showToast(error.message); }
+    finally { button.disabled = false; }
+  });
+}
+
+// 面板内切换剧本：列出全部剧本，点击即激活（服务器广播，面板与创作浏览器原地跟随）。
+async function openScriptSwitch() {
+  if (state.importBusy || state.audioBusy) { showToast('请等待当前素材导入完成后切换剧本'); return; }
+  el.scriptSwitchList.replaceChildren();
+  const loading = document.createElement('p');
+  loading.className = 'script-switch-empty';
+  loading.textContent = '正在读取剧本…';
+  el.scriptSwitchList.appendChild(loading);
+  el.scriptSwitchDialog.showModal();
+  let projects = [];
+  try {
+    const response = await fetch('/api/creative-projects', { cache: 'no-store' });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    projects = Array.isArray(data.projects) ? data.projects : [];
+  } catch (error) {
+    el.scriptSwitchList.replaceChildren();
+    const errorRow = document.createElement('p');
+    errorRow.className = 'script-switch-empty';
+    errorRow.textContent = `剧本读取失败：${error.message}`;
+    el.scriptSwitchList.appendChild(errorRow);
+    return;
+  }
+  el.scriptSwitchList.replaceChildren();
+  const activeId = activeProjectId();
+  if (!projects.length) {
+    const empty = document.createElement('p');
+    empty.className = 'script-switch-empty';
+    empty.textContent = '还没有剧本。';
+    el.scriptSwitchList.appendChild(empty);
+    return;
+  }
+  for (const project of projects) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'script-switch-row' + (project.id === activeId ? ' active' : '');
+    row.dataset.projectId = project.id;
+    const name = document.createElement('span');
+    name.className = 'script-switch-name';
+    name.textContent = project.kind === 'inspiration' ? `${project.name}（灵感工作区）` : project.name;
+    const meta = document.createElement('span');
+    meta.className = 'script-switch-meta';
+    meta.textContent = `${Number(project.assetCount) || 0} 项资产`;
+    row.append(name, meta);
+    row.addEventListener('click', async () => {
+      if (project.id === activeId) { el.scriptSwitchDialog.close(); return; }
+      try {
+        const response = await fetch(`/api/creative-projects?project=${encodeURIComponent(activeProjectId())}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'activate', id: project.id }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        adoptProject(data.project);
+        el.scriptSwitchDialog.close();
+        showToast(`已切换到「${project.name}」`);
+        await loadLibrary();
+      } catch (error) {
+        showToast(`切换失败：${error.message}`);
+      }
+    });
+    el.scriptSwitchList.appendChild(row);
+  }
+}
+
+async function importFiles(files) {  if (state.audioKind) return importAudioFiles(files);
+  if (state.importBusy) { showToast('正在导入，请稍候'); return; }
   const list = Array.from(files || []);
   if (!list.length) return;
   if (!state.selectedFolder) {
     showToast('请先选择或新建一个剧本文件夹');
     return;
   }
+  if (libraryPaneEl.classList.contains('grid-collapsed')) setGridCollapsed(false);
+  const projectId = activeProjectId();
+  const folder = state.selectedFolder;
+  state.importBusy = true;
   el.importAssets.disabled = true;
   let imported = 0;
   const failed = [];
   for (const file of list) {
     el.assetStatus.textContent = `正在导入 ${imported + failed.length + 1}/${list.length}：${file.name}`;
     try {
-      const url = `/api/creative-assets/import?project=${encodeURIComponent(activeProjectId())}&folder=${encodeURIComponent(state.selectedFolder)}&name=${encodeURIComponent(file.name)}`;
+      if (activeProjectId() !== projectId) throw new Error('剧本已切换，该文件未导入');
+      const url = `/api/creative-assets/import?project=${encodeURIComponent(projectId)}&folder=${encodeURIComponent(folder)}&name=${encodeURIComponent(file.name)}`;
       const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
@@ -871,13 +1359,15 @@ async function importFiles(files) {
     }
   }
   el.importAssets.disabled = false;
+  state.importBusy = false;
   el.assetFileInput.value = '';
-  await loadLibrary({ select: state.selectedFolder });
-  el.assetStatus.textContent = failed.length ? `已导入 ${imported} 项，${failed.length} 项失败` : `已导入 ${imported} 项到 ${folderLabel(state.selectedFolder)}`;
+  await loadLibrary({ select: activeProjectId() === projectId ? folder : state.selectedFolder }).catch(error => showToast(error.message));
+  el.assetStatus.textContent = failed.length ? `已导入 ${imported} 项，${failed.length} 项失败` : `已导入 ${imported} 项到 ${folderLabel(folder)}`;
   showToast(failed.length ? `已导入 ${imported} 项；${failed[0]}` : `已导入 ${imported} 项资产`);
 }
 
 function bindEvents() {
+  bindAudioLibrary();
   // body 也有 data-layout，只绑定真正的按钮，避免冒泡把刚选的布局改回去。
   document.querySelectorAll('.layout-switch button[data-layout]').forEach(button => {
     button.addEventListener('click', () => setPanelState({ layout: button.dataset.layout }).catch(error => showToast(error.message)));
@@ -897,10 +1387,20 @@ function bindEvents() {
   });
   el.closePanel.addEventListener('click', () => setPanelState({ open: false }).catch(error => showToast(error.message)));
   el.openLibrary.addEventListener('click', () => API.openLibrary().catch(error => showToast(error.message)));
+  document.getElementById('editorExports').addEventListener('click', () => window.EditorExports.open({ projectId: activeProjectId() }));
+  document.getElementById('assetSources').addEventListener('click', () => window.AssetSources.open({ projectId: activeProjectId() }));
+  window.addEventListener('asset-library-used', () => loadLibrary().catch(error => showToast(error.message)));
   el.normalizeNames.addEventListener('click', () => {
     normalizeNames().catch(error => showToast(error.message));
   });
+  el.switchScript.addEventListener('click', () => openScriptSwitch().catch(error => showToast(error.message)));
+  el.scriptSwitchClose.addEventListener('click', () => el.scriptSwitchDialog.close());
+  el.scriptSwitchCancel.addEventListener('click', () => el.scriptSwitchDialog.close());
+  el.scriptSwitchDialog.addEventListener('click', event => {
+    if (event.target === el.scriptSwitchDialog) el.scriptSwitchDialog.close();
+  });
   el.importAssets.addEventListener('click', () => {
+    if (state.audioKind) { pickAudioFile(); return; }
     if (!state.selectedFolder) { showToast('请先选择或新建一个剧本文件夹'); return; }
     el.assetFileInput.click();
   });
@@ -915,6 +1415,8 @@ function bindEvents() {
     event.preventDefault();
     assetDragDepth += 1;
     dropTarget.classList.add('is-drop-import');
+    // 折叠状态下拖入文件：自动展开列表，让用户看到落点与导入结果。
+    if (libraryPaneEl.classList.contains('grid-collapsed')) setGridCollapsed(false);
   });
   dropTarget.addEventListener('dragover', event => {
     if (!hasExternalFiles(event)) return;
@@ -931,10 +1433,6 @@ function bindEvents() {
     assetDragDepth = 0;
     dropTarget.classList.remove('is-drop-import');
     importFiles(event.dataTransfer.files);
-  });
-  el.newScriptFolder.addEventListener('click', () => {
-    if (typeof API.showProjectPicker === 'function') API.showProjectPicker().catch(error => showToast(error.message));
-    else showToast('请返回制作 OS 切换剧本');
   });
   el.newSubfolder.addEventListener('click', () => openFolderDialog({ parent: state.selectedFolder }));
   el.folderForm.addEventListener('submit', event => {
@@ -966,6 +1464,10 @@ function bindEvents() {
     el.collapseFolders.textContent = collapsed ? '展开' : '收起';
     el.collapseFolders.setAttribute('aria-expanded', String(!collapsed));
   });
+  el.assetCollapse.addEventListener('click', () => {
+    if (state.audioKind) { selectFolder(state.selectedFolder); return; }
+    setGridCollapsed(!libraryPaneEl.classList.contains('grid-collapsed'));
+  });
   el.assetSort.addEventListener('change', () => {
     state.sort = el.assetSort.value;
     state.renderLimit = RENDER_BATCH;
@@ -987,6 +1489,7 @@ function bindEvents() {
     document.querySelectorAll('.asset-card').forEach(card => state.selectedPaths.add(card.dataset.path));
     updateSelectionBar();
   });
+  // 批量导入剪映 = 多选后直接拖动任一选中卡（多文件原生拖动），见 dragstart 逻辑
   el.batchDelete.addEventListener('click', () => batchDeleteSelected().catch(error => showToast(error.message)));
   el.batchMove.addEventListener('click', () => {
     const paths = [...state.selectedPaths];
@@ -1016,10 +1519,13 @@ function bindEvents() {
 }
 
 async function loadLibrary({ select } = {}) {
+  const requestId = ++libraryRequestId;
+  const projectId = activeProjectId();
   state.selectedPaths.clear();
   if (el.selectionBar) el.selectionBar.hidden = true;
-  const response = await fetch(`/api/creative-assets?project=${encodeURIComponent(activeProjectId())}`, { cache: 'no-store' });
+  const response = await fetch(`/api/creative-assets?project=${encodeURIComponent(projectId)}`, { cache: 'no-store' });
   const data = await response.json().catch(() => ({}));
+  if (requestId !== libraryRequestId || projectId !== activeProjectId()) return;
   if (!response.ok || !data.available || !data.tree) throw new Error(data.error || `目录接口返回 HTTP ${response.status}`);
   state.tree = data.tree;
   if (data.project) {
@@ -1033,15 +1539,53 @@ async function loadLibrary({ select } = {}) {
   el.librarySummary.textContent = `${state.config.project?.name || data.rootName || '创作资产库'} · ${stats.files || 0} 项 · ${stats.sizeText || '0 B'}`;
   renderFolders();
   renderAssets();
-  el.assetStatus.textContent = data.truncated
+  if (state.audioKind) await loadAudioLibrary();
+  el.assetStatus.textContent = state.audioKind ? '填写名称或拖入音频；支持 MP3、WAV、M4A'
+    : data.truncated
     ? '资产较多，当前只显示安全索引范围内的项目'
     : state.assets.length
       ? '选中分类即可导入；图片视频导入后自动按“分类-序号”重命名'
       : '把图片或视频直接拖进来，或点“导入资产”选择文件';
 }
 
-async function boot() {
-  bindEvents();
+// 创作浏览器快捷面板跳转：选中资产所在文件夹、展开列表、滚动定位并高亮，然后直接弹出预览。
+// 入口统一为 {path, projectId, expired?} 对象（兼容旧字符串）；projectId 为发起跳转时的剧本身份：
+// 与本面板当前项目不一致（切换竞态）时按预期作废处理，不弹「未找到」的误导提示；
+// 旧项目请求不得借相同路径在本面板误投；expired=true 为有界取消的过期送达：实际提示取消，不定位。
+async function focusExternalAsset(request) {
+  window.__focusExternalCalls = (window.__focusExternalCalls || 0) + 1;
+  const payload = typeof request === 'string' ? { path: request } : (request || {});
+  const target = String(payload.path || '').replace(/\\/g, '/');
+  if (!target) return;
+  const projectId = payload.projectId;
+  if (payload.expired) {
+    showToast('定位请求已过期，已自动取消');
+    return;
+  }
+  if (projectId && activeProjectId() !== projectId) {
+    console.warn('[focus] dropped: project mismatch', projectId, activeProjectId());
+    return;
+  }
+  const folder = target.includes('/') ? target.slice(0, target.lastIndexOf('/')) : '';
+  if (state.selectedFolder !== folder) selectFolder(folder);
+  state.renderLimit = Math.max(state.renderLimit, state.assets.length + RENDER_BATCH);
+  renderAssets();
+  if (libraryPaneEl.classList.contains('grid-collapsed')) setGridCollapsed(false);
+  const item = state.assets.find(entry => entry.path === target);
+  if (!item) {
+    showToast(`未在当前剧本资产库中找到「${target.split('/').pop() || target}」`);
+    return;
+  }
+  const card = document.querySelector(`.asset-card[data-path="${CSS.escape(target)}"]`);
+  if (card) {
+    card.scrollIntoView({ block: 'center', inline: 'nearest' });
+    card.classList.remove('focus-flash');
+    requestAnimationFrame(() => card.classList.add('focus-flash'));
+  }
+  openPreview(item);
+}
+
+async function boot() {  bindEvents();
   try {
     state.config = await API.getConfig();
     applyPanelState(state.config.panel);
@@ -1050,11 +1594,30 @@ async function boot() {
       : NATIVE_API ? '可直接拖到右侧平台' : '浏览器预览：拖放与 Finder 能力受限';
     await loadLibrary();
     const events = new EventSource('/api/events');
-    events.addEventListener('creative-assets', () => {
-      clearTimeout(reloadTimer);
-      reloadTimer = setTimeout(() => loadLibrary({ select: state.selectedFolder }).catch(() => {}), 180);
+    events.addEventListener('audio-library', () => {
+      if (state.audioKind && !state.audioBusy && !document.querySelector('.audio-entry input:focus')) {
+        loadAudioLibrary().catch(error => showToast(error.message));
+      }
     });
+    events.addEventListener('creative-assets', () => {
+      scheduleLibraryReload();
+    });
+    // 剧本被其他入口（创作浏览器/主窗口）切换时，面板原地跟随新剧本。
+    events.addEventListener('creative-projects', event => {
+      try { adoptProject(JSON.parse(event.data).project); } catch {}
+      scheduleLibraryReload(true);
+    });
+    // 创作浏览器快捷面板“在完整库中查看”：定位到指定资产（选中文件夹 + 高亮 + 直接预览）。
     document.body.dataset.ready = 'true';
+    if (typeof NATIVE_API?.onFocusAsset === 'function') {
+      NATIVE_API.onFocusAsset(payload => { focusExternalAsset(payload).catch(error => console.warn('[focus] push failed:', error)); });
+    }
+    try {
+      const pendingFocus = await NATIVE_API?.consumePendingFocus?.();
+      if (pendingFocus?.path) await focusExternalAsset(pendingFocus);
+    } catch (error) {
+      console.warn('pending focus consume failed:', error);
+    }
   } catch (error) {
     document.body.dataset.ready = 'error';
     el.assetGrid.replaceChildren();

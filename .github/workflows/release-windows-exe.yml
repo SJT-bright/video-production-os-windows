@@ -12,7 +12,9 @@ on:
 
 jobs:
   build-windows-exe:
+    if: github.repository == 'SJT-bright/video-production-os-windows'
     runs-on: windows-latest
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
@@ -28,26 +30,36 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Windows package
-        run: npm run build:desktop
-
-      - name: Verify exe output
+      - name: Check source and retention
         run: |
-          if (-not (Test-Path "dist/视频制作OS-win32-x64/视频制作OS.exe")) {
-            throw "未找到 dist/视频制作OS-win32-x64/视频制作OS.exe，请检查构建日志。"
-          }
+          npm run check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:browser-session
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build Windows package
+        run: npm run build:windows:release
+
+      - name: Verify packaged resources and launch EXE
+        run: node test_windows_release.cjs
+
+      - name: Archive complete application
+        run: |
+          Compress-Archive -Path "dist/视频制作OS-win32-x64" -DestinationPath "dist/VideoProductionOS-Windows-x64.zip" -CompressionLevel Optimal
+          $digest = (Get-FileHash "dist/VideoProductionOS-Windows-x64.zip" -Algorithm SHA256).Hash.ToLower()
+          "$digest  VideoProductionOS-Windows-x64.zip" | Set-Content -Path "dist/SHA256SUMS.txt" -Encoding ascii
 
       - name: Publish to GitHub Release
         if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
           name: Windows EXE ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
-          body: |
-            视频制作 OS Windows 发行版（可直接下载 exe）
-            - 下载 `视频制作OS.exe` 后双击打开（Windows）
-            - 该包由 `npm run build:desktop` 自动生成，兼容 64 位 Windows
+          body_path: RELEASE-NOTES.md
           generate_release_notes: false
           prerelease: false
+          fail_on_unmatched_files: true
           files: |
-            dist/视频制作OS-win32-x64/视频制作OS.exe
+            dist/VideoProductionOS-Windows-x64.zip
+            dist/SHA256SUMS.txt

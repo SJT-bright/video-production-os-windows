@@ -19,7 +19,7 @@ const MEDIA_SOURCE_EXTENSIONS = Object.freeze({
   audio: Object.freeze(['.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus', '.wma', '.aiff', '.aif', '.amr', '.ape']),
 });
 const PROJECT_MEDIA_TYPES = Object.freeze(['video', 'audio']);
-const EXTERNAL_MEDIA_TYPES = Object.freeze(['image', 'video']);
+const EXTERNAL_MEDIA_TYPES = Object.freeze(['image', 'video', 'audio']);
 const UNSAFE_LABEL_CHARACTERS = /[\\/\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/u;
 const SKIPPED_DIRECTORY_NAMES = new Set(['node_modules']);
 
@@ -676,6 +676,12 @@ function createMediaSourceStore(options = {}) {
 
   return Object.freeze({
     list,
+    // 仅供本地主进程使用；公开来源列表继续不暴露绝对路径。
+    directory(sourceId) {
+      loadOnce();
+      const source = findSource(sourceId);
+      return source ? sourceHealth(source).realRoot || '' : '';
+    },
     addDirectory,
     remove,
     resolveFile,

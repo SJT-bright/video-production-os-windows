@@ -8,6 +8,8 @@
   <title>创作资产库｜视频制作 OS</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="creator-assets.css">
+  <link rel="stylesheet" href="assets/ui/editor-exports.css">
+  <link rel="stylesheet" href="assets/ui/asset-sources.css">
   <link rel="stylesheet" href="assets/ui/creator/ui-icons.css">
 </head>
 <body data-ready="loading" data-layout="overlay">
@@ -36,8 +38,10 @@
     <section class="command-bar" aria-label="资产库操作">
       <div class="command-primary">
         <button class="primary-button" id="importAssets" type="button"><span aria-hidden="true">＋</span>导入资产</button>
+        <button class="quiet-button" id="editorExports" type="button">剪映导出</button>
+        <button class="quiet-button" id="assetSources" type="button">外部来源</button>
         <button class="quiet-button" id="normalizeNames" type="button" title="把当前分类里的平台乱名文件（UUID 命名）按 生成图片-001 顺序重命名">整理文件名</button>
-        <button class="quiet-button" id="newScriptFolder" type="button">切换剧本</button>
+        <button class="quiet-button" id="switchScript" type="button">切换剧本</button>
         <button class="quiet-button" id="newSubfolder" type="button">子文件夹</button>
       </div>
       <div class="command-secondary">
@@ -74,12 +78,19 @@
           </div>
           <button class="text-button" id="collapseFolders" type="button" aria-expanded="true">收起</button>
         </div>
+        <nav class="audio-shortcuts" aria-label="音乐与音效">
+          <button type="button" data-audio-kind="bgm" aria-pressed="false" aria-expanded="false" aria-controls="audioLibrary" title="展开 BGM"><span class="audio-chevron" aria-hidden="true"></span>♫ BGM</button>
+          <button type="button" data-audio-kind="sfx" aria-pressed="false" aria-expanded="false" aria-controls="audioLibrary" title="展开音效"><span class="audio-chevron" aria-hidden="true"></span>♪ 音效</button>
+        </nav>
         <div class="folder-tree" id="folderTree" role="list" aria-label="剧本资产文件夹"></div>
         <p class="source-hint">人物、场景、音频、生成结果与首尾帧只属于当前剧本。</p>
       </aside>
 
       <section class="library-pane" aria-labelledby="assetHeading">
         <div class="pane-heading library-heading">
+          <button id="assetCollapse" class="grid-collapse-toggle" type="button" aria-expanded="true" aria-controls="assetGrid" aria-label="折叠或展开资产列表" title="收起资产列表">
+            <span class="collapse-chevron" aria-hidden="true"></span>
+          </button>
           <div>
             <span class="pane-kicker" id="currentPath">创作资产库</span>
             <strong id="assetHeading">常用资产</strong>
@@ -93,6 +104,15 @@
             </select>
           </div>
         </div>
+        <section class="audio-library" id="audioLibrary" aria-label="音乐与音效库" hidden>
+          <form id="audioNameForm" class="audio-name-form">
+            <input id="audioNameInput" maxlength="120" required placeholder="填写名称，稍后添加音频" aria-label="音乐或音效名称" autocomplete="off">
+            <button class="quiet-button" type="submit">＋ 新建</button>
+          </form>
+          <button class="audio-dropzone" id="audioDropzone" type="button">拖入 MP3，或点击上传</button>
+          <input id="audioFileInput" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg,.aiff,.aif,.opus" multiple hidden>
+          <div class="audio-entries" id="audioEntries" aria-live="polite"></div>
+        </section>
         <div class="asset-grid" id="assetGrid">
           <div class="asset-state">正在读取图片、音频和视频…</div>
         </div>
@@ -202,8 +222,26 @@
     </form>
   </dialog>
 
+  <dialog class="folder-dialog" id="scriptSwitchDialog" aria-labelledby="scriptSwitchTitle">
+    <div class="script-switch-form">
+      <header>
+        <div>
+          <strong id="scriptSwitchTitle">切换剧本</strong>
+          <span>切换后，本面板与创作浏览器都会跟随新剧本</span>
+        </div>
+        <button class="icon-button" id="scriptSwitchClose" type="button" aria-label="关闭">×</button>
+      </header>
+      <div class="script-switch-list" id="scriptSwitchList" role="list" aria-label="剧本列表"></div>
+      <div class="script-switch-foot">
+        <button class="quiet-button" id="scriptSwitchCancel" type="button">取消</button>
+      </div>
+    </div>
+  </dialog>
+
   <div class="asset-toast" id="assetToast" role="status" aria-live="polite"></div>
   <script src="assets/ui/creator/ui-icons.js"></script>
+  <script src="assets/ui/editor-exports.js"></script>
+  <script src="assets/ui/asset-sources.js"></script>
 <script src="creator-assets.js"></script>
 </body>
 </html>

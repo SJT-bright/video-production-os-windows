@@ -28,12 +28,13 @@ const state = {
   services: { image: 'gpt', video: 'updream' },
   history: { image: [], video: [] },
   promptTemplates: { image: [], video: [] },
-  queue: { image: [], video: [] },
-  accordions: { prompt: false, queue: false, assets: true },
+  accordions: { prompt: false, assets: true },
   quickFolders: [],
   quickAssetFolder: '',
   collapsedQuickFolders: new Set(),
   quickCollapseInit: false,
+  quickSelectMode: false,
+  quickSelectionOrder: [],
   skipClearConfirm: false,
   activeService: null,
   assetItems: [],
@@ -47,7 +48,7 @@ const state = {
 };
 
 const el = Object.fromEntries([
-  'platformTabs', 'addPlatform', 'platformPopover', 'platformForm', 'platformName', 'platformUrl', 'cancelPlatform',
+  'platformTabs', 'addPlatform', 'clearBrowserTabs', 'platformPopover', 'platformForm', 'platformName', 'platformUrl', 'cancelPlatform',
   'platformOpenList', 'duplicateTab', 'duplicateTabLabel',
   'renameDialog', 'renameForm', 'renameTitle', 'renameName', 'renameError', 'renameCancel', 'renameSave',
   'hiddenPlatforms', 'hiddenPlatformList', 'restoreAllPlatforms',
@@ -56,7 +57,8 @@ const el = Object.fromEntries([
   'promptTemplateList',
   'templateCreate', 'templateCreateForm', 'templateCreateName', 'templateCreateBody', 'cancelTemplateCreate',
   'quickFolderTree', 'quickDropTarget', 'quickFileInput',
-  'importLocalAssets', 'openAssetLibrary', 'assetDropZone',
+  'importLocalAssets', 'openAssetLibrary', 'toggleDragTray', 'assetDropZone',
+  'quickTools', 'quickMultiSelect', 'quickSelInfo', 'quickSelClear',
   'downloadSummary', 'downloadList', 'openModeFolder', 'browserStage', 'addressService',
   'browserPlaceholderTitle', 'reconnectBrowser',
   'addressForm', 'addressInput', 'addressGo', 'loadDot', 'openExternal', 'togglePrompt', 'showMainWindow', 'creatorToast',
@@ -65,11 +67,9 @@ const el = Object.fromEntries([
   'browserRecoveryExternal', 'browserRecoveryImport', 'toggleAssets',
   'downloadBadge',
   'currentProject',
-  'currentShotContext', 'currentShotCode', 'currentShotTitle', 'currentShotMeta', 'currentShotTask', 'changeCurrentShot',
-  'shotActions', 'switchShot', 'nextShot',
-  'queueAccordion', 'queueCount', 'queueImportBreakdown', 'queueList', 'queueClearSent',
-  'breakdownDialog', 'breakdownClose', 'breakdownFiles', 'breakdownShots', 'breakdownImport',
-  'shotDialog', 'shotDialogClose', 'shotDialogList',
+  'promptEditor', 'characterCount', 'copyPrompt',
+  'clearPrompt', 'clearPromptDialog', 'clearPromptConfirm', 'clearPromptCancel', 'clearPromptNever',
+  'quickPreviewDialog', 'quickPreviewName', 'quickPreviewMeta', 'quickPreviewStage', 'quickPreviewClose', 'quickPreviewDone', 'quickPreviewInLibrary',
 ].map(id => [id, document.getElementById(id)]));
 
 let toastTimer = null;
@@ -117,11 +117,6 @@ function loadWorkspace() {
           .filter(item => item && typeof item.body === 'string' && item.at)
           .slice(0, 20);
       }
-      if (Array.isArray(project.queue?.[mode])) {
-        state.queue[mode] = project.queue[mode]
-          .filter(item => item && typeof item.body === 'string')
-          .slice(0, 200);
-      }
       // 固定提示词跨剧本通用：优先读全局；旧数据存在各剧本下时自动提升为全局。
       if (Array.isArray(global.templates?.[mode])) {
         state.promptTemplates[mode] = global.templates[mode]
@@ -163,14 +158,22 @@ function loadWorkspace() {
 function resetProjectWorkspace() {
   state.prompts = { image: '', video: '' };
   state.history = { image: [], video: [] };
-  state.queue = { image: [], video: [] };
   // 固定提示词是全局资产，切换剧本时不清空。
   state.assetItems = [];
   state.accordions.prompt = false;
+  // 框选导入序列属于旧剧本：整体清空，防止把旧项目资产拖进新项目上下文。
+  state.quickSelectionOrder.length = 0;
 }
 
 function saveWorkspace(immediate = false) {
   clearTimeout(saveTimer);
+  // 防抖提交可能在切换剧本之后才落地：调度时快照项目数据，提交时按快照写回原剧本，
+  // 避免输入后立即切剧本把 A 的草稿/历史写进 B 的存储。
+  const snapshot = {
+    projectId: state.projectId,
+    prompts: { ...state.prompts },
+    history: { image: [...state.history.image], video: [...state.history.video] },
+  };
   const commit = () => {
     localStorage.setItem(GLOBAL_STORAGE_KEY, JSON.stringify({
       version: 2,
@@ -180,12 +183,16 @@ function saveWorkspace(immediate = false) {
       templates: state.promptTemplates,
       skipClearConfirm: state.skipClearConfirm,
     }));
-    localStorage.setItem(`${PROJECT_STORAGE_PREFIX}${state.projectId}`, JSON.stringify({
+    const projectKey = `${PROJECT_STORAGE_PREFIX}${snapshot.projectId}`;
+    // 保留旧版本的存储字段；已停用功能不再读取或更新，避免清掉用户历史内容。
+    let previous = {};
+    try { previous = JSON.parse(localStorage.getItem(projectKey) || '{}'); } catch {}
+    localStorage.setItem(projectKey, JSON.stringify({
+      ...previous,
       version: 2,
-      projectId: state.projectId,
-      prompts: state.prompts,
-      history: state.history,
-      queue: state.queue,
+      projectId: snapshot.projectId,
+      prompts: snapshot.prompts,
+      history: snapshot.history,
     }));
     el.draftStatus.textContent = '已在本机自动保存';
   };
@@ -266,6 +273,52 @@ function effectiveServiceForMode(mode) {
   return state.config?.modeServices?.[mode]?.[0] || null;
 }
 
+/* 编辑器草稿按剧本存于 state.prompts；输入即存，切模式/切剧本时由 renderMode 回填。 */
+function updateCharacterCount() {
+  el.characterCount.textContent = `${el.promptEditor.value.length} 字`;
+}
+
+function syncPromptEditor() {
+  el.promptEditor.value = state.prompts[state.mode];
+  updateCharacterCount();
+}
+
+/* 清空撤销：快照绑定清空发生时的剧本与模式，跨剧本/跨模式或已有新输入时拒绝恢复，
+   避免 A 剧本草稿被覆盖到 B；撤销窗口与 toast 的 5.2 秒存活期一致。 */
+let pendingClearUndo = null;
+let clearUndoTimer = null;
+
+function undoClearPrompt() {
+  const snapshot = pendingClearUndo;
+  pendingClearUndo = null;
+  clearTimeout(clearUndoTimer);
+  if (!snapshot) return;
+  if (snapshot.projectId !== state.projectId || snapshot.mode !== state.mode) {
+    showToast('已切换剧本或模式，原内容无法在此恢复');
+    return;
+  }
+  if (el.promptEditor.value.length > 0) {
+    showToast('编辑器已有新内容，未执行恢复');
+    return;
+  }
+  state.prompts[state.mode] = snapshot.body;
+  el.promptEditor.value = snapshot.body;
+  updateCharacterCount();
+  saveWorkspace(true);
+}
+
+function clearPromptEditor() {
+  pendingClearUndo = { projectId: state.projectId, mode: state.mode, body: state.prompts[state.mode] };
+  clearTimeout(clearUndoTimer);
+  clearUndoTimer = setTimeout(() => { pendingClearUndo = null; }, 6000);
+  pushHistorySnapshotNow();
+  state.prompts[state.mode] = '';
+  el.promptEditor.value = '';
+  updateCharacterCount();
+  saveWorkspace(true);
+  showToast('已清空', { actionLabel: '撤销', onAction: undoClearPrompt });
+}
+
 function renderMode() {
   document.body.dataset.mode = state.mode;
   document.title = `${state.mode === 'image' ? '图片' : '视频'}创作浏览器｜视频制作 OS`;
@@ -274,8 +327,7 @@ function renderMode() {
   });
   renderPlatforms();
   renderPromptTemplates();
-  renderQueue();
-  renderCurrentShotContext();
+  syncPromptEditor();
   renderQuickFolderTree();
   renderDownloads();
   syncAccordionState();
@@ -351,6 +403,7 @@ async function applyProjectChange(project) {
   state.activeService = effectiveServiceForMode(state.mode);
   renderProject();
   renderMode();
+  if (state.browser) applyBrowserState(state.browser);
   await loadAssetItems();
   showToast(`已切换到「${project.name}」`);
 }
@@ -429,6 +482,7 @@ function renderPlatforms() {
   const duplicateService = serviceById(state.activeService);
   el.duplicateTabLabel.textContent = duplicateService ? serviceLabel(duplicateService) : '当前网站';
   el.duplicateTab.disabled = !duplicateService;
+  el.clearBrowserTabs.disabled = !state.browser?.tabs?.length || state.modeSwitchPending;
   renderPlatformOpenList();
   renderHiddenPlatforms();
   renderPlatformCompatibility();
@@ -506,7 +560,6 @@ async function saveRenamedItem(event) {
     } else {
       applyBrowserState(await API.renameTab(target.id, name));
     }
-    renderQueue();
     el.renameDialog.close();
     showToast('名称已保存');
     queueBoundsUpdate();
@@ -633,7 +686,6 @@ async function restoreAllPlatforms() {
 
 function syncAccordionState() {
   el.promptAccordion.open = !!state.accordions.prompt;
-  el.queueAccordion.open = !!state.accordions.queue;
   el.assetAccordion.open = !!state.accordions.assets;
 }
 
@@ -713,9 +765,9 @@ function renderPromptTemplates() {
       text.className = 'saved-template-text'; text.spellcheck = false;
       text.setAttribute('aria-label', '固定提示词正文'); text.value = draft.body;
       const actions = document.createElement('div'); actions.className = 'saved-template-actions';
-      const button = (label, handler, primary = false) => {
+      const button = (label, handler, primary = false, extraClass = '') => {
         const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
-        b.className = (primary ? 'primary-action' : 'secondary-action') + ' saved-template-load';
+        b.className = (primary ? 'primary-action' : 'secondary-action') + ' saved-template-load' + (extraClass ? ' ' + extraClass : '');
         b.addEventListener('click', handler); actions.append(b); return b;
       };
       const save = button('保存修改', () => {
@@ -743,11 +795,7 @@ function renderPromptTemplates() {
           activeTemplateIds[mode] = item.id; rememberTemplatePrompt(text.value, mode);
           showToast('提示词已复制');
         } catch { showToast('复制失败，请手动选择文本'); }
-      });
-      button('加入队列', () => {
-        if (!addQueueItem(text.value)) { showToast('提示词为空，或相同内容已在队列里'); return; }
-        rememberTemplatePrompt(text.value, mode); renderQueue(); showToast('已加入提示词队列');
-      });
+      }, false, 'saved-template-copy');
       body.append(title, text, actions); row.append(body);
     }
     el.promptTemplateList.append(row);
@@ -937,6 +985,13 @@ function buildQuickFileCard(item) {
   wrapper.addEventListener('dragstart', event => {
     dragged = true;
     wrapper.classList.add('asset-dragging');
+    // 框选模式下拖动任一选中卡 = 按选入顺序整批拖出（原生多文件拖动进剪映）
+    if (state.quickSelectMode && state.quickSelectionOrder.length && typeof API.startAssetDragSelection === 'function') {
+      event.preventDefault();
+      event.stopPropagation();
+      API.startAssetDragSelection([...state.quickSelectionOrder]);
+      return;
+    }
     if (state.config?.nativeQuickAssetDrag && typeof API.startAssetDrag === 'function') {
       event.preventDefault();
       event.stopPropagation();
@@ -951,7 +1006,7 @@ function buildQuickFileCard(item) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = `asset-image-card ${item.type}`;
-  button.title = `${item.name}\n拖到网页上传，点击预览`;
+  button.title = `${item.name}\n点击放大或预览，可再跳转完整库`;
   let preview;
   if (item.type === 'image') {
     preview = document.createElement('img');
@@ -959,6 +1014,28 @@ function buildQuickFileCard(item) {
     preview.alt = item.name;
     preview.loading = 'lazy';
     preview.draggable = false;
+  } else if (item.type === 'video') {
+    // 视频封面：#t=0.1 seek 到开头附近的帧作封面（约等于首帧）；preload=metadata 为加载提示，
+    // seek 时浏览器会按需下载开头一段数据（非严格只取文件头）。懒加载：进入预加载区才挂 src。
+    const cover = document.createElement('video');
+    cover.className = 'asset-video-cover';
+    cover.preload = 'metadata';
+    registerQuickCoverLazy(cover, `${assetImageUrl(item.path)}#t=0.1`);
+    cover.muted = true;
+    cover.defaultMuted = true;
+    cover.playsInline = true;
+    cover.tabIndex = -1;
+    cover.setAttribute('aria-hidden', 'true');
+    cover.draggable = false;
+    cover.addEventListener('error', () => cover.classList.add('cover-failed'), { once: true });
+    const coverWrap = document.createElement('span');
+    coverWrap.className = 'asset-video-preview video-cover-wrap';
+    coverWrap.appendChild(cover);
+    const badge = document.createElement('span');
+    badge.className = 'play-badge';
+    badge.setAttribute('aria-hidden', 'true');
+    coverWrap.appendChild(badge);
+    preview = coverWrap;
   } else {
     preview = document.createElement('span');
     preview.className = 'asset-video-preview';
@@ -977,9 +1054,28 @@ function buildQuickFileCard(item) {
   button.append(preview, label);
   button.addEventListener('click', event => {
     if (dragged) { event.preventDefault(); return; }
-    openFullAssetLibrary();
+    // 框选模式下单击卡片 = 按点击顺序选入/移出导入序列；单击仍预览与选入互斥
+    if (state.quickSelectMode) {
+      toggleQuickSelection(item.path);
+      return;
+    }
+    if (item.type === 'image' || item.type === 'video' || item.type === 'audio') openQuickPreview(item);
+    else openFullAssetLibrary();
   });
   wrapper.appendChild(button);
+  if (['image', 'video', 'audio'].includes(item.type) && typeof API.automation === 'function') {
+    const sendButton = document.createElement('button');
+    sendButton.type = 'button';
+    sendButton.className = 'asset-send-button';
+    sendButton.textContent = '传网页';
+    sendButton.title = '直接传入当前网页的上传框';
+    sendButton.setAttribute('aria-label', `将 ${item.name} 传入网页`);
+    sendButton.addEventListener('click', event => {
+      event.stopPropagation();
+      window.creatorAutomationUI?.sendAsset(item.path);
+    });
+    wrapper.appendChild(sendButton);
+  }
   if (item.type === 'image' && typeof API.copyAsset === 'function') {
   const copyButton = document.createElement('button');
       copyButton.type = 'button';
@@ -1016,6 +1112,12 @@ function buildQuickFileCard(item) {
       deleteButton.disabled = true;
       try {
         await API.deleteAsset(item.path);
+        // 已删资产不再留在框选导入序列，避免整批拖出时因缺失文件失败
+        const selIdx = state.quickSelectionOrder.indexOf(item.path);
+        if (selIdx !== -1) {
+          state.quickSelectionOrder.splice(selIdx, 1);
+          updateQuickSelectionUI();
+        }
         showToast(`已移到废纸篓：${item.name}`);
         await loadAssetItems();
       } catch (error) {
@@ -1149,23 +1251,128 @@ function appendQuickFolderRows(parent, folders, parentPath, done) {
   }
 }
 
+/* ---------- 快捷面板框选导入（剪映联动） ---------- */
+// 框选模式：点卡片按点击顺序选入；在树容器空白处按住拖动画框，相交卡片全部选入（按位置排序）。
+// 拖动任一选中卡 = 整批按选入顺序原生拖出（剪映等多文件拖放目标直接接收）。
+function toggleQuickSelection(assetPath) {
+  const idx = state.quickSelectionOrder.indexOf(assetPath);
+  if (idx === -1) state.quickSelectionOrder.push(assetPath);
+  else state.quickSelectionOrder.splice(idx, 1);
+  updateQuickSelectionUI();
+}
+
+function updateQuickSelectionUI() {
+  const count = state.quickSelectionOrder.length;
+  el.quickSelInfo.textContent = count ? `已选 ${count} 项 · 拖动任一选中卡整批拖入剪映` : '点卡片选入，或按住拖动画框';
+  el.quickSelClear.hidden = count === 0;
+  el.quickFolderTree.querySelectorAll('[data-asset-path]').forEach(node => {
+    const path = node.dataset.assetPath;
+    const order = state.quickSelectionOrder.indexOf(path);
+    node.classList.toggle('sel-on', order !== -1);
+    node.dataset.selOrder = order === -1 ? '' : String(order + 1);
+  });
+}
+
+function setQuickSelectMode(on) {
+  state.quickSelectMode = !!on;
+  el.quickMultiSelect.setAttribute('aria-pressed', String(state.quickSelectMode));
+  el.quickMultiSelect.textContent = `框选模式：${state.quickSelectMode ? '开' : '关'}`;
+  el.quickTools.hidden = false;
+  if (!state.quickSelectMode) {
+    state.quickSelectionOrder.length = 0;
+  }
+  updateQuickSelectionUI();
+  el.quickFolderTree.classList.toggle('select-mode', state.quickSelectMode);
+}
+
+function setupQuickMarquee() {
+  const container = el.quickFolderTree;
+  if (!container || container.dataset.marqueeWired === '1') return;
+  container.dataset.marqueeWired = '1';
+  let marquee = null;
+  let origin = null;
+  const cardRects = () => [...container.querySelectorAll('[data-asset-path]')]
+    .map(node => ({ node, rect: node.getBoundingClientRect() }));
+  container.addEventListener('contextmenu', event => {
+    // 右键拖动画框：与卡片拖拽/单击互不冲突
+    if (!state.quickSelectMode || event.button !== 2) return;
+    if (event.target.closest('button, input, textarea, select')) return;
+    event.preventDefault();
+    origin = { x: event.clientX, y: event.clientY };
+    marquee = document.createElement('div');
+    marquee.className = 'quick-marquee';
+    marquee.style.left = `${origin.x}px`;
+    marquee.style.top = `${origin.y}px`;
+    document.body.appendChild(marquee);
+    const onMove = moveEvent => {
+      if (!origin) return;
+      const x = Math.min(origin.x, moveEvent.clientX);
+      const y = Math.min(origin.y, moveEvent.clientY);
+      const w = Math.abs(moveEvent.clientX - origin.x);
+      const h = Math.abs(moveEvent.clientY - origin.y);
+      marquee.style.left = `${x}px`;
+      marquee.style.top = `${y}px`;
+      marquee.style.width = `${w}px`;
+      marquee.style.height = `${h}px`;
+      const box = { left: x, top: y, right: x + w, bottom: y + h };
+      // 按树内文档顺序（自上而下）选入，与视觉顺序一致；不做字典序重排
+      const hits = [];
+      cardRects().forEach(({ node, rect }) => {
+        const hit = rect.left < box.right && rect.right > box.left && rect.top < box.bottom && rect.bottom > box.top;
+        if (hit) hits.push(node.dataset.assetPath);
+      });
+      state.quickSelectionOrder.length = 0;
+      hits.forEach(path => state.quickSelectionOrder.push(path));
+      updateQuickSelectionUI();
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      if (marquee) { marquee.remove(); marquee = null; }
+      origin = null;
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
 function renderQuickFolderTree() {
   updateQuickCounts();
   updateQuickDropLabel();
+  resetQuickCoverObserver();  // 树与卡片整体重建：先解除旧封面节点的观察登记
   el.quickFolderTree.replaceChildren();
   appendQuickFolderRows(el.quickFolderTree, state.quickFolders || [], '', new Set());
+  setupQuickMarquee();
+  updateQuickSelectionUI();
+  if (el.quickTools) el.quickTools.hidden = false;  // 有资产分类即提供框选导入入口
 }
 
 
 
+// 请求代号守卫：快速切换剧本时后完成的旧响应不得写进新剧本视图（也不得误报失效选项提示）
+let assetItemsRequestId = 0;
+
 async function loadAssetItems() {
+  const requestId = ++assetItemsRequestId;
+  const requestProjectId = state.projectId;
   try {
     const response = await fetch(`/api/creative-assets?project=${encodeURIComponent(state.projectId)}`, { cache: 'no-store' });
     const data = await response.json().catch(() => ({}));
+    if (requestId !== assetItemsRequestId || state.projectId !== requestProjectId) return;
     if (!response.ok || !data.tree) throw new Error(data.error || `HTTP ${response.status}`);
     state.assetItems = collectAssetItems(data.tree);
+    // 框选导入序列按现存资产过滤：已删除/已不存在的选项自动剔除并明确提示，避免整批拖出失败。
+    const existingPaths = new Set(state.assetItems.map(item => item.path));
+    const before = state.quickSelectionOrder.length;
+    if (before) {
+      state.quickSelectionOrder = state.quickSelectionOrder.filter(path => existingPaths.has(path));
+      const removed = before - state.quickSelectionOrder.length;
+      if (removed > 0) showToast(`已自动移除 ${removed} 个失效选项`);
+    }
     renderQuickFolderTree();
   } catch (error) {
+    // 请求代号或项目身份已变化：这是被取代的旧请求，其失败不得覆盖新项目的成功渲染
+    if (requestId !== assetItemsRequestId || state.projectId !== requestProjectId) return;
     state.assetItems = [];
     renderQuickFolderTree();
     el.assetAccordionCount.textContent = '读取失败';
@@ -1176,11 +1383,10 @@ async function loadAssetItems() {
 async function loadProduction(force = false) {
   if (!force && state.production && state.production.available) return state.production;
   const response = await fetch('/api/production');
-  if (!response.ok) throw new Error(`制作台账读取失败（HTTP ${response.status}）`);
+  if (!response.ok) throw new Error(`入库记录读取失败（HTTP ${response.status}）`);
   const data = await response.json();
-  if (!data || typeof data.available !== 'boolean' || !Array.isArray(data.inbox)) throw new Error('制作台账数据格式无效');
+  if (!data || typeof data.available !== 'boolean' || !Array.isArray(data.inbox)) throw new Error('入库记录格式无效');
   state.production = data;
-  shotsCache = null;
   return data;
 }
 
@@ -1201,231 +1407,6 @@ async function loadMoreInbox() {
   }
 }
 
-function currentShot() {
-  const context = state.production?.context;
-  return context && context.active_shot_id ? context : null;
-}
-
-function renderCurrentShotContext() {
-  const context = currentShot();
-  const isEmpty = !context;
-  el.currentShotContext.classList.toggle('is-empty', isEmpty);
-  el.shotActions.hidden = !state.production?.available;
-  if (isEmpty) {
-    el.currentShotCode.textContent = '未选择镜头';
-    el.currentShotTitle.textContent = '';
-    el.currentShotMeta.textContent = '';
-    el.currentShotTask.textContent = '';
-    return;
-  }
-  el.currentShotCode.textContent = context.shot_no || '当前镜头';
-  el.currentShotTitle.textContent = context.shot_title || '未命名镜头';
-  const status = { planned: '待提示词', generating: '生成中', review: '待验收', approved: '已通过', blocked: '需返工' }[context.shot_status] || context.shot_status || '待设置';
-  const duration = context.duration_sec ? ` · ${context.duration_sec} 秒` : '';
-  const tail = context.tail_frame_status === 'confirmed' ? ' · 已确认真实尾帧'
-    : context.tail_frame_status === 'pending' ? ' · 尾帧待确认' : '';
-  el.currentShotMeta.textContent = `${status}${duration}${tail}`;
-  el.currentShotTask.textContent = context.shot_task || '尚未填写唯一剧情任务；请先在项目库补齐，避免提示词目标漂移。';
-}
-
-/* ---------- 提示词队列：批量分发到多开网页 ---------- */
-
-let dragQueueId = null;
-
-function queueItems() {
-  return state.queue[state.mode];
-}
-
-function renderQueue() {
-  const items = queueItems();
-  const pending = items.filter(item => !item.done).length;
-  const sent = items.length - pending;
-  el.queueCount.textContent = items.length ? `${pending} 条待发 · 共 ${items.length} 条` : '还没有待发提示词';
-  el.queueClearSent.hidden = sent === 0;
-  el.queueList.replaceChildren();
-  if (!items.length) {
-    const empty = document.createElement('div');
-    empty.className = 'queue-empty';
-    empty.textContent = '把当前提示词入队，或从剧本拆解一键导入 ready 镜头。';
-    el.queueList.appendChild(empty);
-    return;
-  }
-  const tabs = tabsWithIndexes(visibleTabs());
-  items.forEach((item, index) => {
-    const row = document.createElement('div');
-    row.className = `queue-item${item.done ? ' done' : ''}`;
-    row.dataset.queueId = item.id;
-    row.draggable = true;
-    row.title = '拖动可调整发送顺序';
-    row.addEventListener('dragstart', event => {
-      dragQueueId = item.id;
-      row.classList.add('dragging');
-      if (event.dataTransfer) {
-        event.dataTransfer.setData('text/plain', item.id);
-        event.dataTransfer.effectAllowed = 'move';
-      }
-    });
-    row.addEventListener('dragend', () => {
-      dragQueueId = null;
-      row.classList.remove('dragging');
-      el.queueList.querySelectorAll('.queue-item.drag-over').forEach(node => node.classList.remove('drag-over'));
-    });
-    row.addEventListener('dragover', event => {
-      if (!dragQueueId || dragQueueId === item.id) return;
-      event.preventDefault();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-      row.classList.add('drag-over');
-    });
-    row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
-    row.addEventListener('drop', event => {
-      event.preventDefault();
-      row.classList.remove('drag-over');
-      if (!dragQueueId || dragQueueId === item.id) return;
-      const queue = queueItems();
-      const from = queue.findIndex(candidate => candidate.id === dragQueueId);
-      const to = queue.findIndex(candidate => candidate.id === item.id);
-      if (from < 0 || to < 0) return;
-      const [moved] = queue.splice(from, 1);
-      queue.splice(to, 0, moved);
-      dragQueueId = null;
-      saveWorkspace(true);
-      renderQueue();
-    });
-
-    const text = document.createElement('span');
-    text.className = 'queue-text';
-    text.title = item.body;
-    text.textContent = item.body.replace(/\s+/g, ' ');
-    row.appendChild(text);
-
-    const tools = document.createElement('span');
-    tools.className = 'queue-item-tools';
-    if (item.done) {
-      const badge = document.createElement('span');
-      badge.className = 'queue-item-done-badge';
-      badge.textContent = '已发送';
-      tools.appendChild(badge);
-      const undo = document.createElement('button');
-      undo.type = 'button';
-      undo.className = 'queue-undo';
-      undo.dataset.queueUndo = item.id;
-      undo.textContent = '↩';
-      undo.title = '标记为未发送';
-      undo.addEventListener('click', () => {
-        item.done = false;
-        saveWorkspace(true);
-        renderQueue();
-      });
-      tools.appendChild(undo);
-    } else {
-      tabs.forEach((tab, tabIndex) => {
-        const chip = document.createElement('button');
-        chip.type = 'button';
-        chip.className = 'queue-tab-chip';
-        chip.dataset.queueSend = item.id;
-        chip.dataset.tabId = tab.id;
-        chip.textContent = String(tabIndex + 1);
-        chip.title = `复制这条提示词并切到「${tab.customName || (tab.index > 1 ? `${serviceLabel(serviceById(tab.serviceId))}·${tab.index}` : serviceLabel(serviceById(tab.serviceId)))}」`;
-        chip.addEventListener('click', () => sendQueueItem(item, tab.id));
-        tools.appendChild(chip);
-      });
-      const done = document.createElement('button');
-      done.type = 'button';
-      done.className = 'queue-undo';
-      done.dataset.queueMark = item.id;
-      done.textContent = '✓';
-      done.title = '标记为已发送';
-      done.addEventListener('click', () => {
-        item.done = true;
-        saveWorkspace(true);
-        renderQueue();
-      });
-      tools.appendChild(done);
-    }
-    const remove = document.createElement('button');
-    remove.type = 'button';
-    remove.className = 'queue-remove';
-    remove.dataset.queueRemove = item.id;
-    remove.textContent = '×';
-    remove.title = '从队列删除';
-    remove.setAttribute('aria-label', `删除队列第 ${index + 1} 条`);
-    remove.addEventListener('click', () => {
-      state.queue[state.mode] = queueItems().filter(candidate => candidate.id !== item.id);
-      saveWorkspace(true);
-      renderQueue();
-    });
-    tools.appendChild(remove);
-    row.appendChild(tools);
-    el.queueList.appendChild(row);
-  });
-}
-
-async function sendQueueItem(item, tabId) {
-  try {
-    await copyTextToClipboard(item.body);
-  } catch {
-    showToast('复制失败，请手动复制这条提示词');
-    return;
-  }
-  try {
-    if (tabId && tabId !== state.browser?.tabId) await selectTab(tabId);
-    else await API.focusBrowser();
-  } catch {}
-  if (!item.done) {
-    item.done = true;
-    saveWorkspace(true);
-  }
-  renderQueue();
-  showToast('已复制并切到网页；粘贴后回车发送');
-}
-
-function addQueueItem(body) {
-  const text = String(body || '').trim();
-  if (!text) return false;
-  const queue = queueItems();
-  if (queue.some(item => item.body === text && !item.done)) return false;
-  queue.push({
-    id: `q-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-    body: text,
-    done: false,
-  });
-  if (queue.length > 200) queue.splice(0, queue.length - 200);
-  saveWorkspace(true);
-  return true;
-}
-
-/* ---------- 镜头切换与下一镜头 ---------- */
-
-let shotsCache = null;
-
-async function loadShotOptions(force = false) {
-  if (!state.production?.available) throw new Error('制作台账不可用，请先从主窗口维护镜头台账');
-  if (shotsCache && !force) return shotsCache;
-  const response = await fetch('/api/shots', { cache: 'no-store' });
-  const data = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
-  shotsCache = Array.isArray(data?.items) ? data.items : [];
-  return shotsCache;
-}
-
-async function switchToShot(shotId) {
-  const context = state.production?.context;
-  const response = await fetch('/api/context', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      activeShotId: shotId,
-      mode: state.mode,
-      serviceId: state.activeService || '',
-      expectedRevision: Number(context?.revision || 0),
-    }),
-  });
-  const data = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
-  if (data?.context) state.production.context = data.context;
-  renderCurrentShotContext();
-}
-
 // 创作窗口的模态对话框是 HTML 层，而平台网页/资产浮层是原生视图（永远在 HTML 之上）。
 // 打开对话框期间临时隐藏原生视图，关闭后恢复，否则对话框会被盖住无法操作。
 // 恢复钩子按对话框持久挂载（幂等推送），避免 once 监听被提前消耗导致视图滞留隐藏。
@@ -1442,257 +1423,6 @@ function openCreatorDialog(dialog) {
   }
   dialog.showModal();
   syncCreatorDialogVisibility();
-}
-
-async function openShotDialog() {
-  el.shotDialogList.replaceChildren();
-  const loading = document.createElement('div');
-  loading.className = 'breakdown-empty';
-  loading.textContent = '正在读取镜头台账…';
-  el.shotDialogList.appendChild(loading);
-  openCreatorDialog(el.shotDialog);
-  let items = [];
-  try { items = await loadShotOptions(true); }
-  catch (error) {
-    loading.textContent = error.message;
-    return;
-  }
-  el.shotDialogList.replaceChildren();
-  if (!items.length) {
-    const empty = document.createElement('div');
-    empty.className = 'breakdown-empty';
-    empty.textContent = '当前剧本还没有镜头；请先在主窗口的镜头台账建立。';
-    el.shotDialogList.appendChild(empty);
-    return;
-  }
-  const activeId = currentShot()?.active_shot_id;
-  for (const shot of items) {
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = `shot-row${shot.id === activeId ? ' active' : ''}`;
-    row.dataset.shotId = shot.id;
-    const code = document.createElement('span');
-    code.className = 'shot-row-code';
-    code.textContent = shot.shot_no || '未编号';
-    const title = document.createElement('span');
-    title.className = 'shot-row-title';
-    title.textContent = shot.title || '未命名镜头';
-    row.append(code, title);
-    if (shot.id === activeId) {
-      const badge = document.createElement('span');
-      badge.className = 'shot-row-badge';
-      badge.textContent = '当前';
-      row.appendChild(badge);
-    }
-    row.addEventListener('click', async () => {
-      try {
-        await switchToShot(shot.id);
-        el.shotDialog.close();
-        showToast(`已切换到 ${shot.shot_no || '该镜头'}`);
-      } catch (error) {
-        showToast(`切换镜头失败：${error.message}`);
-      }
-    });
-    el.shotDialogList.appendChild(row);
-  }
-}
-
-async function goToNextShot() {
-  try {
-    const items = await loadShotOptions();
-    if (!items.length) {
-      showToast('当前剧本还没有镜头');
-      return;
-    }
-    const activeId = currentShot()?.active_shot_id;
-    const index = items.findIndex(item => item.id === activeId);
-    const next = index >= 0 ? items[index + 1] : items[0];
-    if (!next) {
-      showToast('这已经是台账里的最后一个镜头');
-      return;
-    }
-    await switchToShot(next.id);
-    showToast(`已切换到 ${next.shot_no || '下一镜头'}`);
-  } catch (error) {
-    showToast(`切换镜头失败：${error.message}`);
-  }
-}
-
-/* ---------- 从剧本拆解导入提示词 ---------- */
-
-const breakdownPicker = { file: null, shots: [], selected: new Set() };
-
-async function openBreakdownPicker() {
-  el.breakdownFiles.replaceChildren();
-  el.breakdownShots.replaceChildren();
-  el.breakdownImport.disabled = true;
-  breakdownPicker.file = null;
-  breakdownPicker.shots = [];
-  breakdownPicker.selected = new Set();
-  let items = [];
-  try {
-    const response = await fetch('/api/script-breakdowns', { cache: 'no-store' });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
-    items = Array.isArray(data?.items) ? data.items : [];
-  } catch (error) {
-    const errorRow = document.createElement('div');
-    errorRow.className = 'breakdown-empty';
-    errorRow.textContent = `拆解读取失败：${error.message}`;
-    el.breakdownFiles.appendChild(errorRow);
-    openCreatorDialog(el.breakdownDialog);
-    return;
-  }
-  const projectName = state.config?.project?.name || '';
-  const matching = items.filter(item => item.project === projectName);
-  const visible = matching.length ? matching : items;
-  if (!visible.length) {
-    const empty = document.createElement('div');
-    empty.className = 'breakdown-empty';
-    empty.textContent = '还没有剧本拆解文件；在 Codex 对话里拆解剧本后会自动出现在这里。';
-    el.breakdownFiles.appendChild(empty);
-  }
-  for (const item of visible) {
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = 'breakdown-file-row';
-    row.dataset.breakdownFile = item.filename;
-    const copy = document.createElement('span');
-    const title = document.createElement('span');
-    title.className = 'breakdown-file-title';
-    title.textContent = item.title || item.filename;
-    const meta = document.createElement('span');
-    meta.className = 'breakdown-file-meta';
-    meta.textContent = `${item.project || '未标注剧本'} · ${item.shots || 0} 镜`;
-    copy.append(title, meta);
-    const count = document.createElement('span');
-    count.className = 'breakdown-file-count';
-    count.textContent = `ready ${item.ready || 0}`;
-    row.append(copy, count);
-    row.addEventListener('click', () => pickBreakdownFile(item.filename));
-    el.breakdownFiles.appendChild(row);
-  }
-  openCreatorDialog(el.breakdownDialog);
-}
-
-async function pickBreakdownFile(filename) {
-  breakdownPicker.file = filename;
-  breakdownPicker.shots = [];
-  breakdownPicker.selected = new Set();
-  el.breakdownImport.disabled = true;
-  el.breakdownShots.replaceChildren();
-  el.breakdownFiles.querySelectorAll('.breakdown-file-row').forEach(row => {
-    row.classList.toggle('active', row.dataset.breakdownFile === filename);
-  });
-  const loading = document.createElement('div');
-  loading.className = 'breakdown-empty';
-  loading.textContent = '正在读取镜头…';
-  el.breakdownShots.appendChild(loading);
-  let readyShots = [];
-  try {
-    const response = await fetch(`/api/script-breakdown?p=${encodeURIComponent(filename)}`, { cache: 'no-store' });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
-    readyShots = (data.document?.shots || [])
-      .filter(shot => shot.generation?.status === 'ready' && typeof shot.generation.prompt === 'string' && shot.generation.prompt.trim());
-  } catch (error) {
-    loading.textContent = `镜头读取失败：${error.message}`;
-    return;
-  }
-  el.breakdownShots.replaceChildren();
-  if (!readyShots.length) {
-    const empty = document.createElement('div');
-    empty.className = 'breakdown-empty';
-    empty.textContent = '这份拆解里没有 ready 镜头（提示词为空或仍缺输入）。';
-    el.breakdownShots.appendChild(empty);
-    return;
-  }
-  breakdownPicker.shots = readyShots;
-  for (const shot of readyShots) {
-    breakdownPicker.selected.add(shot.id);
-    const row = document.createElement('label');
-    row.className = 'breakdown-shot-row';
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.checked = true;
-    checkbox.dataset.breakdownShot = shot.id;
-    checkbox.addEventListener('change', () => {
-      if (checkbox.checked) breakdownPicker.selected.add(shot.id);
-      else breakdownPicker.selected.delete(shot.id);
-      el.breakdownImport.disabled = breakdownPicker.selected.size === 0;
-    });
-    const copy = document.createElement('span');
-    const shotCopy = document.createElement('span');
-    shotCopy.className = 'breakdown-shot-copy';
-    shotCopy.textContent = `${shot.shotNo || '未编号'}`;
-    const shotTitle = document.createElement('span');
-    shotTitle.className = 'breakdown-shot-title';
-    shotTitle.textContent = ` ${shot.title || ''}`;
-    copy.append(shotCopy, shotTitle);
-    row.append(checkbox, copy);
-    el.breakdownShots.appendChild(row);
-  }
-  el.breakdownImport.disabled = false;
-}
-
-function importBreakdownPrompts() {
-  const shots = breakdownPicker.shots.filter(shot => breakdownPicker.selected.has(shot.id));
-  if (!shots.length) return;
-  let added = 0;
-  for (const shot of shots) {
-    if (addQueueItem(shot.generation.prompt)) added += 1;
-  }
-  saveWorkspace(true);
-  renderQueue();
-  el.breakdownDialog.close();
-  state.accordions.queue = true;
-  syncAccordionState();
-  showToast(added ? `已把 ${added} 条提示词加入队列` : '选中的提示词都已在队列里');
-}
-
-async function syncProductionContext() {
-  if (!state.production?.available) return;
-  try {
-    const response = await fetch('/api/context', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        serviceId: state.activeService || '',
-        mode: state.mode,
-        expectedRevision: Number(state.production?.context?.revision || 0),
-      }),
-    });
-    if (!response.ok) return;
-    const data = await response.json();
-    if (data?.context) state.production.context = data.context;
-    renderCurrentShotContext();
-  } catch {}
-}
-
-async function assignDownloadToCurrentShot(download) {
-  const context = currentShot();
-  if (!context || !context.active_shot_id) {
-    showToast('请先到项目库选择当前镜头，再关联这个结果');
-    return;
-  }
-  const inboxId = download.inboxId || download.inbox?.id;
-  if (!inboxId) {
-    showToast('这条下载尚未写入制作台账，请稍候或重新打开工作台');
-    return;
-  }
-  try {
-    const response = await fetch('/api/inbox', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: inboxId, action: 'assign', shotId: context.active_shot_id }),
-    });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
-    await loadProduction(true);
-    renderCurrentShotContext();
-    renderDownloads();
-    showToast(`已关联到 ${context.shot_no || '当前镜头'}`);
-  } catch (error) {
-    showToast(`关联失败：${error.message}`);
-  }
 }
 
 function formatBytes(bytes) {
@@ -1796,15 +1526,13 @@ function renderDownloads() {
   const attentionRank = download => {
     if (download.ingestState === 'error' || download.lineageState === 'error' || ['interrupted', 'cancelled'].includes(download.state)) return 0;
     if (['progressing', 'paused'].includes(download.state)) return 1;
-    if (download.state === 'completed' && (!download.inbox || download.inbox.state === 'unassigned')) return 2;
     return 3;
   };
   downloads.sort((a, b) => attentionRank(a) - attentionRank(b)
     || String(b.endedAt || b.startedAt).localeCompare(String(a.endedAt || a.startedAt)));
   el.downloadList.replaceChildren();
-  const unassignedCount = downloads.filter(item => item.state === 'completed' && (!item.inbox || item.inbox.state === 'unassigned')).length;
   el.downloadSummary.textContent = downloads.length
-    ? `${downloads.length} 条${activeCount ? `，${activeCount} 条进行中` : ''}${unassignedCount ? `，${unassignedCount} 条待关联` : ''}`
+    ? `${downloads.length} 条${activeCount ? `，${activeCount} 条进行中` : ''}`
     : '还没有下载任务';
   if (!downloads.length) {
     const empty = document.createElement('div');
@@ -1859,26 +1587,6 @@ function renderDownloads() {
       : '已归档';
     meta.append(source, size);
     card.appendChild(meta);
-    const ingest = document.createElement('div');
-    ingest.className = 'download-ingest-state';
-    if (download.state !== 'completed') {
-      ingest.textContent = '镜头：等待文件归档完成';
-    } else if (download.ingestState === 'error') {
-      ingest.classList.add('has-error');
-      ingest.textContent = '镜头：制作台账写入失败';
-    } else if (!download.inbox) {
-      ingest.classList.add('is-pending');
-      ingest.textContent = '镜头：正在写入制作台账';
-    } else if (download.inbox.state === 'assigned') {
-      ingest.classList.add('is-assigned');
-      ingest.textContent = `镜头：已关联 ${download.inbox.shot_no || download.shotNo || '当前镜头'}${download.inbox.shot_title ? ` · ${download.inbox.shot_title}` : ''}`;
-    } else if (download.inbox.state === 'dismissed') {
-      ingest.textContent = '镜头：已忽略，不参与制作台账';
-    } else {
-      ingest.classList.add('is-unassigned');
-      ingest.textContent = '镜头：待关联';
-    }
-    card.appendChild(ingest);
     const diagnostics = [download.error, download.ingestError, download.lineageError].filter(Boolean);
     if (diagnostics.length) {
       const error = document.createElement('p');
@@ -1896,15 +1604,10 @@ function renderDownloads() {
       actions.appendChild(actionButton('继续', () => API.downloadAction(download.id, 'resume'), 'resume'));
       actions.appendChild(actionButton('取消', () => API.downloadAction(download.id, 'cancel'), 'cancel'));
     } else if (download.state === 'completed') {
-      if (!download.persistedOnly) actions.appendChild(actionButton('在文件夹中显示', () => API.openDownload(download.id), 'reveal'));
-      if (!download.inbox || download.inbox.state === 'unassigned') {
-        actions.appendChild(actionButton('关联当前镜头', () => assignDownloadToCurrentShot(download), 'assign'));
-      } else if (download.inbox.state === 'assigned') {
-        actions.appendChild(actionButton('查看镜头台账', () => {
-          API.showMainWindow();
-          showToast(`请在项目库查看 ${download.inbox.shot_no || '该镜头'}`);
-        }, 'ledger'));
+      if (download.savePath && typeof API.automation === 'function') {
+        actions.appendChild(actionButton('传入网页', () => window.creatorAutomationUI?.sendDownload(download), 'send-to-page'));
       }
+      if (!download.persistedOnly) actions.appendChild(actionButton('在文件夹中显示', () => API.openDownload(download.id), 'reveal'));
     }
     if (actions.childElementCount) card.appendChild(actions);
     el.downloadList.appendChild(card);
@@ -1918,13 +1621,88 @@ function renderDownloads() {
   restoreDownloadFocus(focusTarget);
 }
 
-async function copyPrompt(focusBrowser) {
-  const item = state.promptTemplates[state.mode].find(item => item.id === activeTemplateIds[state.mode]);
-  if (!item) { showToast('请先展开一条固定提示词'); return; }
-  const body = templateDrafts.get(state.mode + ':' + item.id)?.body ?? item.body;
+// 快捷面板视频封面懒加载：与完整资产库同策略，预加载区（视口外扩 200px）内才挂 src；
+// 分类树/资产列表整体重建前先解除旧节点登记，避免持有脱离 DOM 的元素。
+const quickCoverObserver = ('IntersectionObserver' in window) ? new IntersectionObserver(entries => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    const video = entry.target;
+    quickCoverObserver.unobserve(video);
+    trackedQuickCovers.delete(video);
+    const coverSrc = video.dataset.coverSrc;
+    if (coverSrc) {
+      delete video.dataset.coverSrc;
+      video.src = coverSrc;
+    }
+  }
+}, { rootMargin: '200px' }) : null;
+const trackedQuickCovers = new Set();
+
+function resetQuickCoverObserver() {
+  if (!quickCoverObserver) return;
+  for (const video of trackedQuickCovers) quickCoverObserver.unobserve(video);
+  trackedQuickCovers.clear();
+}
+
+function registerQuickCoverLazy(video, coverUrl) {
+  if (!quickCoverObserver) { video.src = coverUrl; return; }
+  video.dataset.coverSrc = coverUrl;
+  quickCoverObserver.observe(video);
+  trackedQuickCovers.add(video);
+}
+
+/* 快捷面板内置预览：图片放大查看（点击切换原始大小），视频/音频直接播放。 */
+let quickPreviewItem = null;
+
+function openQuickPreview(item) {
+  quickPreviewItem = item;
+  el.quickPreviewName.textContent = item.name;
+  el.quickPreviewMeta.textContent = `${item.folder || '创作资产库'} · ${item.type === 'image' ? '点击图片可在适配与原始大小间切换' : item.type === 'video' ? '视频预览' : '音频预览'}`;
+  const stage = el.quickPreviewStage;
+  stage.replaceChildren();
+  stage.classList.remove('zoom-100');
+  if (item.type === 'image') {
+    const image = document.createElement('img');
+    image.className = 'quick-preview-media';
+    image.src = assetImageUrl(item.path);
+    image.alt = item.name;
+    image.addEventListener('click', () => stage.classList.toggle('zoom-100'));
+    stage.appendChild(image);
+  } else if (item.type === 'video') {
+    const video = document.createElement('video');
+    video.className = 'quick-preview-media';
+    video.src = assetImageUrl(item.path);
+    video.controls = true;
+    video.autoplay = true;
+    video.loop = true;
+    video.playsInline = true;
+    stage.appendChild(video);
+  } else if (item.type === 'audio') {
+    const audio = document.createElement('audio');
+    audio.className = 'quick-preview-audio';
+    audio.src = assetImageUrl(item.path);
+    audio.controls = true;
+    audio.autoplay = true;
+    stage.appendChild(audio);
+  } else {
+    const note = document.createElement('p');
+    note.className = 'quick-preview-note';
+    note.textContent = '该类型不支持预览，可在完整资产库中查看。';
+    stage.appendChild(note);
+  }
+  openCreatorDialog(el.quickPreviewDialog);
+}
+
+function closeQuickPreview() {
+  el.quickPreviewStage.replaceChildren();
+  quickPreviewItem = null;
+  el.quickPreviewDialog.close();
+}
+
+async function copyPrompt(focusBrowser) {  const body = (el.promptEditor?.value ?? state.prompts[state.mode]) || '';
   if (!body.trim()) { showToast('提示词为空'); return; }
   try {
-    await copyTextToClipboard(body); rememberTemplatePrompt(body);
+    await copyTextToClipboard(body);
     if (focusBrowser) await API.focusBrowser();
     showToast(focusBrowser ? '已复制，可粘贴到右侧网页' : '提示词已复制');
   } catch { showToast('复制失败，请手动选择文本'); }
@@ -1937,7 +1715,6 @@ async function selectService(serviceId) {
   state.activeService = serviceId;
   saveWorkspace(true);
   renderPlatforms();
-  syncProductionContext();
   const service = serviceById(serviceId);
   el.addressService.textContent = serviceLabel(service);
   el.addressInput.value = service?.url || '';
@@ -1991,7 +1768,7 @@ async function restoreModeBrowser(mode = state.mode) {
     renderMode();
     applyBrowserState(browser);
     saveWorkspace(true);
-    syncProductionContext();
+
     queueBoundsUpdate();
     return true;
   } catch (error) {
@@ -2000,6 +1777,7 @@ async function restoreModeBrowser(mode = state.mode) {
   } finally {
     state.modeSwitchPending = false;
     document.querySelectorAll('.mode-button').forEach(button => { button.disabled = false; });
+    renderPlatforms();
   }
 }
 
@@ -2011,25 +1789,35 @@ function applyBrowserState(browser) {
     ...browser,
     tabs: Array.isArray(browser.tabs) ? browser.tabs : (state.browser?.tabs || []),
   };
-  if (browser.serviceId) {
+  if (Object.hasOwn(browser, 'serviceId')) {
     state.activeService = browser.serviceId;
     if (validServiceForMode(state.mode, browser.serviceId)) state.services[state.mode] = browser.serviceId;
   }
   const service = serviceById(browser.serviceId);
-  el.addressService.textContent = browser.displayLabel || serviceLabel(service);
+  const empty = !browser.tabId && !browser.serviceId;
+  el.addressService.textContent = empty ? '网页' : browser.displayLabel || serviceLabel(service);
   if (document.activeElement !== el.addressInput) {
     el.addressInput.value = browser.url || service?.url || '';
   }
   el.addressInput.title = browser.url || '';
+  el.addressInput.disabled = empty;
+  el.addressGo.disabled = empty;
+  el.openExternal.disabled = empty;
   el.loadDot.classList.toggle('loading', !!browser.loading);
   el.loadDot.classList.toggle('error', !!browser.error && !browser.loading);
   document.querySelector('[data-nav="back"]').disabled = !browser.canGoBack;
   document.querySelector('[data-nav="forward"]').disabled = !browser.canGoForward;
   document.querySelector('[data-nav="reload"]').textContent = browser.loading ? '×' : '↻';
   document.querySelector('[data-nav="reload"]').dataset.action = browser.loading ? 'stop' : 'reload';
-  el.browserPlaceholderTitle.textContent = browser.error
+  document.querySelector('[data-nav="reload"]').disabled = empty;
+  document.querySelector('[data-nav="home"]').disabled = empty;
+  el.browserPlaceholderTitle.textContent = empty ? '尚未打开网页' : browser.error
     ? '平台网页未显示'
     : browser.loading ? '正在连接创作平台' : '平台网页已连接';
+  el.browserStage.querySelector('.browser-placeholder p').textContent = empty
+    ? '点击上方 ＋ 打开网站，标签会自动保留。'
+    : '切换大厅或资产库后，网页仍会保留。';
+  el.reconnectBrowser.textContent = empty ? '打开创作网站' : '重新显示网页';
   renderPlatforms();
   renderBrowserRecovery(browser);
   if (browser.error) showToast(browser.error);
@@ -2061,6 +1849,20 @@ async function closeTab(tabId) {
   } catch (error) {
     showToast(error.message || '关闭网页失败');
   }
+}
+
+async function clearBrowserTabs() {
+  if (state.modeSwitchPending || !state.browser?.tabs?.length) return;
+  el.clearBrowserTabs.disabled = true;
+  try {
+    const browser = await API.clearTabs();
+    applyBrowserState(browser);
+    closePlatformPopover();
+    queueBoundsUpdate();
+    showToast('已清空全部网页；登录和素材保留');
+  } catch (error) {
+    showToast(desktopBrowserError(error, '清空网页失败'));
+  } finally { renderPlatforms(); }
 }
 
 async function duplicateTab(tab) {
@@ -2327,7 +2129,7 @@ async function toggleAssetPanel() {
   }
 }
 
-async function openFullAssetLibrary() {
+async function openFullAssetLibrary({ focusPath } = {}) {
   if (typeof API?.setAssetPanel !== 'function') {
     showToast('完整资产库需要通过桌面版打开');
     return;
@@ -2335,6 +2137,14 @@ async function openFullAssetLibrary() {
   try {
     const panel = await API.setAssetPanel({ ...state.assetPanel, open: true });
     applyAssetPanelState(panel);
+    // 带目标资产时，让完整库自动定位到它（选中文件夹 + 高亮 + 直接预览）；
+    // 同时携带发起时的剧本 id，防止切换剧本的瞬间把旧目标误投到新剧本的面板。
+    if (focusPath && typeof API.focusAssetInLibrary === 'function') {
+      const delivered = await API.focusAssetInLibrary(focusPath, state.projectId);
+      if (delivered?.delivered === 'stale-project') {
+        showToast('剧本已切换，旧资产定位已取消');
+      }
+    }
   } catch (error) {
     showToast(`资产库打开失败：${error.message}`);
   }
@@ -2364,6 +2174,7 @@ function bindEvents() {
   el.platformForm.addEventListener('submit', addCustomPlatform);
   el.restoreAllPlatforms.addEventListener('click', restoreAllPlatforms);
   el.duplicateTab.addEventListener('click', duplicateActiveTab);
+  el.clearBrowserTabs.addEventListener('click', clearBrowserTabs);
   el.platformForm.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
     event.preventDefault();
@@ -2413,61 +2224,12 @@ function bindEvents() {
     saveWorkspace();
     queueBoundsUpdate();
   });
-  el.queueAccordion.addEventListener('toggle', () => {
-    state.accordions.queue = el.queueAccordion.open;
-    saveWorkspace();
-    queueBoundsUpdate();
-  });
-  el.queueImportBreakdown.addEventListener('click', () => {
-    openBreakdownPicker().catch(error => showToast(`拆解读取失败：${error.message}`));
-  });
-  el.queueClearSent.addEventListener('click', () => {
-    const queue = queueItems();
-    const removedWithIndex = queue
-      .map((item, index) => ({ item, index }))
-      .filter(entry => entry.item.done);
-    const kept = queue.filter(item => !item.done);
-    if (!removedWithIndex.length) {
-      showToast('还没有已发送的条目');
-      return;
-    }
-    state.queue[state.mode] = kept;
-    saveWorkspace(true);
-    renderQueue();
-    // 误点可救：5 秒内可一键撤销，并按原位置还原。
-    showToast(`已清空 ${removedWithIndex.length} 条已发送提示词`, {
-      actionLabel: '撤销',
-      onAction: () => {
-        const next = [...queueItems()];
-        for (const { item, index } of removedWithIndex) {
-          next.splice(Math.min(index, next.length), 0, item);
-        }
-        state.queue[state.mode] = next;
-        saveWorkspace(true);
-        renderQueue();
-        showToast('已恢复清空的条目');
-      },
-    });
-  });
-  el.breakdownClose.addEventListener('click', () => el.breakdownDialog.close());
-  el.breakdownImport.addEventListener('click', importBreakdownPrompts);
-  el.switchShot.addEventListener('click', () => {
-    openShotDialog().catch(error => showToast(`镜头读取失败：${error.message}`));
-  });
-  el.shotDialogClose.addEventListener('click', () => el.shotDialog.close());
-  el.nextShot.addEventListener('click', () => {
-    goToNextShot().catch(error => showToast(`切换镜头失败：${error.message}`));
-  });
   el.assetAccordion.addEventListener('toggle', () => {
     state.accordions.assets = el.assetAccordion.open;
     saveWorkspace();
     queueBoundsUpdate();
   });
   el.openModeFolder.addEventListener('click', () => API.openFolder(state.mode).catch(error => showToast(error.message)));
-  el.changeCurrentShot.addEventListener('click', () => {
-    API.showMainWindow();
-    showToast('请在项目库的镜头台账中切换当前镜头');
-  });
   el.toggleAssets.addEventListener('click', toggleAssetPanel);
   el.renameForm.addEventListener('submit', saveRenamedItem);
   el.renameCancel.addEventListener('click', () => el.renameDialog.close());
@@ -2482,6 +2244,19 @@ function bindEvents() {
     importLocalFilesToFolder(files, target);
   });
   el.openAssetLibrary.addEventListener('click', openFullAssetLibrary);
+  el.toggleDragTray.addEventListener('click', async () => {
+    try {
+      const result = await API.toggleDragTray();
+      showToast(result?.open
+        ? '悬浮窗已开启（置顶小窗）：拖卡片进剪映，或点卡片复制后 ⌘V 粘贴'
+        : '剪映悬浮窗已关闭');
+    } catch (error) { showToast(error.message || '悬浮窗开启失败'); }
+  });
+  el.quickMultiSelect.addEventListener('click', () => setQuickSelectMode(!state.quickSelectMode));
+  el.quickSelClear.addEventListener('click', () => {
+    state.quickSelectionOrder.length = 0;
+    updateQuickSelectionUI();
+  });
   el.assetDropZone.addEventListener('keydown', event => {
     if (!['Enter', ' '].includes(event.key)) return;
     event.preventDefault();
@@ -2523,7 +2298,10 @@ function bindEvents() {
   el.openExternal.addEventListener('click', openCurrentInSystemBrowser);
   el.browserRecoveryExternal.addEventListener('click', openCurrentInSystemBrowser);
   el.browserRecoveryReload.addEventListener('click', reloadCurrentPlatform);
-  el.reconnectBrowser.addEventListener('click', () => selectService(state.activeService));
+  el.reconnectBrowser.addEventListener('click', () => {
+    if (state.browser?.tabId) selectService(state.activeService);
+    else el.addPlatform.click();
+  });
   el.addressForm.addEventListener('submit', event => {
     event.preventDefault();
     navigateToAddress();
@@ -2545,6 +2323,37 @@ function bindEvents() {
     el.togglePrompt.title = collapsed ? '展开创作材料栏' : '收起创作材料栏';
     queueBoundsUpdate();
   });
+  el.promptEditor.addEventListener('input', () => {
+    state.prompts[state.mode] = el.promptEditor.value;
+    updateCharacterCount();
+    saveWorkspace();
+    scheduleHistorySnapshot();
+  });
+  el.copyPrompt.addEventListener('click', () => { copyPrompt(false); });
+  el.quickPreviewClose.addEventListener('click', closeQuickPreview);
+  el.quickPreviewDone.addEventListener('click', closeQuickPreview);
+  el.quickPreviewDialog.addEventListener('click', event => { if (event.target === el.quickPreviewDialog) closeQuickPreview(); });
+  el.quickPreviewInLibrary.addEventListener('click', () => {
+    const focusPath = quickPreviewItem?.path || '';
+    closeQuickPreview();
+    openFullAssetLibrary({ focusPath });
+  });
+  el.clearPrompt.addEventListener('click', () => {
+    if (!el.promptEditor.value.trim()) { showToast('提示词已经是空的'); return; }
+    if (state.skipClearConfirm) { clearPromptEditor(); return; }
+    openCreatorDialog(el.clearPromptDialog);
+  });
+  el.clearPromptConfirm.addEventListener('click', () => {
+    el.clearPromptDialog.close();
+    clearPromptEditor();
+  });
+  el.clearPromptNever.addEventListener('click', () => {
+    state.skipClearConfirm = true;
+    saveWorkspace(true);
+    el.clearPromptDialog.close();
+    clearPromptEditor();
+  });
+  el.clearPromptCancel.addEventListener('click', () => el.clearPromptDialog.close());
   document.querySelectorAll('[data-nav]').forEach(button => {
     button.addEventListener('click', () => {
       const action = button.dataset.action || button.dataset.nav;
@@ -2583,7 +2392,7 @@ function bindEvents() {
         renderDownloads();
       });
       loadProduction(true).then(() => {
-        renderCurrentShotContext();
+
         renderDownloads();
       }).catch(() => {});
       showToast(`${download.filename} 已自动归档`);
@@ -2688,7 +2497,7 @@ async function applyPendingPrompt() {
   state.accordions.prompt = true;
   el.promptAccordion.open = true;
   el.templateCreateName.focus();
-  const source = payload.source === 'script-workbench' ? '剧本工作台' : 'Agent 经验库';
+  const source = 'Agent 经验库';
   showToast(`已填入来自${source}的「${payload.title || '模板'}」`);
 }
 
@@ -2707,6 +2516,10 @@ async function boot() {
   }
   try {
     state.config = await API.getConfig();
+    if (!new URLSearchParams(location.search).has('mode') && state.config.browser?.mode) {
+      state.mode = state.config.browser.mode;
+    }
+    state.browser = state.config.browser || null;
     if (state.config?.project?.id) state.projectId = state.config.project.id;
     loadWorkspace();
     bindEvents();
@@ -2730,12 +2543,20 @@ async function boot() {
     const productionEvents = new EventSource('/api/events');
     productionEvents.addEventListener('production', () => {
       loadProduction(true).then(() => {
-        renderCurrentShotContext();
+
         renderDownloads();
       }).catch(() => {});
     });
     productionEvents.addEventListener('creative-assets', () => {
       loadAssetItems().catch(() => {});
+    });
+    // 资产面板/HTTP activate 的全局权威通知：广播载荷携带实时激活项目，走既有串行切换链。
+    // 同项目重复事件被 applyProjectChange 的同 id 守卫吸收，不会重置草稿；主窗口选剧器的定向 IPC 保留原语义。
+    productionEvents.addEventListener('creative-projects', event => {
+      try {
+        const payload = JSON.parse(event.data || 'null');
+        if (payload?.project?.id) queueProjectChange(payload.project);
+      } catch {}
     });
     document.body.dataset.ready = 'true';
   } catch (error) {

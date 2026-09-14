@@ -303,8 +303,14 @@ async function main() {
 
     const scan = await request(baseUrl, '/api/scan');
     assert.equal(scan.status, 200, scan.text);
-    assert.equal(scan.payload.files.filter(file => file.type === 'video').length, 2);
-    assert.equal(scan.payload.files.filter(file => file.type === 'audio').length, 1);
+    // scan 现在会合并“创作工作台”内置来源（@media/creative-assets token），手动导入断言只数素材库本体。
+    const projectVideos = scan.payload.files.filter(file => file.type === 'video' && file.path.startsWith('素材库/'));
+    const projectAudios = scan.payload.files.filter(file => file.type === 'audio' && file.path.startsWith('素材库/'));
+    assert.equal(projectVideos.length, 2);
+    assert.equal(projectAudios.length, 1);
+    const workbenchSource = (scan.payload.sources || []).find(source => source.id === 'creative-assets');
+    assert.equal(workbenchSource?.available, true, 'scan 没有返回内置创作工作台媒体来源');
+    assert.ok(scan.payload.files.some(file => file.path.startsWith('@media/creative-assets/')), 'scan 没有合并创作工作台媒体');
 
     const importedRoot = path.join(projectRoot, '素材库', '手动导入');
     const remainingParts = fs.readdirSync(importedRoot, { recursive: true })

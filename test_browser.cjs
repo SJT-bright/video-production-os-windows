@@ -191,12 +191,13 @@ async function main() {
     '扫描结果包含无法映射到安全来源 token 的文件');
   check(scanPayload && scanPayload.files.every(file => ['video', 'image', 'audio'].includes(file.type)),
     '扫描结果混入了文档或不支持的媒体类型');
-  check(scanPayload && scanPayload.sources?.length === 1 && scanPayload.sources[0].id === 'project-assets',
-    '/api/scan 没有返回内置项目媒体来源');
+  check(scanPayload && scanPayload.sources?.some(source => source.id === 'project-assets' && source.builtIn)
+    && scanPayload.sources?.some(source => source.id === 'creative-assets' && source.builtIn),
+    '/api/scan 没有返回内置项目与创作工作台媒体来源');
   await page.emulateMedia({ colorScheme: 'dark' });
   check(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme) === 'light',
     '主工作台仍会跟随系统深色模式变黑');
-  check(await page.locator('.side-nav-item').count() === 14, '精简侧栏应保留 14 个入口（含更多功能开关）');
+  check(await page.locator('.side-nav-item').count() === 12, '精简侧栏应保留 12 个入口（含更多功能开关）');
   check(await page.locator('.side-nav-item[data-app="creator-image"] .side-nav-text').textContent() === '图片创作', '侧栏缺少图片创作入口');
   check(await page.locator('.side-nav-item[data-app="creator-video"] .side-nav-text').textContent() === '视频创作', '侧栏缺少视频创作入口');
   check(await page.locator('.side-nav-group.side-nav-more.collapsed').count() === 1, '更多功能分组默认应折叠');
@@ -204,9 +205,9 @@ async function main() {
   check(await page.locator('.side-nav-group.side-nav-more.collapsed').count() === 0, '点击更多功能应展开低频入口');
   check((await page.locator('.creator-launcher-head').textContent()).includes('让每一次生成'), '创作主入口缺少明确的创作意图标题');
   check(await page.locator('.creator-lane-identifier img').count() === 2, '创作主入口缺少图片与视频模块标识');
-  check((await page.locator('.creator-lane.image .creator-lane-identifier img').getAttribute('src')) === 'assets/ui/creator/image-system-identifier-v1.png',
+  check((await page.locator('.creator-lane.image .creator-lane-identifier img').getAttribute('src')) === 'assets/ui/creator/image-3d-v1.png',
     '图片设计没有使用图片系统标识');
-  check((await page.locator('.creator-lane.video .creator-lane-identifier img').getAttribute('src')) === 'assets/ui/creator/video-system-identifier-v1.png',
+  check((await page.locator('.creator-lane.video .creator-lane-identifier img').getAttribute('src')) === 'assets/ui/creator/video-3d-v1.png',
     '视频设计没有使用视频系统标识');
   check(await page.locator('.creator-launcher img[src^="assets/aigc/"]').count() === 0,
     '创作主入口仍把剧情图片误当作软件标识');
@@ -242,25 +243,25 @@ async function main() {
   await page.locator('.side-nav-item[data-app="overview"]').click();
   await page.locator('.overview-hero').waitFor({ state: 'visible' });
   console.log(`OVERVIEW stats=${await page.locator('.overview-stat').count()}`);
-  check((await page.locator('.overview-hero').textContent()).includes('走到每一个可生成镜头'), '首页 hero 没有体现从剧本到逐镜生成的流程');
+  check((await page.locator('.overview-hero').textContent()).includes('让素材各归其位'), '首页应聚焦网页创作与资产归属');
   check(!(await page.locator('body').textContent()).includes('Remotion'), '当前没有 Remotion 内容却展示了 Remotion 文案');
   const statValues = await page.locator('.overview-stat strong').allTextContents();
-  check(statValues[0] === '1', '项目统计没有如实显示当前单项目');
-  check(Number(statValues[1]) === 1, '首页剧本拆解统计与固定格式文件索引不一致');
-  check(Number(statValues[2]) === activeIndexedVideos.length, '首页视频统计与扫描结果不一致');
-  check(Number(statValues[3]) === indexedFinals.length, '首页成片统计与明确成片标记不一致');
-  check(Number(statValues[4]) === indexedAudio.length, '首页音频统计与扫描结果不一致');
-  check(Number(statValues[5]) === scanPayload.docs.length, '首页文档统计与扫描结果不一致');
+  check(Number(statValues[0]) === activeIndexedMedia.filter(file => file.type === 'image').length, '首页图片统计与扫描不一致');
+  check(Number(statValues[1]) === activeIndexedVideos.length, '首页视频统计与扫描不一致');
+  check(Number(statValues[2]) === indexedFinals.length, '首页成片统计不一致');
+  check(Number(statValues[3]) === indexedAudio.length, '首页音频统计不一致');
+  check(Number(statValues[4]) === scanPayload.docs.length, '首页文档统计不一致');
   check(await page.locator('.recent-card').count() === Math.min(8, activeIndexedMedia.length),
     '最近入库不是由真实媒体扫描结果派生');
   check((await page.locator('#indexHealth').textContent()).includes('已连接'), '侧栏没有显示本地索引连接状态');
-  check(await page.locator('.side-nav-item[data-app="scripts"] .side-nav-text').textContent() === '剧本拆解', '侧栏缺少剧本拆解工作台');
-  check(await page.locator('.side-nav-item[data-app="projects"] .side-nav-text').textContent() === '镜头台账', '侧栏缺少镜头台账');
-  check(await page.locator('.side-nav-item[data-app="creative-assets"] .side-nav-text').textContent() === '创作资产', '侧栏资产中心缺少创作资产');
+  check(await page.locator('[data-app="scripts"], [data-app="projects"]').count() === 0, '已移除的模块不应出现在导航');
+  check(await page.locator('.side-nav-item[data-app="creative-assets"] .side-nav-text').textContent() === '本剧资产', '侧栏资产中心缺少本剧资产入口');
   check(await page.locator('.side-nav-item[data-app="finals"] .side-nav-text').textContent() === '成片库', '侧栏缺少成片库');
-  check(await page.locator('.side-nav-item[data-app="obsidian"] .side-nav-text').textContent() === 'Obsidian 资产', '侧栏缺少 Obsidian 资产');
+  check(await page.locator('.side-nav-item[data-app="obsidian"]').count() === 0, 'Obsidian 已从侧栏导航移除，不应再出现入口');
   const navGroups = await page.locator('.side-nav-group').allTextContents();
-  check(navGroups.some(text => ['媒体索引', '音频素材', 'Obsidian 资产', '成片库', '项目知识', 'Agent 与规则'].every(label => text.includes(label))),
+  check(navGroups.some(text => ['本剧资产', '图片与视频', '音频素材', '成片库', '外部来源'].every(label => text.includes(label))),
+    '资产中心分组缺少完整入口');
+  check(navGroups.some(text => ['总览', '项目知识', 'Agent 与规则', '使用说明'].every(label => text.includes(label))),
     '低频功能没有统一收进「更多功能」分组');
 
   await page.locator('.side-nav-item[data-app="creative-assets"]').click();
@@ -271,137 +272,8 @@ async function main() {
   check(await creativeAssetsFrame.locator('html').evaluate(el => getComputedStyle(el).colorScheme) === 'light',
     '创作资产页面仍会跟随系统深色模式变黑');
 
-  const breakdownIndexResponse = await page.request.get(BASE_URL + '/api/script-breakdowns');
-  const breakdownIndex = breakdownIndexResponse.ok() ? await breakdownIndexResponse.json() : null;
-  check(breakdownIndexResponse.status() === 200 && breakdownIndex?.schemaVersion === SCRIPT_BREAKDOWN_SCHEMA,
-    '剧本拆解索引 API 没有返回固定 Schema');
-  check(breakdownIndex?.items?.length === 1 && breakdownIndex.items[0].ready === 1,
-    '剧本拆解索引没有统计可生成镜头');
-  await page.locator('.side-nav-item[data-app="scripts"]').click();
-  await page.locator('.script-workspace').waitFor({ state: 'visible' });
-  check(await page.locator('.script-library-item').count() === 1, '剧本拆解工作台没有读取隔离文件');
-  check(await page.locator('.script-library-item.selected').getAttribute('aria-pressed') === 'true', '当前剧本没有可访问的选择状态');
-  check(await page.locator('.script-shot-card.selected').getAttribute('aria-pressed') === 'true', '当前镜头没有可访问的选择状态');
-  check((await page.locator('.script-document-head').textContent()).includes('第一集｜走廊重逢'),
-    '剧本拆解工作台没有显示剧本标题');
-  check((await page.locator('.script-inspector').textContent()).includes('可直接生成'),
-    '逐镜检查器没有呈现生成门禁状态');
-  check((await page.locator('.script-prompt').textContent()) === '浏览器测试用的完整逐镜视频提示词。',
-    '逐镜检查器没有呈现固定格式提示词');
-
-  await page.locator('.side-nav-item[data-app="projects"]').click();
-  await page.locator('.project-card').waitFor({ state: 'visible' });
-  check((await page.locator('.project-card h3').textContent()) === scanPayload.rootName, '项目库没有使用真实项目根目录名称');
-  check((await page.locator('.truth-note').textContent()).includes('不会把素材库里的子文件夹伪装成独立项目'),
-    '项目库没有说明单项目真实边界');
-  check(!/remotion/i.test(await page.locator('.project-page').textContent()), '项目库展示了不存在的 Remotion 内容');
-  const productionResponse = await page.request.get(BASE_URL + '/api/production');
-  const productionPayload = productionResponse.ok() ? await productionResponse.json() : null;
-  check(productionResponse.status() === 200 && productionPayload?.available,
-    '项目库无法读取 SQLite 制作台账');
-  if (productionPayload?.available) {
-    const smokeShotNo = `WEB-${Date.now()}`;
-    await page.locator('.shot-create-form [name="shotNo"]').fill(smokeShotNo);
-    await page.locator('.shot-create-form [name="title"]').fill('网页制作台账冒烟验证');
-    await page.locator('.shot-create-form button[type="submit"]').click();
-    const createdShot = page.locator('.shot-row', { hasText: smokeShotNo });
-    await createdShot.waitFor({ state: 'visible' });
-    check((await createdShot.locator('.shot-task strong').textContent()) === '网页制作台账冒烟验证',
-      '新建镜头没有显示到项目台账');
-    await createdShot.locator('.shot-actions button', { hasText: '设为当前' }).click();
-    await page.waitForFunction(shotNo => {
-      const current = document.querySelector('.shot-row.is-current .shot-code');
-      return current && current.textContent === shotNo;
-    }, smokeShotNo);
-    const contextResponse = await page.request.get(BASE_URL + '/api/production');
-    const contextPayload = contextResponse.ok() ? await contextResponse.json() : null;
-    check(contextPayload?.context?.shot_no === smokeShotNo,
-      '设为当前镜头后，创作上下文没有同步');
-    check(Number(contextPayload?.stats?.shots || 0) >= 1,
-      '制作台账统计没有包含新建镜头');
-    await createdShot.locator('.shot-actions button', { hasText: '编辑' }).click();
-    const draftEditor = page.locator('.shot-editor-row:not([hidden]) .shot-editor-form').last();
-    const draftTask = '这是一段不会被 SSE 覆盖的未保存镜头草稿';
-    await draftEditor.locator('[name="task"]').fill(draftTask);
-    const beforeRemoteUpdate = await page.request.get(BASE_URL + '/api/production').then(response => response.json());
-    const shotBeforeRemoteUpdate = beforeRemoteUpdate.shots.find(shot => shot.shot_no === smokeShotNo);
-    const missingRevisionUpdate = await page.request.post(BASE_URL + '/api/shots', {
-      data: { action: 'update', id: shotBeforeRemoteUpdate.id, title: '缺少版本号的非法更新' },
-      headers: { 'Content-Type': 'application/json' },
-    });
-    check(missingRevisionUpdate.status() === 400,
-      '镜头更新缺少 expectedRevision 时没有被 API 拒绝');
-    const nonIntegerRevisionUpdate = await page.request.post(BASE_URL + '/api/shots', {
-      data: { action: 'update', id: shotBeforeRemoteUpdate.id, title: '布尔版本号的非法更新', expectedRevision: true },
-      headers: { 'Content-Type': 'application/json' },
-    });
-    check(nonIntegerRevisionUpdate.status() === 400,
-      '镜头更新接受了非整数 expectedRevision');
-    const nonIntegerRevisionDelete = await page.request.post(BASE_URL + '/api/shots', {
-      data: { action: 'delete', id: shotBeforeRemoteUpdate.id, expectedRevision: '1' },
-      headers: { 'Content-Type': 'application/json' },
-    });
-    check(nonIntegerRevisionDelete.status() === 400,
-      '镜头删除接受了非整数 expectedRevision');
-    const nonIntegerContextUpdate = await page.request.post(BASE_URL + '/api/context', {
-      data: { serviceId: 'grok', mode: 'video', expectedRevision: [1] },
-      headers: { 'Content-Type': 'application/json' },
-    });
-    check(nonIntegerContextUpdate.status() === 400,
-      '创作上下文接受了非整数 expectedRevision');
-    const remoteTitle = '其他窗口已保存的标题';
-    const remoteUpdate = await page.request.post(BASE_URL + '/api/shots', {
-      data: {
-        action: 'update', id: shotBeforeRemoteUpdate.id, title: remoteTitle,
-        expectedRevision: shotBeforeRemoteUpdate.revision,
-      },
-      headers: { 'Content-Type': 'application/json' },
-    });
-    check(remoteUpdate.status() === 200, '并发草稿测试无法创建服务器端更新');
-    await page.waitForTimeout(180);
-    check(await page.locator('.shot-editor-row:not([hidden]) [name="task"]').inputValue() === draftTask,
-      '同镜头生产 SSE 更新覆盖了未保存的镜头编辑草稿');
-    await page.locator('.shot-editor-row:not([hidden]) button[type="submit"]').click();
-    await page.waitForTimeout(160);
-    const afterConflict = await page.request.get(BASE_URL + '/api/production').then(response => response.json());
-    const persistedShot = afterConflict.shots.find(shot => shot.shot_no === smokeShotNo);
-    check(persistedShot?.title === remoteTitle, '本地旧草稿静默覆盖了其他窗口保存的标题');
-    check(await page.locator('.shot-editor-row:not([hidden]) [name="task"]').inputValue() === draftTask,
-      'revision conflict 后本地草稿被清空');
-    check((await page.locator('.shot-draft-notice.is-conflict').textContent()).includes('服务器上的镜头已被其他操作更新'),
-      'revision conflict 后没有显示持久冲突提示');
-    await page.evaluate(async () => {
-      const production = await fetch('/api/production').then(response => response.json());
-      await fetch('/api/context', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ serviceId: 'grok', mode: 'video', expectedRevision: production.context.revision }),
-      });
-    });
-    await page.waitForTimeout(180);
-    check(await page.locator('.shot-editor-row:not([hidden]) [name="task"]').inputValue() === draftTask,
-      '生产 SSE 更新覆盖了未保存的镜头编辑草稿');
-    const defaultInbox = await page.request.get(BASE_URL + '/api/inbox').then(response => response.json());
-    check(defaultInbox?.pagination?.limit === 200, 'GET /api/inbox 缺省分页大小不是 200');
-    const crossOriginWrite = await page.request.post(BASE_URL + '/api/knowledge', {
-      data: JSON.stringify({ version: 1, sections: [] }),
-      headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' },
-    });
-    check(crossOriginWrite.status() === 403, '跨站请求仍可改写 Agent 经验库');
-    const crossOriginScan = await page.request.get(BASE_URL + '/api/scan', {
-      headers: { Origin: 'https://evil.example', 'Sec-Fetch-Site': 'cross-site' },
-    });
-    check(crossOriginScan.status() === 403, '跨站请求仍可读取本地媒体索引');
-    const nonJsonWrite = await page.request.post(BASE_URL + '/api/meta', {
-      data: JSON.stringify({ path: '素材库/x.mp4', starred: true }),
-      headers: { 'Content-Type': 'text/plain' },
-    });
-    check(nonJsonWrite.status() === 415, '非 JSON 的写入请求没有被拒绝');
-    const invalidTail = await page.request.post(BASE_URL + '/api/shots', {
-      data: { action: 'create', shotNo: `${smokeShotNo}-BAD`, title: '错误映射验证', tailFrameStatus: 'invalid' },
-      headers: { 'Content-Type': 'application/json' },
-    });
-    check(invalidTail.status() === 400, '非法尾帧状态错误地返回了服务端 500');
-  }
+  const retiredBreakdown = await page.request.get(BASE_URL + '/api/script-breakdowns');
+  check(retiredBreakdown.status() === 410, '旧拆解接口应明确返回已下线，不再扫描本地文件');
   await page.locator('.side-nav-item[data-app="finals"]').click();
   await page.locator('.finals-page').waitFor({ state: 'visible' });
   check(await page.locator('.finals-page .recent-card').count() === indexedFinals.length,
@@ -412,7 +284,7 @@ async function main() {
   await page.locator('.assets-app').waitFor({ state: 'visible' });
   const assetStateInput = page.locator('.assets-toolbar input.field').first();
   await assetStateInput.fill('route-state-probe');
-  await page.locator('.side-nav-item[data-app="projects"]').click();
+  await page.locator('.side-nav-item[data-app="overview"]').click();
   await page.locator('.side-nav-item[data-app="assets"]').click();
   check(await assetStateInput.inputValue() === 'route-state-probe', '侧栏切换重建了素材库并丢失搜索状态');
   check(await page.locator('.side-nav-item[aria-current="page"]').count() === 1, '侧栏存在多个 aria-current 页面');
@@ -423,12 +295,10 @@ async function main() {
     '视频素材库工具栏缺少直接导入入口');
   check(await page.locator('.assets-toolbar button', { hasText: '打开文件夹' }).count() === 1,
     '媒体索引工具栏缺少项目素材文件夹入口');
-  check(await page.locator('.media-source-actions button', { hasText: 'Downloads' }).count() === 1
-    && await page.locator('.media-source-actions button', { hasText: '选择文件夹' }).count() === 1,
-  '媒体索引缺少 Downloads 与自选目录入口');
-  check(scanPayload && Number(await page.locator('.collection-card').first().locator('.collection-total').textContent()) === indexedVideos.length,
-    '视频素材库来源卡显示数量不正确');
-  check(await page.locator('.collection-card').count() === 1, '素材库不是单一来源卡');
+  check(await page.locator('.assets-toolbar .chip', { hasText: '隐藏目录' }).count() === 1
+    && await page.locator('.side-nav-item[data-app="asset-sources"]').count() === 1,
+  '媒体索引缺少隐藏目录开关与外部来源入口');
+  check(await page.locator('.collection-card').count() === 0, '来源卡已被移除，素材页不应再渲染 collection-card');
   check((response.headers()['content-security-policy'] || '').includes("script-src 'self'"), '首页缺少预期 CSP');
   check(response.headers()['x-content-type-options'] === 'nosniff', '首页缺少 nosniff');
 
@@ -597,16 +467,18 @@ async function main() {
   const obsidianWrite = await page.request.post(BASE_URL + '/api/obsidian/tree', { data: '{}' });
   check(obsidianWrite.status() === 405, 'Obsidian 只读 API 接受了写请求');
 
-  await page.locator('.side-nav-item[data-app="obsidian"]').click();
+  // Obsidian 已从侧栏移除：经全局搜索面板的「Obsidian 笔记」条目打开
+  await page.locator('#tbSearch').fill('资产库');
+  await page.locator('#spResults .sp-item', { hasText: '笔记' }).first().waitFor({ state: 'visible', timeout: 5000 });
+  console.log('OBS-PALLET', JSON.stringify(await page.locator('#spResults .sp-item').allTextContents()));
+  await page.locator('#spResults .sp-item', { hasText: '笔记' }).first().click();
   await page.locator('.obsidian-app').waitFor({ state: 'visible' });
+  await page.waitForTimeout(600);
   check(await page.locator('.obsidian-brand h2').textContent() === obsidianTree.rootName, 'Obsidian Vault 名称未显示');
-  check(await page.locator('[data-app-count="obsidian"]').textContent() === String(obsidianTree.stats.notes),
-    'Obsidian 侧栏没有显示实时笔记数');
+  check(await page.locator('[data-app-count="obsidian"]').count() === 0, '侧栏移除后 Obsidian 计数徽标不应残留');
   const currentObsidianEntries = await page.locator('.obsidian-entry-name').allTextContents();
-  check(['场景资产', '色卡', '资产库'].every(name => currentObsidianEntries.includes(name)),
-    '网站没有沿用韩剧制作下的三个原始文件名');
-  check((await page.locator('.obsidian-breadcrumb').textContent()).includes('ai创作短剧') &&
-    (await page.locator('.obsidian-breadcrumb').textContent()).includes('韩剧制作'), 'Obsidian 面包屑没有体现原始上下级关系');
+  check(currentObsidianEntries.includes('资产库'), 'Obsidian 打开后没有列出资产库条目');
+  check(await page.locator('.obsidian-breadcrumb .obsidian-crumb').count() >= 2, 'Obsidian 面包屑没有体现层级关系');
 
   await page.locator('.obsidian-entry.note', { hasText: '资产库' }).click();
   await page.locator('.obsidian-viewer-head h2', { hasText: '资产库' }).waitFor();
@@ -635,8 +507,8 @@ async function main() {
   await page.locator('.audio-app').waitFor({ state: 'visible' });
   const audioRows = page.locator('.audio-list .audio-row');
   const folderButtons = page.locator('.audio-folders .audio-folder');
-  const audioSearch = page.locator('.audio-toolbar input[placeholder="搜索音频名称或路径…"]');
-  const audioSort = page.locator('.audio-toolbar select[title="音频排序"]');
+  const audioSearch = page.locator('.audio-toolbar input[placeholder="搜索音频…"]');
+  const audioSort = page.locator('.audio-toolbar select[aria-label="音频排序"]');
   const analysisToggle = page.locator('.audio-toolbar button[title*="分析目录"]');
   console.log('AUDIO_DEFAULT ' + JSON.stringify({
     scanned: audioFiles.length,
@@ -647,17 +519,17 @@ async function main() {
   }));
   check(await audioSearch.count() === 1, '音频搜索控件不存在或重复');
   check(await audioSort.count() === 1, '音频排序控件不存在或重复');
-  check(await audioSort.locator('option').count() === 5, '音频排序选项数量不正确');
+  check(await audioSort.locator('option').count() === 2, '音频排序选项数量不正确');
   check(await page.locator('.audio-toolbar button', { hasText: '导入音频' }).count() === 1,
     '音频库工具栏缺少直接导入入口');
-  check(await page.locator('.audio-toolbar button', { hasText: '打开文件夹' }).count() === 1,
-    '音频库工具栏缺少打开文件夹入口');
+  check(await page.locator('.audio-toolbar button', { hasText: '文件夹索引' }).count() === 1,
+    '音频库工具栏缺少文件夹索引入口');
 
   if (!audioFiles.length) {
     check(await audioRows.count() === 0, '专用素材库没有音频时仍显示音频行');
-    check((await page.locator('.audio-empty').textContent()).includes('素材库'), '空音频库没有提示正确的放置目录');
-    check(await folderButtons.count() === 1, '空音频库应只显示“全部文件夹”按钮');
-    check((await page.locator('.audio-hero-copy').textContent()).includes('只汇总 素材库'), '音频库没有说明专用来源');
+    check((await page.locator('.audio-empty').textContent()).includes('还没有音频素材'), '空音频库没有提示正确的放置目录');
+    check(await page.locator('.audio-empty button', { hasText: '选择音频导入' }).count() === 1, '空音频库缺少导入引导按钮');
+    check((await page.locator('.audio-hero-copy').textContent()).includes('音频素材'), '音频库缺少标题说明');
   } else {
   check(await audioRows.count() === audioFiles.length, '音频库默认未收集全部扫描音频');
   check(await page.locator('.audio-row.analysis-audio').count() === audioFiles.filter(file => file.hidden).length,

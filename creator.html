@@ -39,6 +39,7 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
       <div class="platform-strip">
         <nav class="platform-tabs" id="platformTabs" aria-label="已打开的创作网页"></nav>
         <button class="platform-add" id="addPlatform" type="button" aria-label="再开或打开创作网站" aria-expanded="false" aria-controls="platformPopover" title="再开一个网页／打开其他网站">＋</button>
+        <button class="quiet-button clear-browser-tabs" id="clearBrowserTabs" type="button" title="关闭图片和视频模式的全部网页，保留网站登录和素材">清空网页</button>
       </div>
 
       <div class="header-actions">
@@ -93,7 +94,14 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
             <span class="accordion-chevron" aria-hidden="true"></span>
           </summary>
           <div class="accordion-body">
+            <div class="prompt-editor-head">
+              <strong id="promptModeLabel">图片提示词</strong>
+              <span class="character-count" id="characterCount">0 字</span>
+            </div>
+            <textarea id="promptEditor" spellcheck="false" aria-label="当前模式提示词" placeholder="粘贴或输入提示词…"></textarea>
             <div class="prompt-actions">
+              <button class="primary-action" id="copyPrompt" type="button" title="复制提示词；⌘Enter = 复制并切到网页">复制</button>
+              <button class="text-action" id="clearPrompt" type="button">清空</button>
               <button class="text-action template-create-toggle" id="templateCreate" type="button">＋ 新建固定提示词</button>
             </div>
             <form class="template-create-form hidden" id="templateCreateForm" novalidate>
@@ -108,22 +116,6 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
           </div>
         </details>
 
-        <details class="material-accordion queue-accordion" id="queueAccordion">
-          <summary>
-            <span class="accordion-icon queue" data-ui-icon="document" aria-hidden="true"></span>
-            <span class="accordion-label"><strong>提示词队列</strong><small id="queueCount">还没有待发提示词</small></span>
-            <span class="accordion-chevron" aria-hidden="true"></span>
-          </summary>
-          <div class="accordion-body">
-            <div class="queue-actions">
-              <button class="secondary-action" id="queueImportBreakdown" type="button">从拆解导入</button>
-              <button class="secondary-action" id="queueClearSent" type="button">清空已发送</button>
-            </div>
-            <div class="queue-list" id="queueList" aria-label="待发提示词队列"></div>
-            <p class="queue-hint">点编号即复制这条提示词并切到对应网页；粘贴后回车发送。⌘Enter 复制并切网页 · ⌘1-9 切标签 · ⌘R 刷新 · ⌘L 地址栏。队列随剧本、按图片/视频分开保存。</p>
-          </div>
-        </details>
-
         <details class="material-accordion asset-accordion" id="assetAccordion" open>
           <summary>
             <span class="accordion-icon asset" data-ui-icon="library" aria-hidden="true"></span>
@@ -131,25 +123,15 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
             <span class="accordion-chevron" aria-hidden="true"></span>
           </summary>
           <div class="accordion-body">
-            <section class="current-shot-context is-empty" id="currentShotContext" aria-label="当前镜头">
-              <div class="shot-context-head">
-                <div class="shot-context-identity">
-                  <strong class="shot-context-code" id="currentShotCode">未选择镜头</strong>
-                  <span class="shot-context-title" id="currentShotTitle"></span>
-                </div>
-                <button class="text-action" id="changeCurrentShot" type="button">镜头台账</button>
-              </div>
-              <div class="shot-context-actions" id="shotActions">
-                <button class="secondary-action" id="switchShot" type="button">切换镜头</button>
-                <button class="secondary-action" id="nextShot" type="button">下一镜头 →</button>
-              </div>
-              <div class="shot-context-meta" id="currentShotMeta"></div>
-              <p class="shot-context-task" id="currentShotTask"></p>
-            </section>
-
             <div class="asset-quick-actions">
               <button class="primary-action" id="importLocalAssets" type="button">＋ 添加本地素材</button>
               <button class="secondary-action" id="openAssetLibrary" type="button">打开完整资产库</button>
+              <button class="secondary-action" id="toggleDragTray" type="button" title="置顶迷你拖拽窗：拖资产进剪映；Alt+Shift+D 随时开关">剪映联动</button>
+            </div>
+            <div class="asset-quick-tools" id="quickTools" hidden>
+              <button class="secondary-action multi-toggle" id="quickMultiSelect" type="button" aria-pressed="false">框选模式：关</button>
+              <span class="quick-sel-info" id="quickSelInfo" aria-live="polite"></span>
+              <button class="text-action" id="quickSelClear" type="button" hidden>清空选择</button>
             </div>
             <div class="asset-drop-zone" id="assetDropZone" tabindex="0" role="button" aria-label="拖入网页图片或本地图片、视频、音频">
               <span class="asset-drop-icon" data-ui-icon="import" aria-hidden="true"></span>
@@ -198,6 +180,7 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
             <button class="address-go" id="addressGo" type="submit">前往</button>
           </form>
           <div class="browser-toolbar-actions">
+            <button class="quiet-button" id="creatorWorkflowOpen" type="button">制作流程</button>
             <button class="quiet-button" id="importDownloadedFiles" type="button" aria-label="导入下载的文件并归档" title="选择刚从系统浏览器下载的文件并归档">导入文件</button>
             <button class="quiet-button" id="openExternal" type="button" aria-label="在系统浏览器中打开当前页面" title="在系统浏览器中打开当前页面；系统浏览器的登录状态不会同步回内嵌浏览器">外部打开</button>
           </div>
@@ -230,7 +213,24 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
 
   <div class="creator-toast" id="creatorToast" role="status" aria-live="polite"></div>
 
-  <!-- 从剧本拆解导入提示词到队列 -->
+  <!-- 快捷资产内置预览：图片放大查看、视频/音频直接播放；可跳转完整资产库定位 -->
+  <dialog id="quickPreviewDialog" class="creator-dialog quick-preview-dialog" aria-labelledby="quickPreviewName">
+    <div class="creator-dialog-sheet quick-preview-sheet">
+      <header class="creator-dialog-head">
+        <div>
+          <h2 id="quickPreviewName">资产预览</h2>
+          <p id="quickPreviewMeta"></p>
+        </div>
+        <button class="icon-button" id="quickPreviewClose" type="button" aria-label="关闭">×</button>
+      </header>
+      <div class="quick-preview-stage" id="quickPreviewStage"></div>
+      <footer class="creator-dialog-foot">
+        <button class="secondary-action" id="quickPreviewInLibrary" type="button">在完整资产库中查看</button>
+        <button class="primary-action" id="quickPreviewDone" type="button">关闭</button>
+      </footer>
+    </div>
+  </dialog>
+
   <dialog id="renameDialog" class="creator-dialog rename-dialog" aria-labelledby="renameTitle">
     <form id="renameForm" class="creator-dialog-sheet">
       <header class="creator-dialog-head"><h2 id="renameTitle">修改名称</h2></header>
@@ -245,38 +245,25 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
     </form>
   </dialog>
 
-  <dialog id="breakdownDialog" class="creator-dialog" aria-labelledby="breakdownTitle">
+  <!-- 清空提示词确认（可选今后都不提醒） -->
+  <dialog id="clearPromptDialog" class="creator-dialog" aria-labelledby="clearPromptTitle">
     <div class="creator-dialog-sheet">
       <header class="creator-dialog-head">
         <div>
-          <h2 id="breakdownTitle">从剧本拆解导入</h2>
-          <p>选择拆解文件，把 ready 镜头的提示词批量加入队列</p>
+          <h2 id="clearPromptTitle">清空当前提示词？</h2>
+          <p>清空后 5 秒内可撤销。</p>
         </div>
-        <button class="icon-button" id="breakdownClose" type="button" aria-label="关闭">×</button>
       </header>
-      <div class="breakdown-files" id="breakdownFiles" role="list" aria-label="拆解文件列表"></div>
-      <div class="breakdown-shots" id="breakdownShots" aria-label="拆解镜头列表"></div>
       <footer class="creator-dialog-foot">
-        <button class="primary-action" id="breakdownImport" type="button" disabled>把选中提示词加入队列</button>
+        <button class="text-action dialog-secondary-action" id="clearPromptNever" type="button">今后都不提醒</button>
+        <button class="secondary-action" id="clearPromptCancel" type="button">取消</button>
+        <button class="primary-action" id="clearPromptConfirm" type="button">清空</button>
       </footer>
-    </div>
-  </dialog>
-
-  <!-- 切换当前镜头 -->
-  <dialog id="shotDialog" class="creator-dialog" aria-labelledby="shotDialogTitle">
-    <div class="creator-dialog-sheet">
-      <header class="creator-dialog-head">
-        <div>
-          <h2 id="shotDialogTitle">切换当前镜头</h2>
-          <p>切换后，下载结果会自动关联到新镜头</p>
-        </div>
-        <button class="icon-button" id="shotDialogClose" type="button" aria-label="关闭">×</button>
-      </header>
-      <div class="shot-dialog-list" id="shotDialogList" role="list" aria-label="镜头列表"></div>
     </div>
   </dialog>
 
   <script src="assets/ui/creator/ui-icons.js"></script>
 <script src="creator.js"></script>
+<script src="creator-automation-ui.js"></script>
 </body>
 </html>

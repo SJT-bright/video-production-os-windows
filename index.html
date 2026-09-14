@@ -7,6 +7,8 @@
 <meta name="theme-color" content="#f5f5f7">
 <title>视频制作 OS</title>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="assets/ui/editor-exports.css">
+<link rel="stylesheet" href="assets/ui/asset-sources.css">
 <link rel="icon" type="image/png" href="assets/ui/creator/studio-3d-v1.png">
   <link rel="stylesheet" href="assets/ui/creator/ui-icons.css">
 </head>
@@ -15,7 +17,7 @@
 <!--
 THESIS: 视频制作 OS 是一套 macOS-first 的 AI 短剧制作工作台，以原生 Source List、Split View 和 Inspector 组织复杂生产流程。
 OWN-WORLD: 系统材质、清晰层级、Apple 蓝交互色与真实状态文字；不伪造 Finder、Dock 或网页交通灯。
-STORY: 用户从剧本拆解进入镜头台账，再把通过门禁的逐镜提示词送入创作浏览器并回收真实素材。
+STORY: 用户选择剧本，在 GPT 等网页准备提示词并创作，图片、视频与音频按剧本归档。
 FIRST VIEWPORT: 左侧工作流目录；右侧紧凑工具栏；下方继续工作、项目状态和真实索引。
 FORM: 用户钉选的内容资产后台结构；参考图是已批准构图，产品数据和功能由本地真实索引替换。
 -->
@@ -43,7 +45,7 @@ FORM: 用户钉选的内容资产后台结构；参考图是已批准构图，�
       </div>
       <div class="tb-search" id="tbSearchBox" title="全局搜索（⌘K）">
         <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path fill="currentColor" d="M10 2a8 8 0 1 0 4.9 14.32l5.39 5.39 1.41-1.41-5.39-5.39A8 8 0 0 0 10 2zm0 2a6 6 0 1 1 0 12 6 6 0 0 1 0-12z"/></svg>
-        <input id="tbSearch" type="search" placeholder="搜索剧本、素材、知识或规则" autocomplete="off" aria-label="全局搜索">
+        <input id="tbSearch" type="search" placeholder="搜索素材、知识或规则" autocomplete="off" aria-label="全局搜索">
         <kbd id="shortcutHint">⌘ K</kbd>
       </div>
       <div class="tb-actions">
@@ -159,6 +161,7 @@ FORM: 用户钉选的内容资产后台结构；参考图是已批准构图，�
       <button class="btn" id="lbReject">✕ 标为废片</button>
       <button class="btn" id="lbCopyPath">复制路径</button>
       <button class="btn" id="lbReveal">在文件夹中显示</button>
+      <button class="btn primary" id="lbUse">用于本剧</button>
     </div>
     <div class="lb-sidecar hidden" id="lbSidecar">
       <div class="lb-sidecar-head">
@@ -200,6 +203,8 @@ FORM: 用户钉选的内容资产后台结构；参考图是已批准构图，�
 
 <script src="vendor/marked.min.js"></script>
 <script src="assets/ui/creator/ui-icons.js"></script>
+<script src="assets/ui/editor-exports.js"></script>
+<script src="assets/ui/asset-sources.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

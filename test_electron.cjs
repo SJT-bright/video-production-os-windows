@@ -2,6 +2,7 @@
 
 const assert = require('assert/strict');
 const fs = require('fs');
+const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
 
@@ -27,6 +28,13 @@ async function run() {
   let child = null;
   let failed = false;
   try {
+    // 隔离前提：3785 必须空闲，避免把烟测流量/断言打到其他运行实例上。
+    await new Promise((resolve, reject) => {
+      const probe = net.createServer();
+      probe.once('error', error => reject(new Error(`烟测端口 3785 被占用（${error.code}），可能存在其他视频制作 OS 实例，已拒绝启动隔离烟测`)));
+      probe.once('listening', () => probe.close(() => resolve()));
+      probe.listen(3785, '127.0.0.1');
+    });
     const output = await new Promise((resolve, reject) => {
       child = spawn(electronExe, [__dirname], {
         cwd: __dirname,
@@ -68,7 +76,20 @@ async function run() {
     assert.match(output, /ELECTRON_SMOKE_PASS/, output);
     assert.match(output, /MODE_ISOLATION_PASS/, output);
     assert.match(output, /ASSET_OVERLAY_FOCUS_PASS/, output);
+    // 实例独立性：服务器横幅必须确认使用本次 runRoot 下的隔离数据目录。
+    assert.ok(output.includes(`OS 数据目录：${path.join(runRoot, 'data')}`), '烟测实例未确认使用隔离数据目录');
+    assert.match(output, /OVERLAY_SHIELD_PASS/, output);
+    assert.match(output, /PROJECT_SWITCH_IPC_PASS/, output);
+    assert.match(output, /FOCUS_LINK_PASS/, output);
+    assert.match(output, /SAME_WINDOW_NAVIGATION_PASS/, output);
+    console.log(output.match(/SAME_WINDOW_NAVIGATION_PASS[^\r\n]*/)?.[0]);
+    console.log(output.match(/FOCUS_LINK_PASS[^\r\n]*/)?.[0] || 'FOCUS_LINK_PASS 未产出');
     console.log(output.match(/ASSET_OVERLAY_FOCUS_PASS[^\r\n]*/)?.[0]);
+    console.log(output.match(/OVERLAY_SHIELD_PASS[^\r\n]*/)?.[0]);
+    console.log(output.match(/PROJECT_SWITCH_IPC_PASS[^\r\n]*/)?.[0]);
+    console.log(output.match(/POINTER_DIAG[^\r\n]*/)?.[0] || 'POINTER_DIAG 未产出');
+    console.log(output.match(/POINTER_VERDICT[^\r\n]*/)?.[0] || 'POINTER_VERDICT 未产出');
+    console.log(output.match(/SMOKE_WINDOW_CAPTURE[^\r\n]*/)?.[0] || 'SMOKE_WINDOW_CAPTURE_UNAVAILABLE（像素探针未产出）');
     console.log(output.match(/MODE_ISOLATION_PASS[^\r\n]*/)?.[0]);
     console.log(output.match(/ELECTRON_SMOKE_PASS[^\r\n]*/)?.[0] || 'ELECTRON_SMOKE_PASS');
   } catch (error) {

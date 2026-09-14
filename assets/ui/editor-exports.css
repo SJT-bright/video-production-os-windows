@@ -1,0 +1,36 @@
+.editor-exports-dialog {
+  box-sizing: border-box; width: 470px; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px);
+  padding: 20px; margin: auto; border: 1px solid #d8dae0; border-radius: 20px;
+  background: #f7f8fa; color: #202124; box-shadow: 0 24px 80px #17213d30;
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: auto;
+}
+.editor-exports-dialog::backdrop { background: #17213d38; }
+.editor-exports-dialog * { box-sizing: border-box; }
+.editor-exports-dialog .ee-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.editor-exports-dialog h2 { margin: 0; font: 650 20px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.editor-exports-dialog h3 { margin: 0 0 2px; font: 600 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.editor-exports-dialog button { font: inherit; cursor: pointer; white-space: nowrap; height: 30px; min-height: 30px; border-radius: 8px; padding: 0 11px; border: 1px solid #d8dae0; background: #fff; color: #25262a; }
+.editor-exports-dialog button:disabled { opacity: .5; cursor: default; }
+.editor-exports-dialog .ee-close { width: 28px; min-height: 28px; height: 28px; padding: 0; border: 0; background: #e9eaee; font-size: 20px; }
+.editor-exports-dialog .ee-project { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; color: #62656e; }
+.editor-exports-dialog select { min-width: 0; flex: 1; width: 100%; height: 34px; min-height: 34px; font: inherit; color: #25262a; border: 1px solid #d8dae0; border-radius: 8px; background: #fff; padding: 0 9px; }
+.editor-exports-dialog .ee-content { display: grid; gap: 10px; }
+.editor-exports-dialog .ee-card { padding: 14px; background: #fff; border: 1px solid #e0e2e7; border-radius: 14px; }
+.editor-exports-dialog .ee-card-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.editor-exports-dialog .ee-icon { width: 40px; height: 40px; object-fit: contain; flex-shrink: 0; }
+.editor-exports-dialog .ee-card-copy p { margin: 0; color: #777b84; font-size: 12px; }
+.editor-exports-dialog .ee-path { display: block; width: 100%; min-width: 0; height: 32px; min-height: 32px; padding: 0 8px; margin: 0 0 10px; border: 1px solid #e7e8ec; border-radius: 7px; font: 11px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; color: #595e69; background: #f6f7f9; text-overflow: ellipsis; }
+.editor-exports-dialog .ee-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.editor-exports-dialog .ee-copy { background: #087cff; border-color: #087cff; color: #fff; }
+.editor-exports-dialog .ee-count { margin-left: auto; font-size: 11px; color: #778078; }
+.editor-exports-dialog .ee-note { margin: 5px 0 0; font-size: 12px; color: #777b84; }
+.editor-exports-dialog .ee-status { min-height: 18px; margin: 10px 0 0; font-size: 12px; color: #29834a; }
+.editor-exports-dialog .ee-status:empty { display: none; }
+.editor-exports-dialog .ee-status.is-error { color: #be3c30; }
+.editor-exports-dialog .ee-loading { margin: 18px 0; color: #777b84; }
+.editor-exports-dialog :is(button, select, input):focus-visible { outline: 3px solid #087cff55; outline-offset: 2px; }
+@media (max-width: 400px) {
+  .editor-exports-dialog { padding: 15px; }
+  .editor-exports-dialog .ee-card { padding: 11px; }
+  .editor-exports-dialog .ee-count { flex-basis: 100%; margin: 0; }
+}

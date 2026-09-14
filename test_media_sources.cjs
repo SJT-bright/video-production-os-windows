@@ -168,11 +168,11 @@ try {
   }
 
   const scanned = store.scan();
-  assert.deepEqual(scanned.counts, { video: 4, image: 2, audio: 1 });
-  assert.equal(scanned.files.length, 7);
+  assert.deepEqual(scanned.counts, { video: 4, image: 2, audio: 3 });
+  assert.equal(scanned.files.length, 9);
   assert.equal(scanned.files.some(file => file.name === '海报.png'), false, '项目源不应索引图片');
-  assert.equal(scanned.files.some(file => file.name === '下载音频.wav'), false, '外部源不应索引音频');
-  assert.equal(scanned.files.some(file => file.name === '音乐.mp3'), false, '自选目录不应索引音频');
+  assert.equal(scanned.files.some(file => file.name === '下载音频.wav'), true, '外部源应索引音频');
+  assert.equal(scanned.files.some(file => file.name === '音乐.mp3'), true, '自选目录应索引音频');
   assert.equal(scanned.files.some(file => file.name === '隐藏.mp4'), false);
   assert.equal(scanned.files.some(file => file.name === '依赖画面.png'), false);
   assert.equal(scanned.sources.length, 3);
@@ -186,7 +186,7 @@ try {
   const resolvedVideo = store.resolveFile(downloads.id, '下载视频.mov');
   assert.equal(resolvedVideo.absolutePath, fs.realpathSync(path.join(downloadsRoot, '下载视频.mov')));
   assert.equal(resolvedVideo.assetKey, downloadedVideo.assetKey);
-  assert.equal(store.resolveFile(downloads.id, '下载音频.wav'), null);
+  assert.ok(store.resolveFile(downloads.id, '下载音频.wav'));
   assert.equal(store.resolveFile(downloads.id, '../下载视频.mov'), null);
   assert.equal(store.resolveFile(downloads.id, path.join(downloadsRoot, '下载视频.mov')), null);
   assert.equal(store.resolveFile('source-99999999-9999-4999-8999-999999999999', '下载视频.mov'), null);
