@@ -274,7 +274,16 @@ async function runOnce(attempt) {
     results.mtimeBadgeLocalTimezone = badge029.includes(expectedShort);
 
     // 音频板块：切到音频 chip 后只列音频
-    const trayPage0 = app.windows().find(w => w.url().includes('drag-tray.html'));
+    // Native WebContents can finish rendering before Playwright has registered
+    // the page target and delivered its URL. Wait for that separate boundary.
+    let trayPage0;
+    const trayPageDeadline = Date.now() + 10000;
+    while (Date.now() < trayPageDeadline) {
+      trayPage0 = app.windows().find(w => w.url().includes('drag-tray.html'));
+      if (trayPage0) break;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert.ok(trayPage0, `悬浮窗测试页面未注册：${app.windows().map(w => w.url()).join(', ')}`);
     await trayPage0.locator('.chip[data-filter="audio"]').click();
     let audioItems = { paths: [] };
     for (let i = 0; i < 20; i++) {

@@ -1,6 +1,6 @@
 {
   "name": "video-production-os",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "private": true,
   "description": "青春校园短剧项目的本地视频制作与创作浏览器工作台",
   "main": "electron/main.cjs",

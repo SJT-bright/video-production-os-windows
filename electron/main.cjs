@@ -1948,9 +1948,10 @@ function createDragTrayWindow() {
       try { fs.writeFileSync(dragTrayBoundsFile(), JSON.stringify(dragTrayWindow.getBounds())); } catch {}
     }, 300);
   };
-  dragTrayWindow.on('moved', saveBounds);
+  // move also covers setPosition-driven dragging on Windows; moved does not.
+  dragTrayWindow.on('move', saveBounds);
   dragTrayWindow.on('resize', saveBounds);
-  dragTrayWindow.on('closed', () => { dragTrayWindow = null; });
+  dragTrayWindow.on('closed', () => { clearTimeout(saveBoundsTimer); dragTrayWindow = null; });
   dragTrayWindow.once('ready-to-show', () => { if (dragTrayWindow && !dragTrayWindow.isDestroyed()) dragTrayWindow.showInactive(); });
   dragTrayWindow.loadURL(`${localServerInfo.url}/drag-tray.html`).catch(error => logDiagnostic('drag-tray-load', error));
   return dragTrayWindow;
@@ -2463,7 +2464,7 @@ function createFloatVideoWindow(asset) {
       try { fs.writeFileSync(floatVideoBoundsFile(), JSON.stringify(win.getBounds())); } catch {}
     }, 300);
   };
-  win.on('moved', saveBounds);
+  win.on('move', saveBounds);
   win.on('resize', saveBounds);
   win.on('closed', () => {
     clearTimeout(saveBoundsTimer);
