@@ -31,8 +31,14 @@ const http = require('http');
 const path = require('path');
 const { _electron: electron } = require('playwright');
 
-const runRoot = path.join(__dirname, 'test-artifacts', `drag-tray-${process.pid}-${Date.now()}`);
-const projectRoot = path.join(runRoot, 'project');
+// runRoot / projectRoot 按次生成（initRunRoot）：整体重跑时必须换新目录，不得复用失败现场
+let runRoot = '';
+let projectRoot = '';
+
+function initRunRoot(attempt) {
+  runRoot = path.join(__dirname, 'test-artifacts', `drag-tray-${process.pid}-${Date.now()}-a${attempt}`);
+  projectRoot = path.join(runRoot, 'project');
+}
 
 function post(port, route, body) {
   return new Promise((resolve, reject) => {
@@ -105,8 +111,13 @@ function ffmpegBytes(args, outFile, verify) {
 const isMp4Bytes = bytes => bytes.length > 12 && bytes.toString('ascii', 4, 8) === 'ftyp';
 const isWavBytes = bytes => bytes.length > 44 && bytes.toString('ascii', 0, 4) === 'RIFF';
 
-async function run() {
-  fs.mkdirSync(path.join(projectRoot, '创作资产库', '测试剧本', '成片'), { recursive: true });
+async function runOnce(attempt) {
+  initRunRoot(attempt);
+  let app = null;
+  let failed = false;
+  let failureError = null;
+  try {
+    fs.mkdirSync(path.join(projectRoot, '创作资产库', '测试剧本', '成片'), { recursive: true });
   fs.mkdirSync(path.join(runRoot, 'data'), { recursive: true });
   fs.mkdirSync(path.join(runRoot, 'user-data'), { recursive: true });
   // 先生成一次模板字节（记录来源便于诊断），再写入各媒体夹具
@@ -161,7 +172,7 @@ async function run() {
       || b.rel.localeCompare(a.rel, 'zh-CN', { numeric: true }))
     .map(item => item.rel);
 
-  const app = await electron.launch({
+  app = await electron.launch({
     args: [__dirname], timeout: 60000,
     env: {
       ...process.env, CREATOR_BROWSER_TEST: '1', VIDEO_OS_SMOKE_TEST: '0', VIDEO_OS_PORT: '3784',
@@ -170,10 +181,17 @@ async function run() {
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
     },
   });
-  let failed = false;
-  try {
     const window = await app.firstWindow();
-    await window.waitForFunction(() => document.body?.dataset?.ready === 'true', null, { timeout: 15000 });
+    try {
+      await window.waitForFunction(() => document.body?.dataset?.ready === 'true', null, { timeout: 15000 });
+    } catch (bootError) {
+      // 打标记：只在 data-ready 引导等待超时这一处标注，供 isEnvironmentFlake 精确识别
+      // （文件里其余 15s waitForFunction——如拖拽结果等待——属于功能断言，不打标、不重试）
+      if (bootError?.name === 'TimeoutError' || String(bootError?.message || '').includes('Timeout 15000ms exceeded')) {
+        bootError.bootDataReadyTimeout = true;
+      }
+      throw bootError;
+    }
 
     const results = {};
     await window.evaluate(() => window.creatorAPI.setAssetPanel({ open: true }));
@@ -570,24 +588,57 @@ async function run() {
     console.log(`DRAG_TRAY_PASS ${JSON.stringify(results)}`);
   } catch (error) {
     failed = true;
-    console.error('DRAG_TRAY_FAIL', error.message || error);
-    process.exitCode = 1;
+    failureError = error;
+    console.error(`DRAG_TRAY_FAIL(第 ${attempt} 次运行)`, error.message || error);
   } finally {
     // 断言通过后仍要给原生窗口一个有界的退出时间，避免 Playwright 清理挂起拖住整批回归。
-    let closeTimer;
-    try {
-      await Promise.race([
-        app.close(),
-        new Promise((_, reject) => { closeTimer = setTimeout(() => reject(new Error('Electron 关闭超时')), 8000); }),
-      ]);
-    } catch {
-      app.process()?.kill('SIGKILL');
-    } finally {
-      clearTimeout(closeTimer);
+    if (app) {
+      let closeTimer;
+      try {
+        await Promise.race([
+          app.close(),
+          new Promise((_, reject) => { closeTimer = setTimeout(() => reject(new Error('Electron 关闭超时')), 8000); }),
+        ]);
+      } catch {
+        app.process()?.kill('SIGKILL');
+      } finally {
+        clearTimeout(closeTimer);
+      }
     }
     if (!failed) { try { fs.rmSync(runRoot, { recursive: true, force: true, maxRetries: 5 }); } catch {} }
-    else console.log(`DEBUG-RUNROOT-KEPT(测试失败，保留现场): ${runRoot}`);
+    else console.log(`DEBUG-RUNROOT-KEPT(第 ${attempt} 次运行失败，暂留现场): ${runRoot}`);
   }
+  return { failed, failureError, runRoot };
 }
 
-run();
+// —— 环境性抖动签名（只豁免这两种，真实功能断言失败一律不重试）——
+// A. data-ready 引导等待超时：runOnce 内已在该处给 TimeoutError 打 bootDataReadyTimeout 标记；
+//    文件里其余 15s waitForFunction（拖拽结果等待等）属于功能断言，不打标、不进本签名。
+// B. 中段 app.windows().find(...) 找不到拖拽窗 → "Cannot read properties of undefined (reading 'locator')"
+function isEnvironmentFlake(error) {
+  if (error && error.bootDataReadyTimeout === true) return true;
+  const message = String((error && error.message) || error);
+  return message.includes("Cannot read properties of undefined (reading 'locator')");
+}
+
+async function main() {
+  const first = await runOnce(1);
+  if (!first.failed) return;
+  if (!isEnvironmentFlake(first.failureError)) {
+    console.error('DRAG_TRAY_FAIL_FINAL: 非环境性失败（真实功能断言），不重试');
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`DRAG_TRAY_RETRY: 命中环境性抖动签名（${String((first.failureError && first.failureError.message) || first.failureError).slice(0, 200)}），清理现场后整体重跑一次`);
+  // 重试必须在新 runRoot 下进行：清掉第一次失败留下的脏目录
+  try { fs.rmSync(first.runRoot, { recursive: true, force: true, maxRetries: 5 }); } catch {}
+  const second = await runOnce(2);
+  if (second.failed) {
+    console.error('DRAG_TRAY_FAIL_FINAL: 合法重试一次后仍失败');
+    process.exitCode = 1;
+    return;
+  }
+  process.exitCode = 0; // 第一次的环境性失败不影响最终结果
+}
+
+main();

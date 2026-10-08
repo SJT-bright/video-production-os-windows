@@ -125,3 +125,82 @@ body {
   .tray-card:hover { transform: none; box-shadow: none; }
   .tray-card:active { transform: none; }
 }
+
+/* ============================================================
+   动效层（motion）——纯观感层，行为红线一律不动：
+   .tray-card 的 draggable / dataset.path、.chip 的 data-filter、
+   #trayStatus 文案、120 项截断说明、批量选入顺序均与动效无关。
+   时长契约与主窗口/创作浏览器一致：进入 220ms / 退出 150ms / 开关回弹 260ms。
+   ============================================================ */
+:root {
+  --motion-ease-out: cubic-bezier(.22, 1, .36, 1);
+  --motion-ease-spring: cubic-bezier(.34, 1.2, .44, 1);
+  --motion-ease-in: cubic-bezier(.4, 0, .68, 1);
+}
+
+/* ---- 窗口内容入场：顶栏 + 列表整体淡入 + 6px 上移，260ms，仅加载首帧播一次。
+   挂在 JS 注入的一次性 body.motion-in 上（自动化环境不注入，页面完全静态）；
+   backwards 只覆盖延迟期，动画结束即回落原生样式，不干扰 hover/active 变换 ---- */
+@keyframes motionWindowIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+body.motion-in { animation: motionWindowIn 260ms var(--motion-ease-out) backwards; }
+
+/* ---- 列表首次渲染：前 12 张卡片 20ms 交错淡入，第 13 张起不选择器、直接显示。
+   首次渲染完成后 JS 摘除 motion-in，刷新/过滤切换的重渲染不再闪动 ---- */
+@keyframes motionCardIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+body.motion-in .tray-card:nth-child(1) { animation: motionCardIn 220ms var(--motion-ease-out) backwards; animation-delay: 0ms; }
+body.motion-in .tray-card:nth-child(2) { animation: motionCardIn 220ms var(--motion-ease-out) backwards; animation-delay: 20ms; }
+body.motion-in .tray-card:nth-child(3) { animation: motionCardIn 220ms var(--motion-ease-out) backwards; animation-delay: 40ms; }
+body.motion-in .tray-card:nth-child(4) { animation: motionCardIn 220ms var(--motion-ease-out) backwards; animation-delay: 60ms; }
+body.motion-in .tray-card:nth-child(5) { animation: motionCardIn 220ms var(--motion-ease-out) backwards; animation-delay: 80ms; }
+body.motion-in .tray-card:nth-child(6) { animation: motionCardIn 220ms var(--motion-ease-out) backwards; animation-delay: 100ms; }
+body.motion-in .tray-card:nth-child(7) { animation: motionCardIn 220ms var(--motion-ease-out) backwards; animation-delay: 120ms; }
+body.motion-in .tray-card:nth-child(8) { animation: motionCardIn 220ms var(--motion-ease-out) backwards; animation-delay: 140ms; }
+body.motion-in .tray-card:nth-child(9) { animation: motionCardIn 220ms var(--motion-ease-out) backwards; animation-delay: 160ms; }
+body.motion-in .tray-card:nth-child(10) { animation: motionCardIn 220ms var(--motion-ease-out) backwards; animation-delay: 180ms; }
+body.motion-in .tray-card:nth-child(11) { animation: motionCardIn 220ms var(--motion-ease-out) backwards; animation-delay: 200ms; }
+body.motion-in .tray-card:nth-child(12) { animation: motionCardIn 220ms var(--motion-ease-out) backwards; animation-delay: 220ms; }
+
+/* ---- 开关回弹：chip 切换、多选开关（aria-pressed）点击时播一次 260ms spring，
+   类名与 keyframes 是 drag-tray.js 委托监听的契约，勿改名 ---- */
+@keyframes motionTick {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+.motion-tick { animation: motionTick 260ms var(--motion-ease-spring); }
+
+/* ---- 卡片按压：比原层 scale(.99) 再深一档；既有 hover 过渡与拖拽样式不动 ---- */
+.tray-card:active { transform: translateY(0) scale(.98); }
+
+/* ---- 筛选换页：筛选值真正变化的那一次渲染，JS 给列表容器挂 .motion-swap 再自摘；
+   前 8 张卡 15ms 交错淡入 + 4px 上移，第 9 张起无动画、直接同步显示。
+   与首渲 body.motion-in 交错叠加时（载入后 900ms 内切筛选）：motion-in 带 body 前缀、
+   选择器优先级更高，交错由它接管，motion-swap 让位——同为淡入观感，可接受 ---- */
+@keyframes motionSwapIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.motion-swap .tray-card { animation: motionSwapIn 200ms var(--motion-ease-out) backwards; }
+.motion-swap .tray-card:nth-child(1) { animation-delay: 0ms; }
+.motion-swap .tray-card:nth-child(2) { animation-delay: 15ms; }
+.motion-swap .tray-card:nth-child(3) { animation-delay: 30ms; }
+.motion-swap .tray-card:nth-child(4) { animation-delay: 45ms; }
+.motion-swap .tray-card:nth-child(5) { animation-delay: 60ms; }
+.motion-swap .tray-card:nth-child(6) { animation-delay: 75ms; }
+.motion-swap .tray-card:nth-child(7) { animation-delay: 90ms; }
+.motion-swap .tray-card:nth-child(8) { animation-delay: 105ms; }
+
+/* ---- 动效层降级：prefers-reduced-motion 时关掉本层全部动画 ---- */
+@media (prefers-reduced-motion: reduce) {
+  body.motion-in,
+  body.motion-in .tray-card:nth-child(n),
+  .motion-tick,
+  .motion-swap .tray-card { animation: none !important; }
+  .tray-card:active { transform: translateY(0); }
+}

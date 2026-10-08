@@ -147,6 +147,8 @@ const ALLOWED_TAB_MENU_ACTIONS = new Set([
   'rename', 'duplicate', 'copy-url', 'pin', 'mute', 'restore',
   'close-left', 'close-others', 'close-right', 'close',
 ]);
+// 这四个动作在 creator 页 DOM 菜单里是红色危险项；native 通道不传外观，菜单窗按白名单 id 补齐。
+const TAB_MENU_DANGER_ACTIONS = new Set(['close-left', 'close-others', 'close-right', 'close']);
 const browserSessionStore = createBrowserSessionStore({
   filePath: path.join(app.getPath('userData'), 'creator-browser-session.json'),
   onWarning: message => console.warn(`[browser-session] ${message}`),
@@ -535,6 +537,24 @@ function showEmptyBrowserMode(mode) {
   applyCreatorLayout();
   pushBrowserState();
   return browserState();
+}
+
+async function confirmClearBrowserTabs() {
+  const win = creatorWindow;
+  const cancelled = () => ({ ...browserState(), clearCancelled: true });
+  if (!browserTabs.size || !win || win.isDestroyed()) return cancelled();
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'question',
+    title: '确认清空网页',
+    message: '确定清空全部网页吗？',
+    detail: '将关闭图片模式和视频模式的全部标签，网页中未提交的内容可能丢失。网站登录、剧本和素材会保留。',
+    buttons: ['取消', '清空网页'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+  if (response !== 1 || win.isDestroyed()) return cancelled();
+  return clearBrowserTabs();
 }
 
 function clearBrowserTabs() {
@@ -1945,6 +1965,319 @@ function toggleDragTrayWindow() {
   return { open: true };
 }
 
+// —— 标签右键菜单窗（无边框小窗版原生菜单）——
+// 原生 Menu.popup 的消失由操作系统控制（点击别处立即消失），实现不了「消失前驻留 500ms」；
+// 这里换成与剪映联动窗同款的无边框小窗：主进程推送白名单过滤后的条目，
+// blur / Esc 只启动驻留定时（500ms），驻留期内再次呼出＝取消消失、原地换内容；
+// 点选动作立即回执（不等 120ms 淡出动画），渲染层播完淡出后通知关窗。
+const TAB_MENU_DISMISS_DELAY_MS = 500;
+const TAB_MENU_FADE_MS = 120;
+let tabMenuWindow = null;
+// 当前菜单会话：{ settled, finish, owner, window, x, y, dwellTimer, fadeTimer, onOwnerClosed }
+let tabMenuSession = null;
+
+function isTrustedTabMenuSender(event) {
+  return !!tabMenuWindow && !tabMenuWindow.isDestroyed() && event.sender === tabMenuWindow.webContents;
+}
+
+function closeTabMenuWindowNow() {
+  if (tabMenuWindow && !tabMenuWindow.isDestroyed()) tabMenuWindow.close();
+}
+
+// 统一回执出口：resolve 之后驻留定时、owner 监听全部解除，结果只产出一次。
+function finishTabMenuSession(result) {
+  const session = tabMenuSession;
+  if (!session || session.settled) return;
+  session.settled = true;
+  clearTimeout(session.dwellTimer);
+  if (session.owner && !session.owner.isDestroyed()) session.owner.removeListener('closed', session.onOwnerClosed);
+  session.finish(result);
+}
+
+// blur / Esc 后不立即关窗：驻留 TAB_MENU_DISMISS_DELAY_MS 再回执 cancelled 并关闭；
+// 驻留期内再次右键呼出会由 openTabMenuWindow 清掉这个定时器——「消失前被再次唤起＝不消失」。
+function startTabMenuDwell() {
+  const session = tabMenuSession;
+  if (!session || session.settled) return;
+  clearTimeout(session.dwellTimer);
+  session.dwellTimer = setTimeout(() => {
+    finishTabMenuSession(null);
+    closeTabMenuWindowNow();
+  }, TAB_MENU_DISMISS_DELAY_MS);
+}
+
+// 点选后的兜底收窗：正常由渲染层淡出 120ms 后 dismiss 关闭，这里防渲染层崩溃留下空窗。
+function scheduleTabMenuFadeClose(delay = TAB_MENU_FADE_MS) {
+  const session = tabMenuSession;
+  if (!session) return;
+  clearTimeout(session.fadeTimer);
+  session.fadeTimer = setTimeout(closeTabMenuWindowNow, Math.max(0, delay));
+}
+
+function createTabMenuWindow() {
+  // 背景色与菜单底色一致（白），避免首次显示白闪；transparent 关闭，圆角边框由窗口自身绘制。
+  const win = new BrowserWindow({
+    width: 224, height: 64,
+    frame: false, transparent: false, resizable: false, movable: false,
+    minimizable: false, maximizable: false, fullscreenable: false,
+    skipTaskbar: true, show: false, useContentSize: true,
+    backgroundColor: '#ffffff', title: '标签菜单',
+    webPreferences: {
+      preload: path.join(__dirname, 'tab-menu-preload.cjs'),
+      nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true,
+    },
+  });
+  win.setAlwaysOnTop(true, 'floating');
+  win.on('blur', () => startTabMenuDwell());
+  win.webContents.on('render-process-gone', () => { finishTabMenuSession(null); closeTabMenuWindowNow(); });
+  win.on('closed', () => {
+    if (tabMenuWindow === win) tabMenuWindow = null;
+    if (tabMenuSession && tabMenuSession.window === win) {
+      finishTabMenuSession(null);
+      tabMenuSession = null;
+    }
+  });
+  tabMenuWindow = win;
+  win.loadURL(`${localServerInfo.url}/tab-menu.html`).catch(error => logDiagnostic('tab-menu-load', error));
+  return win;
+}
+
+// 打开（或复用）菜单窗：Promise 解析为选中的动作 id；null = cancelled（blur/Esc 驻留到期、
+// creator 窗口关闭、渲染层崩溃、被下一次呼出覆盖）。
+function openTabMenuWindow({ owner, x, y, entries }) {
+  if (!localServerInfo) throw new Error('本地服务尚未就绪');
+  return new Promise(resolve => {
+    const reuse = tabMenuWindow && !tabMenuWindow.isDestroyed();
+    const win = reuse ? tabMenuWindow : createTabMenuWindow();
+    // 新呼出接管窗口：上一个会话的定时器与 owner 监听全部解除；还没回执（blur 驻留中、
+    // 或点选淡出中被再次呼出）按取消处理，与「驻留期内再次呼出＝不消失」诉求一致。
+    if (tabMenuSession) {
+      clearTimeout(tabMenuSession.dwellTimer);
+      clearTimeout(tabMenuSession.fadeTimer);
+      finishTabMenuSession(null);
+      if (tabMenuSession.owner && !tabMenuSession.owner.isDestroyed()) {
+        tabMenuSession.owner.removeListener('closed', tabMenuSession.onOwnerClosed);
+      }
+    }
+    const session = {
+      settled: false, finish: resolve, owner, window: win, x, y,
+      dwellTimer: 0, fadeTimer: 0,
+      onOwnerClosed: () => { finishTabMenuSession(null); closeTabMenuWindowNow(); },
+    };
+    tabMenuSession = session;
+    owner.once('closed', session.onOwnerClosed);
+    const deliver = () => {
+      if (win.isDestroyed()) return;
+      win.webContents.send('tab-menu:show', { items: entries });
+    };
+    if (reuse && !win.webContents.isLoading()) {
+      deliver();
+    } else {
+      // 首建（或页面还在加载）：did-finish-load 后再推条目
+      win.webContents.once('did-finish-load', deliver);
+      win.webContents.once('did-fail-load', () => { finishTabMenuSession(null); closeTabMenuWindowNow(); });
+    }
+  });
+}
+
+// 渲染层回报内容尺寸后定位：creator 窗口内容区坐标 → 屏幕坐标，再按显示器 workArea 钳制，
+// 保证菜单完整可见（距可用区边缘至少 8px，与 creator 页 DOM 菜单的贴边策略一致）。
+ipcMain.on('tab-menu:report-size', (event, payload = {}) => {
+  if (!isTrustedTabMenuSender(event)) return;
+  const session = tabMenuSession;
+  if (!session || session.window !== tabMenuWindow || tabMenuWindow.isDestroyed()) return;
+  const width = Math.max(160, Math.min(480, Math.round(Number(payload.width) || 224)));
+  const height = Math.max(48, Math.min(640, Math.round(Number(payload.height) || 64)));
+  tabMenuWindow.setContentSize(width, height);
+  const [outerWidth, outerHeight] = tabMenuWindow.getSize();
+  const ownerBounds = session.owner && !session.owner.isDestroyed()
+    ? session.owner.getContentBounds()
+    : { x: 0, y: 0 };
+  const desiredX = Math.round(ownerBounds.x + session.x);
+  const desiredY = Math.round(ownerBounds.y + session.y);
+  let finalX = desiredX;
+  let finalY = desiredY;
+  try {
+    const area = screen.getDisplayNearestPoint({ x: desiredX, y: desiredY }).workArea;
+    finalX = Math.max(area.x + 8, Math.min(desiredX, area.x + area.width - outerWidth - 8));
+    finalY = Math.max(area.y + 8, Math.min(desiredY, area.y + area.height - outerHeight - 8));
+  } catch (error) {
+    logDiagnostic('tab-menu-position', error);
+  }
+  tabMenuWindow.setPosition(finalX, finalY);
+  if (!tabMenuWindow.isVisible()) {
+    tabMenuWindow.show();
+    tabMenuWindow.focus();
+  }
+});
+
+ipcMain.on('tab-menu:pick', (event, payload = {}) => {
+  if (!isTrustedTabMenuSender(event)) return;
+  const session = tabMenuSession;
+  if (!session || session.window !== tabMenuWindow || session.settled) return;
+  const id = typeof payload.id === 'string' ? payload.id : '';
+  // 双保险：渲染层被攻破也只能回传白名单动作
+  if (!ALLOWED_TAB_MENU_ACTIONS.has(id)) return;
+  finishTabMenuSession(id);
+  // 点选不驻留：回执已发出，只等渲染层播完 120ms 淡出后 dismiss 收窗（这里留兜底定时）
+  scheduleTabMenuFadeClose(TAB_MENU_FADE_MS + 300);
+});
+
+ipcMain.on('tab-menu:dismiss', event => {
+  if (!isTrustedTabMenuSender(event)) return;
+  const session = tabMenuSession;
+  if (!session || session.window !== tabMenuWindow || tabMenuWindow.isDestroyed()) return;
+  if (session.settled) {
+    // 点选淡出完成后的收尾信号：立即关窗
+    clearTimeout(session.fadeTimer);
+    closeTabMenuWindowNow();
+    return;
+  }
+  // Esc：与 blur 同一条驻留路径，500ms 后才回执 cancelled
+  startTabMenuDwell();
+});
+
+// —— 标签菜单小窗 · 确定性自测钩子（VIDEO_OS_TAB_MENU_TEST=1 时启用）——
+// 真实走 creator:show-tab-menu IPC → 菜单小窗 → 点选/取消回执全链路，供 test_creator_context_menu.cjs 驱动。
+const sleepMs = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function waitForTabMenuReady(check, rounds = 80) {
+  for (let i = 0; i < rounds; i++) {
+    if (await check()) return true;
+    await sleepMs(50);
+  }
+  return await check();
+}
+
+async function waitForTabMenuItems() {
+  const read = async () => {
+    if (!tabMenuWindow || tabMenuWindow.isDestroyed()) return null;
+    return tabMenuWindow.webContents.executeJavaScript(
+      `[...document.querySelectorAll('.tab-context-item')].map(item => ({ id: item.dataset.action || '', disabled: item.disabled, danger: item.classList.contains('danger') }))`
+    ).catch(() => null);
+  };
+  for (let i = 0; i < 80; i++) {
+    const items = await read();
+    if (Array.isArray(items) && items.length) return items;
+    await sleepMs(50);
+  }
+  throw new Error('菜单小窗未在时限内渲染出条目');
+}
+
+// 从 creator 渲染层发起真实 invoke；结果落到 window.__tabMenuProbeLog（数组按回执顺序）
+async function invokeTabMenuFromCreator(items, x = 80, y = 60) {
+  return creatorWindow.webContents.executeJavaScript(`
+    window.__tabMenuProbeLog = [];
+    window.creatorAPI.showTabContextMenu({ x: ${Number(x)}, y: ${Number(y)}, items: ${JSON.stringify(items)} })
+      .then(result => { window.__tabMenuProbeLog.push(result); },
+            error => { window.__tabMenuProbeLog.push({ invokeError: String(error && error.message || error) }); });
+    'invoked'
+  `);
+}
+
+async function readTabMenuProbes() {
+  return creatorWindow.webContents.executeJavaScript('window.__tabMenuProbeLog || []');
+}
+
+async function runTabMenuSelfTest() {
+  for (let i = 0; i < 100 && (!creatorWindow || creatorWindow.isDestroyed()); i++) await sleepMs(50);
+  if (!creatorWindow || creatorWindow.isDestroyed()) throw new Error('创作窗口未就绪');
+  const health = {};
+  const menuAlive = () => !!tabMenuWindow && !tabMenuWindow.isDestroyed() && tabMenuWindow.isVisible();
+
+  // ① 白名单过滤 + 定位钳制 + 点选回执：非白名单 id / 空 id 不渲染，窗口完整落在 workArea 内
+  await invokeTabMenuFromCreator([
+    { id: 'pin', label: '固定标签' },
+    { id: 'evil-action', label: '不该出现' },
+    { id: '', label: '空id' },
+    { separator: true },
+    { id: 'close', label: '关闭标签' },
+  ]);
+  let items = await waitForTabMenuItems();
+  if (items.some(item => item.id === 'evil-action' || item.id === '')) throw new Error(`白名单外条目被渲染：${JSON.stringify(items)}`);
+  if (!items.some(item => item.id === 'pin') || !items.some(item => item.id === 'close')) throw new Error(`白名单内条目丢失：${JSON.stringify(items)}`);
+  const bounds = tabMenuWindow.getBounds();
+  const area = screen.getDisplayNearestPoint({ x: bounds.x, y: bounds.y }).workArea;
+  if (bounds.x < area.x || bounds.y < area.y
+    || bounds.x + bounds.width > area.x + area.width + 1
+    || bounds.y + bounds.height > area.y + area.height + 1) {
+    throw new Error(`菜单窗越出显示器可用区：${JSON.stringify({ bounds, area })}`);
+  }
+  health.filterAndPosition = 'pass';
+  await tabMenuWindow.webContents.executeJavaScript(`document.querySelector('[data-action="pin"]')?.click()`);
+  if (!await waitForTabMenuReady(async () => (await readTabMenuProbes()).some(r => r && r.action === 'pin'))) {
+    throw new Error(`点选回执缺失：${JSON.stringify(await readTabMenuProbes())}`);
+  }
+  health.pickReceipt = 'pass';
+  if (!await waitForTabMenuReady(async () => !menuAlive())) throw new Error('点选后菜单窗未在时限内关闭');
+  await sleepMs(50);
+
+  // ② 禁用项 + Esc 驻留：点禁用项无回执，Esc 不立即关窗，驻留 500ms 后回执 cancelled
+  await invokeTabMenuFromCreator([
+    { id: 'close-left', label: '关闭左侧标签', enabled: false },
+    { id: 'close', label: '关闭标签' },
+  ]);
+  items = await waitForTabMenuItems();
+  const disabledItem = items.find(item => item.id === 'close-left');
+  if (!disabledItem || disabledItem.disabled !== true) throw new Error(`禁用态未渲染：${JSON.stringify(items)}`);
+  await tabMenuWindow.webContents.executeJavaScript(`document.querySelector('[data-action="close-left"]')?.click()`);
+  await sleepMs(200);
+  if ((await readTabMenuProbes()).length) throw new Error('禁用项点击产生了回执');
+  await tabMenuWindow.webContents.executeJavaScript(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+  await sleepMs(150);
+  if (!menuAlive()) throw new Error('Esc 后未驻留：菜单窗被立即关闭');
+  if (!await waitForTabMenuReady(async () => !menuAlive())) throw new Error('Esc 驻留后菜单窗未关闭');
+  const escProbes = await readTabMenuProbes();
+  if (!escProbes.length || escProbes[0].cancelled !== true) throw new Error(`Esc 回执不是 cancelled：${JSON.stringify(escProbes)}`);
+  health.escDwell = 'pass';
+
+  // ③ 驻留期内再次呼出＝取消消失、原地换内容：首个会话回执 cancelled，新菜单条目可点选
+  await invokeTabMenuFromCreator([{ id: 'pin', label: '固定标签' }]);
+  await waitForTabMenuItems();
+  await tabMenuWindow.webContents.executeJavaScript(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+  await sleepMs(100);
+  await invokeTabMenuFromCreator([{ id: 'close', label: '关闭标签' }]);
+  await waitForTabMenuItems();
+  await tabMenuWindow.webContents.executeJavaScript(`document.querySelector('[data-action="close"]')?.click()`);
+  if (!await waitForTabMenuReady(async () => {
+    const probes = await readTabMenuProbes();
+    return probes.length >= 2 && probes[0].cancelled === true && probes[1] && probes[1].action === 'close';
+  })) {
+    throw new Error(`重呼会话回执异常：${JSON.stringify(await readTabMenuProbes())}`);
+  }
+  health.recallDuringDwell = 'pass';
+
+  // ④ blur 驻留：点击窗口外（blur）不立即消失，500ms 后回执 cancelled（与 Esc 同一条驻留路径）
+  await invokeTabMenuFromCreator([{ id: 'pin', label: '固定标签' }]);
+  await waitForTabMenuItems();
+  tabMenuWindow.emit('blur');
+  await sleepMs(150);
+  if (!menuAlive()) throw new Error('blur 后未驻留：菜单窗被立即关闭');
+  if (!await waitForTabMenuReady(async () => !menuAlive())) throw new Error('blur 驻留后菜单窗未关闭');
+  const blurProbes = await readTabMenuProbes();
+  if (!blurProbes.length || blurProbes[0].cancelled !== true) throw new Error(`blur 回执不是 cancelled：${JSON.stringify(blurProbes)}`);
+  health.blurDwell = 'pass';
+
+  // ⑤ 边缘坐标钳制：请求点远超屏幕时菜单必须被拉回 workArea 内且仍可点选
+  await invokeTabMenuFromCreator([{ id: 'restore', label: '重新打开关闭的标签', accelerator: 'CmdOrCtrl+Shift+T' }], 4000, 2400);
+  items = await waitForTabMenuItems();
+  const edgeBounds = tabMenuWindow.getBounds();
+  const edgeArea = screen.getDisplayNearestPoint({ x: edgeBounds.x, y: edgeBounds.y }).workArea;
+  if (edgeBounds.x < edgeArea.x || edgeBounds.y < edgeArea.y
+    || edgeBounds.x + edgeBounds.width > edgeArea.x + edgeArea.width + 1
+    || edgeBounds.y + edgeBounds.height > edgeArea.y + edgeArea.height + 1) {
+    throw new Error(`边缘请求未被钳制进可用区：${JSON.stringify({ edgeBounds, edgeArea })}`);
+  }
+  await tabMenuWindow.webContents.executeJavaScript(`document.querySelector('[data-action="restore"]')?.click()`);
+  if (!await waitForTabMenuReady(async () => (await readTabMenuProbes()).some(r => r && r.action === 'restore'))) {
+    throw new Error('钳制后的菜单点选无回执');
+  }
+  health.edgeClamp = 'pass';
+
+  console.log(`TAB_MENU_IPC_PASS ${JSON.stringify(health)}`);
+  app.quit();
+}
+
 // —— 单视频置顶浮窗（创作浏览器左栏右键 → 浮到最顶层 → 从浮窗原生拖进剪映）——
 // 与剪映联动窗的关系：同一套安全边界（requireTrusted + requireCreativeAsset + webContents.startDrag），
 // 但这里是「一次一个视频」的独立窗口，不参与联动窗的多选整批拖出，也不改动它的任何行为。
@@ -2393,7 +2726,7 @@ function registerIpc() {
 
   ipcMain.handle('creator:clear-tabs', event => {
     requireTrusted(event, 'creator');
-    return clearBrowserTabs();
+    return confirmClearBrowserTabs();
   });
 
   ipcMain.handle('creator:set-browser-bounds', (event, bounds = {}) => {
@@ -2672,8 +3005,9 @@ function registerIpc() {
     return true;
   });
 
-  // 标签右键菜单用系统原生 Menu.popup：DOM 浮层会被上层 WebContentsView 内嵌网页盖住，
-  // 原生菜单由操作系统绘制，永远显示在最上层。渲染端只传条目描述与弹出坐标。
+  // 标签右键菜单：原生 Menu.popup 的消失时机由操作系统控制，做不了「消失前驻留 500ms」，
+  // 桌面端改用无边框菜单小窗（与剪映联动窗同款架构，见 openTabMenuWindow）。
+  // 渲染端契约不变：invoke 传 { x, y, items }，返回 { action: '<id>' } 或 { cancelled: true }。
   ipcMain.handle('creator:show-tab-menu', async (event, payload = {}) => {
     requireTrusted(event, 'creator');
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('标签菜单参数无效');
@@ -2688,7 +3022,7 @@ function registerIpc() {
     for (const raw of rawItems) {
       if (!raw || typeof raw !== 'object') continue;
       if (raw.separator) {
-        // 连续分隔线与首尾多余分隔线都收掉，保持原生菜单干净。
+        // 连续分隔线与首尾多余分隔线都收掉，保持菜单干净。
         if (entries.length && !entries[entries.length - 1].separator) entries.push({ separator: true });
         continue;
       }
@@ -2700,38 +3034,13 @@ function registerIpc() {
         id,
         label,
         enabled: raw.enabled !== false,
+        danger: TAB_MENU_DANGER_ACTIONS.has(id),
         accelerator: typeof raw.accelerator === 'string' && raw.accelerator.length <= 40 ? raw.accelerator : '',
       });
     }
     while (entries.length && entries[entries.length - 1].separator) entries.pop();
     if (!entries.some(item => !item.separator)) return { cancelled: true };
-    const action = await new Promise((resolve, reject) => {
-      let settled = false;
-      const finish = value => {
-        if (settled) return;
-        settled = true;
-        owner.removeListener('closed', onClosed);
-        resolve(value);
-      };
-      const onClosed = () => finish(null);
-      owner.once('closed', onClosed);
-      try {
-        const menu = Menu.buildFromTemplate(entries.map(item => item.separator ? { type: 'separator' } : {
-          label: item.label,
-          enabled: item.enabled,
-          ...(item.accelerator ? { accelerator: item.accelerator, registerAccelerator: false } : {}),
-          click: () => finish(item.id),
-        }));
-        menu.popup({
-          window: owner, x, y,
-          // Let the selected item's click arrive before treating dismissal as cancel.
-          callback: () => setImmediate(() => finish(null)),
-        });
-      } catch (error) {
-        owner.removeListener('closed', onClosed);
-        reject(error);
-      }
-    });
+    const action = await openTabMenuWindow({ owner, x, y, entries });
     if (!action) return { cancelled: true };
     return { action };
   });
@@ -3090,6 +3399,12 @@ if (!gotSingleInstanceLock) {
       if (!registered) logDiagnostic('global-shortcut', 'Alt+Shift+D 注册失败：快捷键可能被其他应用占用');
     } catch (error) { logDiagnostic('global-shortcut', error); }
     app.on('will-quit', () => { try { globalShortcut.unregisterAll(); } catch {} });
+    if (process.env.VIDEO_OS_TAB_MENU_TEST === '1') {
+      runTabMenuSelfTest().catch(error => {
+        console.error(`TAB_MENU_IPC_FAIL ${error.stack || error}`);
+        app.quit();
+      });
+    }
     if (SMOKE_TEST) {
       setTimeout(async () => {
         try {

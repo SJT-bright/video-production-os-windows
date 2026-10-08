@@ -440,3 +440,61 @@ dialog { color: var(--text); }
 /* 视频展开审核：预览对话框放大，视频与审核动作同屏 */
 .preview-dialog.video-review { width: min(1100px, calc(100% - 24px)); }
 .preview-dialog.video-review #previewMedia video { width: 100%; max-height: calc(100vh - 220px); }
+
+/* ---------- 动效层（与主窗口同一套动效契约） ----------
+   对话框进入 280ms / backdrop 240ms，退出 180ms。进入动画由 CSS 按 [open] 自动播放，
+   退出统一由 JS 加 motion-close 后播放。缩放与位移直接放在 dialog 本体：
+   本页两个对话框自身都没有 overflow 裁剪，box-shadow 与自身的 backdrop-filter
+   不会被裁切，无需把 transform 拆到 .preview-frame / .folder-form 内容容器。 */
+:root {
+  --motion-ease-out: cubic-bezier(.22, 1, .36, 1);
+  --motion-ease-spring: cubic-bezier(.34, 1.2, .44, 1);
+  --motion-ease-in: cubic-bezier(.4, 0, .68, 1);
+}
+
+@keyframes dialogSheetIn {
+  from { opacity: 0; transform: translateY(10px) scale(.965); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes dialogSheetOut {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(6px) scale(.97); }
+}
+@keyframes backdropIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes backdropOut { from { opacity: 1; } to { opacity: 0; } }
+@keyframes motionTick {
+  0% { transform: scale(1); }
+  35% { transform: scale(.94); }
+  100% { transform: scale(1); }
+}
+
+.preview-dialog[open], .folder-dialog[open] { animation: dialogSheetIn 280ms var(--motion-ease-spring); }
+.preview-dialog[open]::backdrop, .folder-dialog[open]::backdrop { animation: backdropIn 240ms var(--motion-ease-out); }
+/* 退出：[open].motion-close 优先级高于上面的进入规则，保证同屏只播退场动画；forwards 钉住淡出终态。 */
+.preview-dialog[open].motion-close, .folder-dialog[open].motion-close { animation: dialogSheetOut 180ms var(--motion-ease-in) forwards; }
+.preview-dialog[open].motion-close::backdrop, .folder-dialog[open].motion-close::backdrop { animation: backdropOut 180ms var(--motion-ease-in) forwards; }
+
+/* Toast：保留原有自下而上的位移方向，补轻微 scale 与弹簧缓动（覆盖上方 140ms ease 的旧 transition）。 */
+.asset-toast { transform: translateY(6px) scale(.97); transition: opacity 200ms var(--motion-ease-out), transform 240ms var(--motion-ease-spring); }
+.asset-toast.show { transform: translateY(0) scale(1); }
+
+/* 按压反馈：已有 transform 过渡的按钮组统一压到 .96；卡片按下轻微缩小（hover 上浮保留）。 */
+.icon-button:active:not(:disabled), .quiet-button:active:not(:disabled), .primary-button:active:not(:disabled),
+.layout-switch button:active:not(:disabled), .type-filter button:active:not(:disabled), .text-button:active:not(:disabled) {
+  transform: scale(.96);
+}
+.asset-card:active { transform: scale(.98); }
+
+/* 本层新增动画的降级。::backdrop 不匹配全局规则里的 *,::before,::after，必须显式列出；
+   动画被关掉后 closeCreatorDialog 走 260ms 兜底定时器，关闭流程不受影响。 */
+@media (prefers-reduced-motion: reduce) {
+  .preview-dialog[open], .folder-dialog[open],
+  .preview-dialog[open].motion-close, .folder-dialog[open].motion-close,
+  .preview-dialog[open]::backdrop, .folder-dialog[open]::backdrop,
+  .preview-dialog[open].motion-close::backdrop, .folder-dialog[open].motion-close::backdrop,
+  button.motion-tick { animation: none; }
+  .asset-toast, .asset-toast.show { transition: none; }
+  .icon-button:active:not(:disabled), .quiet-button:active:not(:disabled), .primary-button:active:not(:disabled),
+  .layout-switch button:active:not(:disabled), .type-filter button:active:not(:disabled),
+  .text-button:active:not(:disabled), .asset-card:active { transform: none; }
+}

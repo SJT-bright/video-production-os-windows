@@ -1,0 +1,54 @@
+/* ============================================================
+   标签右键菜单小窗 · 无边框窗口渲染层
+   样式复刻 creator 页 .tab-context-menu（白底卡片、圆角、danger 红项、分隔线），
+   变量取 creator.css :root 子集；窗口 backgroundColor 与卡片底色一致，避免白闪。
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --fill: rgba(120, 120, 128, .10);
+  --line: rgba(60, 60, 67, .12);
+  --line-strong: rgba(60, 60, 67, .22);
+  --text: #1d1d1f;
+  --faint: rgba(60, 60, 67, .44);
+  --danger: #ff3b30;
+}
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #fff; }
+body {
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+button { color: inherit; font: inherit; -webkit-tap-highlight-color: transparent; }
+button:focus-visible { outline: none; }
+
+.menu-root {
+  min-width: 208px; width: 100%; height: 100%;
+  padding: 5px; border: 1px solid var(--line-strong); border-radius: 10px;
+  background: #fff;
+}
+.tab-context-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  width: 100%; padding: 6px 10px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--text); font-size: 12px; font-weight: 500;
+  cursor: pointer; text-align: left;
+}
+.tab-context-item:hover:not(:disabled), .tab-context-item:focus-visible:not(:disabled) { background: var(--fill); }
+.tab-context-item:disabled { color: var(--faint); cursor: default; }
+.tab-context-item.danger { color: var(--danger); }
+.tab-context-item .tab-context-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-context-item .tab-context-hint { flex: none; font-size: 10.5px; color: var(--faint); }
+.tab-context-separator { height: 1px; margin: 4px 8px; background: var(--line); }
+
+/* 进入 140ms 淡入＋4px 上移；点选/Esc 后 120ms 淡出。
+   消失时机由主进程裁决：点选回执不等动画，Esc/blur 驻留 500ms 后才关窗。 */
+.menu-root.entering { animation: tab-menu-pop 140ms ease-out; }
+@keyframes tab-menu-pop {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.menu-root.closing { animation: tab-menu-fade 120ms ease-in forwards; }
+@keyframes tab-menu-fade {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}

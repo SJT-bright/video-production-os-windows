@@ -36,6 +36,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:browser-session
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($suite in @('test_browser_address.cjs', 'test_creator_platforms.cjs', 'test_media_sources.cjs', 'test_download_router.cjs', 'test_editor_exports.cjs', 'test_asset_linkage.cjs', 'test_build_manifest.cjs', 'test_creator_context_menu.cjs', 'test_float_video_native.cjs', 'test_drag_tray.cjs')) {
+            node $suite
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - name: Build Windows package
         run: npm run build:windows:release

@@ -57,6 +57,54 @@ async function requestAction(url) {
   return data;
 }
 
+/* ---------- 动效工具（与主窗口共用同一套动效契约） ---------- */
+
+const MOTION_CLOSE_SHEET_NAMES = ['dialogSheetOut', 'backdropOut'];
+
+// 一次性动效：给 node 加 class，动画结束或 fallbackMs 超时后移除；先到者生效并清理另一方。
+// animationend 只认 node 本身 + 名单内的动画名——子元素动画会冒泡上来，
+// ::backdrop 的 animationend 也派发到宿主（target 仍是 node），靠动画名区分 sheet 与 backdrop。
+function playMotionClass(node, cls, fallbackMs, animationNames, onDone) {
+  if (!node || node.classList.contains(cls)) return;
+  const names = new Set(animationNames);
+  let settled = false;
+  const settle = (cancelled = false) => {
+    if (settled) return;
+    settled = true;
+    node.removeEventListener('animationend', onEnd);
+    clearTimeout(timer);
+    node.classList.remove(cls);
+    if (!cancelled && onDone) onDone();
+  };
+  const onEnd = event => {
+    if (event.target !== node || !names.has(event.animationName)) return;
+    settle();
+  };
+  const timer = setTimeout(() => settle(), fallbackMs);
+  node.classList.add(cls);
+  node.addEventListener('animationend', onEnd);
+  return () => settle(true);
+}
+
+// 带退出动画的关闭：只延迟 close 本体，不改变调用方控制流；正在关闭或已关闭时直接返回（幂等）。
+function closeCreatorDialog(dialog) {
+  if (!dialog || !dialog.open || dialog.classList.contains('motion-close')) return;
+  dialog.__motionCloseCancel = playMotionClass(dialog, 'motion-close', 260, MOTION_CLOSE_SHEET_NAMES, () => {
+    dialog.__motionCloseCancel = null;
+    dialog.close();
+  });
+}
+
+// 打开包装：showModal 前清掉可能残留的退出动画 class，避免刚打开就播关闭动画；
+// 上一次关闭动画未播完就再次打开时 dialog 仍处于 open，取消关闭原地恢复即可
+//（此时再 showModal 会抛 InvalidStateError）。
+function openCreatorDialog(dialog) {
+  dialog.__motionCloseCancel?.();
+  dialog.__motionCloseCancel = null;
+  dialog.classList.remove('motion-close');
+  if (!dialog.open) dialog.showModal();
+}
+
 const NATIVE_API = window.assetAPI;
 const API = NATIVE_API || createBrowserAdapter();
 const state = {
@@ -733,7 +781,7 @@ function openRenameDialog(item) {
   renameTarget = item;
   el.renameDialogFrom.textContent = `位置：${item.folderPath || '创作资产库'}`;
   el.renameInput.value = item.name.replace(/\.[^.]+$/, '');
-  el.renameDialog.showModal();
+  openCreatorDialog(el.renameDialog);
   requestAnimationFrame(() => { el.renameInput.focus(); el.renameInput.select(); });
 }
 
@@ -743,7 +791,7 @@ async function submitRename() {
   if (!item || !name) { el.renameInput.focus(); return; }
   try {
     const result = await postAssetAction('rename', { path: item.path, name });
-    el.renameDialog.close();
+    closeCreatorDialog(el.renameDialog);
     showToast(`已重命名为「${result.name}」`);
     await loadLibrary({ select: state.selectedFolder });
   } catch (error) {
@@ -778,13 +826,13 @@ function openMoveDialog(paths) {
     empty.textContent = '没有可移动到的其他文件夹。';
     el.moveFolderList.appendChild(empty);
   }
-  el.moveDialog.showModal();
+  openCreatorDialog(el.moveDialog);
 }
 
 async function submitMove(folderPath) {
   const paths = [...moveTargets];
-  if (!paths.length) { el.moveDialog.close(); return; }
-  el.moveDialog.close();
+  if (!paths.length) { closeCreatorDialog(el.moveDialog); return; }
+  closeCreatorDialog(el.moveDialog);
   let moved = 0;
   const failed = [];
   for (const path of paths) {
@@ -903,8 +951,8 @@ function clearPreview() {
 }
 
 function closePreviewNow() {
-  clearPreview();
-  el.previewDialog.close();
+  // 清理改由 close 事件统一执行（bindEvents 已监听），退出动画期间预览画面保持原样。
+  closeCreatorDialog(el.previewDialog);
 }
 
 function openPreview(item) {
@@ -955,7 +1003,7 @@ function openPreview(item) {
     otherPreview.append(glyph, copy);
     el.previewMedia.appendChild(otherPreview);
   }
-  el.previewDialog.showModal();
+  openCreatorDialog(el.previewDialog);
 }
 
 function waitForMedia(media, eventName) {
@@ -1260,7 +1308,7 @@ function openFolderDialog({ parent = '' } = {}) {
   el.folderDialogTitle.textContent = '新建子文件夹';
   el.folderDialogParent.textContent = `位置：${folderLabel(parent)}`;
   el.folderName.value = '';
-  el.folderDialog.showModal();
+  openCreatorDialog(el.folderDialog);
   requestAnimationFrame(() => el.folderName.focus());
 }
 
@@ -1274,7 +1322,7 @@ async function createFolder() {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-  el.folderDialog.close();
+  closeCreatorDialog(el.folderDialog);
   await loadLibrary({ select: data.folder?.path || state.folderParent });
   showToast(`已创建：${data.folder?.path || name}`);
 }
@@ -1508,7 +1556,7 @@ async function openScriptSwitch() {
   loading.className = 'script-switch-empty';
   loading.textContent = '正在读取剧本…';
   el.scriptSwitchList.appendChild(loading);
-  el.scriptSwitchDialog.showModal();
+  openCreatorDialog(el.scriptSwitchDialog);
   let projects = [];
   try {
     const response = await fetch('/api/creative-projects', { cache: 'no-store' });
@@ -1545,7 +1593,7 @@ async function openScriptSwitch() {
     meta.textContent = `${Number(project.assetCount) || 0} 项资产`;
     row.append(name, meta);
     row.addEventListener('click', async () => {
-      if (project.id === activeId) { el.scriptSwitchDialog.close(); return; }
+      if (project.id === activeId) { closeCreatorDialog(el.scriptSwitchDialog); return; }
       try {
         const response = await fetch(`/api/creative-projects?project=${encodeURIComponent(activeProjectId())}`, {
           method: 'POST',
@@ -1555,7 +1603,7 @@ async function openScriptSwitch() {
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
         adoptProject(data.project);
-        el.scriptSwitchDialog.close();
+        closeCreatorDialog(el.scriptSwitchDialog);
         showToast(`已切换到「${project.name}」`);
         await loadLibrary();
       } catch (error) {
@@ -1630,10 +1678,10 @@ function bindEvents() {
     normalizeNames().catch(error => showToast(error.message));
   });
   el.switchScript.addEventListener('click', () => openScriptSwitch().catch(error => showToast(error.message)));
-  el.scriptSwitchClose.addEventListener('click', () => el.scriptSwitchDialog.close());
-  el.scriptSwitchCancel.addEventListener('click', () => el.scriptSwitchDialog.close());
+  el.scriptSwitchClose.addEventListener('click', () => closeCreatorDialog(el.scriptSwitchDialog));
+  el.scriptSwitchCancel.addEventListener('click', () => closeCreatorDialog(el.scriptSwitchDialog));
   el.scriptSwitchDialog.addEventListener('click', event => {
-    if (event.target === el.scriptSwitchDialog) el.scriptSwitchDialog.close();
+    if (event.target === el.scriptSwitchDialog) closeCreatorDialog(el.scriptSwitchDialog);
   });
   el.importAssets.addEventListener('click', () => {
     if (state.audioKind) { pickAudioFile(); return; }
@@ -1675,7 +1723,7 @@ function bindEvents() {
     event.preventDefault();
     createFolder().catch(error => showToast(`创建失败：${error.message}`));
   });
-  const closeFolder = () => el.folderDialog.close();
+  const closeFolder = () => closeCreatorDialog(el.folderDialog);
   el.cancelFolder.addEventListener('click', closeFolder);
   el.cancelFolderTop.addEventListener('click', closeFolder);
   el.assetSearch.addEventListener('input', () => {
@@ -1714,12 +1762,25 @@ function bindEvents() {
     event.preventDefault();
     submitRename();
   });
-  el.cancelRename.addEventListener('click', () => el.renameDialog.close());
-  el.cancelRenameTop.addEventListener('click', () => el.renameDialog.close());
-  el.renameDialog.addEventListener('click', event => { if (event.target === el.renameDialog) el.renameDialog.close(); });
-  el.cancelMove.addEventListener('click', () => el.moveDialog.close());
-  el.cancelMoveTop.addEventListener('click', () => el.moveDialog.close());
-  el.moveDialog.addEventListener('click', event => { if (event.target === el.moveDialog) el.moveDialog.close(); });
+  el.cancelRename.addEventListener('click', () => closeCreatorDialog(el.renameDialog));
+  el.cancelRenameTop.addEventListener('click', () => closeCreatorDialog(el.renameDialog));
+  el.renameDialog.addEventListener('click', event => { if (event.target === el.renameDialog) closeCreatorDialog(el.renameDialog); });
+  el.cancelMove.addEventListener('click', () => closeCreatorDialog(el.moveDialog));
+  el.cancelMoveTop.addEventListener('click', () => closeCreatorDialog(el.moveDialog));
+  el.moveDialog.addEventListener('click', event => { if (event.target === el.moveDialog) closeCreatorDialog(el.moveDialog); });
+  // Esc 走原生 cancel：默认立即 close 会跳过退出动画，统一转交动画关闭；
+  // 关闭动画期间重复触发由 closeCreatorDialog 的幂等守卫兜住。
+  [el.previewDialog, el.folderDialog, el.renameDialog, el.moveDialog, el.scriptSwitchDialog].forEach(dialog => {
+    dialog.addEventListener('cancel', event => {
+      event.preventDefault();
+      closeCreatorDialog(dialog);
+    });
+  });
+  // 与主窗口一致的开关回弹：本页大量 aria-pressed 开关，点击时统一播放一次 motion-tick。
+  document.addEventListener('click', event => {
+    const toggle = event.target.closest?.('button[aria-pressed]');
+    if (toggle) playMotionClass(toggle, 'motion-tick', 320, ['motionTick']);
+  });
   // 多选批量操作栏
   el.selectVisible.addEventListener('click', () => {
     document.querySelectorAll('.asset-card').forEach(card => state.selectedPaths.add(card.dataset.path));

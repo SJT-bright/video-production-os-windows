@@ -2473,3 +2473,134 @@ h1, h2, h3, h4, .brand-copy b {
   .project-media-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .audio-hero > span { display: none; }
 }
+
+/* ============================================================
+   动效层（motion）· 2026-10-03
+   与创作浏览器 creator.css 动效层同一套语言，主窗口复用同一观感。
+   类名与时数字是 JS 契约（JS 兜底定时器按这些毫秒等待），勿改。
+   约定：进入动画直接写在元素上，display:none → 显示时自动重放，
+   JS 无需为进入加 class；退出统一由 JS 加 .is-closing，等动画走完
+   （面板/弹层 150ms）再加 .hidden。
+   ============================================================ */
+:root {
+  --motion-ease-out: cubic-bezier(.22, 1, .36, 1);
+  --motion-ease-spring: cubic-bezier(.34, 1.2, .44, 1);
+  --motion-ease-in: cubic-bezier(.4, 0, .68, 1);
+}
+
+/* ---- keyframes ---- */
+@keyframes motionFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes motionFadeOut {
+  to { opacity: 0; }
+}
+@keyframes motionPanelIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes motionPanelOut {
+  to { opacity: 0; transform: translateY(6px); }
+}
+@keyframes motionLightboxIn {
+  from { opacity: 0; transform: scale(.985); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes motionLightboxOut {
+  to { opacity: 0; transform: scale(.985); }
+}
+@keyframes motionWinIn {
+  from { opacity: 0; transform: scale(.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+/* toast 锚定在 left:50%，两帧都必须带 translateX(-50%)，否则入场会横移 */
+@keyframes motionToastIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+@keyframes motionToastOut {
+  to { opacity: 0; transform: translateX(-50%) translateY(-6px); }
+}
+@keyframes motionSelbarIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes motionTick {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+@keyframes motionShellIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ---- 全局搜索面板：overlay 背板淡入，内容框 8px 上移；覆盖旧 winIn（.sp-box 825 行） ---- */
+#searchPanel { animation: motionFadeIn 220ms var(--motion-ease-out); }
+#searchPanel .sp-box { animation: motionPanelIn 220ms var(--motion-ease-out); }
+/* 退出以更高特异性替换进入动画，forwards 停在透明态，等 JS 加 .hidden */
+#searchPanel.is-closing { animation: motionFadeOut 150ms var(--motion-ease-in) forwards; pointer-events: none; }
+#searchPanel.is-closing .sp-box { animation: motionPanelOut 150ms var(--motion-ease-in) forwards; }
+
+/* ---- 灯箱与对比框：整体轻微缩放进场；覆盖旧 fadeIn（845 / 341 行） ---- */
+#lightbox { animation: motionLightboxIn 220ms var(--motion-ease-out); }
+#lightbox.is-closing { animation: motionLightboxOut 150ms var(--motion-ease-in) forwards; pointer-events: none; }
+#compareBox { animation: motionLightboxIn 220ms var(--motion-ease-out); }
+#compareBox.is-closing { animation: motionLightboxOut 150ms var(--motion-ease-in) forwards; pointer-events: none; }
+
+/* ---- WM 窗口：仅进入，display 翻转自动播放；隐藏保持瞬时（JS 不延迟，无退出样式）。
+   更高特异性压过 .window.workspace-view 的 animation:none（1106 行）与 .window 的旧 winIn（121 行） ---- */
+#windowsLayer .window.workspace-view { animation: motionWinIn 200ms var(--motion-ease-out); }
+
+/* ---- Toast：进入 180ms；退出供 JS 加 .is-closing 后延迟 150ms 再 .hidden，
+   无退出 class 时直接消失（可接受降级）。覆盖旧 winIn（897 行） ---- */
+#toast { animation: motionToastIn 180ms var(--motion-ease-out); }
+#toast.is-closing { animation: motionToastOut 150ms var(--motion-ease-in) forwards; pointer-events: none; }
+
+/* ---- 批量选择栏：淡入 + 4px 上移，display 翻转自动重放 ---- */
+.sel-bar { animation: motionSelbarIn 160ms var(--motion-ease-out); }
+
+/* ---- 移动端侧栏与遮罩：只作用于 <=1040px 断点，桌面端侧栏是常驻网格列不受影响。
+   过渡时长统一到契约 260ms ease-out（覆盖 1317 行的 .24s 旧曲线，靠文件靠后取胜） ---- */
+@media (max-width: 1040px) {
+  #sidebar { transition: transform 260ms var(--motion-ease-out); }
+  /* .hidden（display:none）移除的瞬间自动重放，无需 JS 额外处理 */
+  .side-scrim { animation: motionFadeIn 160ms var(--motion-ease-out); }
+}
+/* 遮罩退场：JS 先加 .is-closing，150ms 后再加 .hidden；ID 特异性压过断点内进入动画 */
+#sideScrim.is-closing { animation: motionFadeOut 150ms var(--motion-ease-in) forwards; pointer-events: none; }
+
+/* ---- 开关回弹：JS 加 .motion-tick 播一次后自行移除 ---- */
+.motion-tick { animation: motionTick 260ms var(--motion-ease-spring); }
+
+/* ---- 主按钮按压阴影压缩：全局 :active 缩放已存在（1430 行），这里只补阴影层次；
+   顺带给主按钮的 transition 补 box-shadow，阴影不跳变 ---- */
+.shell-btn.primary, .btn.primary {
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease,
+    opacity 140ms ease, transform 100ms ease, box-shadow 100ms ease;
+}
+.shell-btn.primary:active:not(:disabled),
+.btn.primary:active:not(:disabled) {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .2), 0 1px 2px rgba(0, 0, 0, .22);
+}
+
+/* ---- 一次性入场：只给壳的两个主要子块一个 300ms 纯淡入（无位移，不与移动端侧栏
+   的 translateX 过渡打架）；自动化测试不加 body.motion-boot 则完全静态 ---- */
+body.motion-boot #appShell > #sidebar,
+body.motion-boot #appShell > #contentShell { animation: motionShellIn 300ms var(--motion-ease-out) backwards; }
+
+/* ---- 动效层降级：prefers-reduced-motion 时本层所有动画与侧栏过渡全部关掉 ---- */
+@media (prefers-reduced-motion: reduce) {
+  #searchPanel, #searchPanel .sp-box,
+  #searchPanel.is-closing, #searchPanel.is-closing .sp-box,
+  #lightbox, #lightbox.is-closing,
+  #compareBox, #compareBox.is-closing,
+  #windowsLayer .window.workspace-view,
+  #toast, #toast.is-closing,
+  #sideScrim, #sideScrim.is-closing,
+  .sel-bar, .motion-tick,
+  body.motion-boot #appShell > #sidebar,
+  body.motion-boot #appShell > #contentShell { animation: none !important; }
+  #sidebar { transition: none !important; }
+}

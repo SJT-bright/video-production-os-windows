@@ -155,6 +155,19 @@ async function run() {
     const response = await page.goto(`${BASE_URL}/creator-assets.html`, { waitUntil: 'networkidle' });
     assert.equal(response.status(), 200);
     await page.locator('body[data-ready="true"]').waitFor();
+    const dialogStaysOpen = await page.evaluate(async () => {
+      const dialog = document.createElement('dialog');
+      document.body.append(dialog);
+      openCreatorDialog(dialog);
+      closeCreatorDialog(dialog);
+      openCreatorDialog(dialog);
+      await new Promise(resolve => setTimeout(resolve, 350));
+      const staysOpen = dialog.open && !dialog.classList.contains('motion-close');
+      dialog.close();
+      dialog.remove();
+      return staysOpen;
+    });
+    assert.equal(dialogStaysOpen, true, '资产对话框关闭中重开应取消旧定时器');
     assert.equal(await page.locator('.asset-card').count(), 120, '大量资产应分批渲染');
     assert.equal(await page.locator('.load-more').count(), 1);
     await page.locator('.load-more').click();
@@ -184,6 +197,7 @@ async function run() {
     await page.locator('.asset-card[data-kind="audio"] .asset-preview-button').click();
     assert.equal(await page.locator('#previewMedia audio').count(), 1);
     await page.locator('#closePreview').click();
+    await page.locator('#previewMedia audio').waitFor({ state: 'detached' });
     assert.equal(await page.locator('#previewMedia audio').count(), 0, '关闭预览后应卸载音频');
 
     await page.locator('[data-filter="video"]').click();
@@ -198,6 +212,7 @@ async function run() {
     const videoMaxHeight = await page.locator('#previewMedia video').evaluate(node => getComputedStyle(node).maxHeight);
     assert.ok(videoMaxHeight.endsWith('px') && parseFloat(videoMaxHeight) > 300, `展开审核视频高度应采用审核样式，实际 ${videoMaxHeight}`);
     await page.locator('#closePreview').click();
+    await page.waitForFunction(() => !document.querySelector('#previewDialog').classList.contains('video-review'));
     assert.equal(await page.locator('#previewDialog.video-review').count(), 0, '关闭预览后应退出展开审核形态');
     // 视频卡片封面：src 定位到开头附近帧（#t=0.1，加载行为另由隔离实测记录），不再是 3D 占位图标
     assert.equal(await page.locator('.asset-card[data-kind="video"] .video-cover').count(), 1, '视频卡片应用首帧封面');
@@ -416,6 +431,8 @@ async function run() {
     await page.locator('#previewDialog[open]').waitFor({ state: 'attached', timeout: 15000 });
     assert.match(await page.locator('#previewName').textContent(), /女主正脸\.png/, '对象格式推送应定位');
     await page.locator('#closePreview').click();
+    await page.waitForFunction(() => !document.getElementById('previewDialog').open
+      && document.getElementById('previewMedia').childElementCount === 0);
     // 有界取消的过期送达：面板收到 expired 必须实际提示取消且不定位
     await page.evaluate(() => window.__assetFocusSubscribers.at(-1)({ path: '校园心动/人物资产/女主正脸.png', projectId: 'project-11111111-1111-4111-8111-111111111111', expired: true }));
     await page.locator('.asset-toast', { hasText: '定位请求已过期' }).waitFor({ state: 'visible', timeout: 5000 });

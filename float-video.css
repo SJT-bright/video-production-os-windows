@@ -82,3 +82,31 @@ body {
   opacity: 0; pointer-events: none; transition: opacity .16s ease, transform .16s ease;
 }
 .fv-toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* ============================================================
+   动效层（motion）——纯观感层：不碰视频播放、原生拖出与窗口拖拽/尺寸记忆逻辑。
+   浮窗极简，只做窗口内容首次淡入（任务指定 200ms）+ 关闭键按压反馈；
+   .fv-close / .fv-card 的 hover 过渡原层已有，按任务约定跳过不重做。
+   ============================================================ */
+:root {
+  --motion-ease-out: cubic-bezier(.22, 1, .36, 1);
+  --motion-ease-spring: cubic-bezier(.34, 1.2, .44, 1);
+  --motion-ease-in: cubic-bezier(.4, 0, .68, 1);
+}
+
+/* ---- 窗口内容首次淡入 + 4px 上移：body 常驻显示，animation 属性只在加载首帧播一次，
+   不会被任何重渲染重放；backwards 仅覆盖起播前状态，结束即回落原生样式 ---- */
+@keyframes motionFloatIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+body { animation: motionFloatIn 200ms var(--motion-ease-out) backwards; }
+
+/* ---- 关闭键按压反馈：按压缩放更深一档；既有 hover 高亮/上浮过渡原样保留 ---- */
+.fv-close:active { transform: translateY(0) scale(.92); }
+
+/* ---- 动效层降级：prefers-reduced-motion 时关掉本层动画 ---- */
+@media (prefers-reduced-motion: reduce) {
+  body { animation: none !important; }
+  .fv-close:active { transform: translateY(0); }
+}

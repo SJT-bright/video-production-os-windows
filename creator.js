@@ -405,7 +405,7 @@ function queueProjectChange(project) {
 async function openProjectMenu() {
   if (projectMenuOpen) return;
   if (typeof API.showProjectMenu !== 'function') {
-    showToast('请完全退出并重新打开更新后的 Mac 版，以启用剧本下拉菜单');
+    showToast('请完全退出并重新打开更新后的桌面版，以启用剧本下拉菜单');
     return;
   }
   projectMenuOpen = true;
@@ -717,8 +717,42 @@ async function closeSiblingTabs(tab, scope) {
 
 // —— 标签右键菜单：桌面版走系统原生菜单（WebContentsView 内嵌网页盖不住），浏览器版退回 DOM 浮层 ——
 
-function closeTabContextMenu() {
-  el.tabContextMenu.hidden = true;
+const TAB_MENU_DISMISS_DELAY = 500;
+
+// 消失先驻留再播退出动画；驻留期只认第一个触发时刻，不重排，避免连续触发把驻留时间越推越晚
+function scheduleContextMenuDismissal(menu) {
+  if (menu.__dismissTimer) return;
+  // 驻留期是"纯视觉告别"：指针穿透，用户对下层内容（标签、按钮）的操作不被悬着的菜单挡住
+  menu.classList.add('context-menu-dismissing');
+  menu.__dismissTimer = setTimeout(() => {
+    menu.__dismissTimer = 0;
+    playPopOut(menu, () => { menu.hidden = true; menu.classList.remove('context-menu-dismissing'); });
+  }, TAB_MENU_DISMISS_DELAY);
+}
+
+function cancelContextMenuDismissal(menu) {
+  if (menu?.__dismissTimer) { clearTimeout(menu.__dismissTimer); menu.__dismissTimer = 0; }
+  menu.classList.remove('context-menu-dismissing');
+}
+
+function closeTabContextMenu({ instant = false, picked = false } = {}) {
+  const menu = el.tabContextMenu;
+  if (!menu || menu.hidden) return;
+  if (instant) {
+    // 程序化收起（页面卸载等无用户观感诉求的场景）跳过驻留，立即消失
+    cancelContextMenuDismissal(menu);
+    cancelPendingPopOut(menu);
+    menu.hidden = true;
+    return;
+  }
+  if (picked) {
+    // 菜单项点击＝选择已完成：不驻留（驻留的菜单悬在标签条上方会挡住紧随的拖拽/点击），直接播退出
+    cancelContextMenuDismissal(menu);
+    playPopOut(menu, () => { menu.hidden = true; });
+    return;
+  }
+  // 用户触发的关闭先原地驻留 TAB_MENU_DISMISS_DELAY 再播退出动画，hidden 延迟到动画播完
+  scheduleContextMenuDismissal(menu);
 }
 
 function appendTabMenuItem(menu, label, { hint = '', disabled = false, danger = false, onPick = null } = {}) {
@@ -731,7 +765,7 @@ function appendTabMenuItem(menu, label, { hint = '', disabled = false, danger = 
   item.querySelector('.tab-context-label').textContent = label;
   if (hint) item.querySelector('.tab-context-hint').textContent = hint;
   item.addEventListener('click', () => {
-    closeTabContextMenu();
+    closeTabContextMenu({ picked: true });
     onPick?.();
   });
   menu.appendChild(item);
@@ -832,7 +866,11 @@ function openDomTabContextMenu(tab, label, event) {
       onPick: () => { runTabContextMenuAction(tab, label, item.id); },
     });
   }
+  cancelPendingPopOut(menu);
+  // 驻留期内再次右键呼出：取消消失排程，菜单原地换内容换位置，不闪烁
+  cancelContextMenuDismissal(menu);
   menu.hidden = false;
+  playMotionClass(menu, 'motion-pop', 400, ['motionPopIn']);
   // 贴近光标弹出并收进视口内
   const width = menu.offsetWidth;
   const height = menu.offsetHeight;
@@ -1053,7 +1091,7 @@ async function saveRenamedItem(event) {
     } else {
       applyBrowserState(await API.renameTab(target.id, name));
     }
-    el.renameDialog.close();
+    closeCreatorDialog(el.renameDialog);
     showToast('名称已保存');
     queueBoundsUpdate();
   } catch (error) {
@@ -1100,7 +1138,10 @@ let allTabsWired = false;
 let allTabsShieldFrame = 0;
 
 function allTabsOpen() {
-  return !!el.allTabsPopover && !el.allTabsPopover.classList.contains('hidden');
+  if (!el.allTabsPopover) return false;
+  const marks = el.allTabsPopover.classList;
+  // 退出动画进行中（hidden 尚未落地）对交互而言已是"关"：开关按钮此刻必须能立刻重开
+  return !marks.contains('hidden') && !marks.contains('motion-unpop');
 }
 
 function allTabFullLabel(tab) {
@@ -1180,7 +1221,10 @@ function refreshAllTabsList() {
 }
 
 function openAllTabsPopover() {
+  // 上一场退出动画还没播完就重开：先取消退出排程，再进入弹入动画
+  cancelPendingPopOut(el.allTabsPopover);
   el.allTabsPopover.classList.remove('hidden');
+  playMotionClass(el.allTabsPopover, 'motion-pop', 400, ['motionPopIn']);
   el.allTabsButton.setAttribute('aria-expanded', 'true');
   if (el.allTabsSearch) el.allTabsSearch.value = '';
   renderAllTabsList();
@@ -1193,10 +1237,14 @@ function openAllTabsPopover() {
 
 function closeAllTabsPopover({ refocus = false } = {}) {
   if (!allTabsOpen()) return;
-  el.allTabsPopover.classList.add('hidden');
+  if (el.allTabsPopover.classList.contains('motion-unpop')) return; // 退出动画已在播，不重复排程
   el.allTabsButton.setAttribute('aria-expanded', 'false');
   if (refocus) el.allTabsButton.focus({ preventScroll: true });
-  syncAllTabsNativeShield();
+  // hidden 延迟到退出动画播完；动画期间弹层仍算“开着”，落定后重算原生视图遮挡
+  playPopOut(el.allTabsPopover, () => {
+    el.allTabsPopover.classList.add('hidden');
+    syncAllTabsNativeShield();
+  });
 }
 
 function wireAllTabs() {
@@ -1245,8 +1293,15 @@ function wireAllTabs() {
 }
 
 function closePlatformPopover() {
-  el.platformPopover.classList.add('hidden');
+  if (el.platformPopover.classList.contains('hidden')) return;
+  if (el.platformPopover.classList.contains('motion-unpop')) return; // 退出动画已在播，不重复排程
   el.addPlatform.setAttribute('aria-expanded', 'false');
+  // hidden 延迟到退出动画播完（动画期间 pointer-events:none 由 CSS 负责）；收起后再量一次舞台，
+  // 避免窗口按展开高度驻留
+  playPopOut(el.platformPopover, () => {
+    el.platformPopover.classList.add('hidden');
+    queueBoundsUpdate();
+  });
 }
 
 function applyAddedCustomPlatform(service) {
@@ -3088,8 +3143,111 @@ function openCreatorDialog(dialog) {
     dialog.__overlayRestoreHooked = true;
     dialog.addEventListener('close', syncCreatorDialogVisibility);
   }
+  if (!dialog.__motionCloseCleanup) {
+    dialog.__motionCloseCleanup = true;
+    // 关闭完成后清掉动效类残留，避免下次打开时旧类再次命中退出动画选择器
+    dialog.addEventListener('close', () => {
+      dialog.classList.remove('motion-close', 'motion-open');
+    });
+  }
+  // 动画关闭期间 dialog 仍 open（约180ms）：取消未完成的关闭排程并原地恢复，
+  // 不能让"关了马上再开"表现为按钮点了没反应
+  if (dialog.open) {
+    dialog.__motionCloseCancel?.();
+    return;
+  }
   dialog.showModal();
+  // 清掉上一次动画退出被打断时的残留；进入动画由 CSS 按 [open] 自动播放
+  dialog.classList.remove('motion-close');
   syncCreatorDialogVisibility();
+}
+
+// —— 浮层／对话框动效工具：类名与兜底时长遵守动效类名契约 ——
+
+// 给节点加动效类，animationend（须校验 target 与动画名：子元素动画会冒泡上来）
+// 与兜底定时器先到先移除，另一方作废。
+function playMotionClass(node, cls, fallbackMs, animationNames) {
+  if (!node) return;
+  let timer = 0;
+  const finish = () => {
+    node.removeEventListener('animationend', onAnimationEnd);
+    if (timer) { clearTimeout(timer); timer = 0; }
+    node.classList.remove(cls);
+  };
+  function onAnimationEnd(event) {
+    if (event.target !== node || !animationNames.includes(event.animationName)) return;
+    finish();
+  }
+  node.classList.add(cls);
+  node.addEventListener('animationend', onAnimationEnd);
+  timer = setTimeout(finish, fallbackMs);
+}
+
+// 取消尚未播完的浮层退出动画（定时器＋监听＋类），供重新打开前清场防闪动
+function cancelPendingPopOut(node) {
+  if (!node || (!node.__motionUnpopTimer && !node.__motionUnpopHandler)) return;
+  if (node.__motionUnpopTimer) { clearTimeout(node.__motionUnpopTimer); node.__motionUnpopTimer = 0; }
+  if (node.__motionUnpopHandler) { node.removeEventListener('animationend', node.__motionUnpopHandler); node.__motionUnpopHandler = null; }
+  node.classList.remove('motion-unpop');
+}
+
+// 浮层退出：加 motion-unpop，motionPopOut 动画或兜底到点后移除类并执行 onHidden（真正落 hidden）。
+// 已在退出中时直接返回，保证重复调用不重复播动画、不重复排程。
+function playPopOut(node, onHidden, fallbackMs = 220) {
+  if (!node || node.classList.contains('motion-unpop')) return;
+  cancelPendingPopOut(node);
+  node.classList.add('motion-unpop');
+  const finish = () => {
+    node.removeEventListener('animationend', node.__motionUnpopHandler);
+    node.__motionUnpopHandler = null;
+    if (node.__motionUnpopTimer) clearTimeout(node.__motionUnpopTimer);
+    node.__motionUnpopTimer = 0;
+    node.classList.remove('motion-unpop');
+    onHidden?.();
+  };
+  const handler = event => {
+    if (event.target !== node || event.animationName !== 'motionPopOut') return;
+    finish();
+  };
+  node.__motionUnpopHandler = handler;
+  node.addEventListener('animationend', handler);
+  node.__motionUnpopTimer = setTimeout(finish, fallbackMs);
+}
+
+// 对话框动画关闭：加 motion-close，表单（dialogSheetOut）或背板（backdropOut，
+// ::backdrop 的 animationend 也派发到宿主元素）动画结束或 260ms 兜底后真正 close。
+// instant 用于"关完立刻切走"的路径（如跳转完整资产库）：动画没有意义，直接关。
+function closeCreatorDialog(dialog, { instant = false } = {}) {
+  if (!dialog || !dialog.open) return;
+  if (instant) {
+    dialog.__motionCloseCancel?.();
+    dialog.classList.remove('motion-close');
+    dialog.close();
+    return;
+  }
+  if (dialog.classList.contains('motion-close')) return;
+  let timer = 0;
+  const finish = () => {
+    dialog.removeEventListener('animationend', onAnimationEnd);
+    if (timer) { clearTimeout(timer); timer = 0; }
+    dialog.__motionCloseCancel = null;
+    dialog.classList.remove('motion-close');
+    dialog.close();
+  };
+  function onAnimationEnd(event) {
+    if (event.target !== dialog || !['dialogSheetOut', 'backdropOut'].includes(event.animationName)) return;
+    finish();
+  }
+  // 重开路径（openCreatorDialog）用它取消未播完的退出，让对话框原地恢复
+  dialog.__motionCloseCancel = () => {
+    dialog.removeEventListener('animationend', onAnimationEnd);
+    if (timer) { clearTimeout(timer); timer = 0; }
+    dialog.__motionCloseCancel = null;
+    dialog.classList.remove('motion-close');
+  };
+  dialog.classList.add('motion-close');
+  dialog.addEventListener('animationend', onAnimationEnd);
+  timer = setTimeout(finish, 260);
 }
 
 function formatBytes(bytes) {
@@ -3362,10 +3520,10 @@ function openQuickPreview(item) {
   openCreatorDialog(el.quickPreviewDialog);
 }
 
-function closeQuickPreview() {
+function closeQuickPreview({ instant = false } = {}) {
+  closeCreatorDialog(el.quickPreviewDialog, { instant });
   el.quickPreviewStage.replaceChildren();
   quickPreviewItem = null;
-  el.quickPreviewDialog.close();
 }
 
 async function copyPrompt(focusBrowser) {  const body = (el.promptEditor?.value ?? state.prompts[state.mode]) || '';
@@ -3531,6 +3689,7 @@ async function clearBrowserTabs() {
   el.clearBrowserTabs.disabled = true;
   try {
     const browser = await API.clearTabs();
+    if (browser?.clearCancelled) return;
     applyBrowserState(browser);
     closePlatformPopover();
     queueBoundsUpdate();
@@ -3855,11 +4014,42 @@ function bindEvents() {
   document.querySelectorAll('.mode-button').forEach(button => {
     button.addEventListener('click', () => setMode(button.dataset.mode));
   });
+  // 三个模态对话框的 Esc（cancel）改走动画关闭：拦下原生立即 close，播完退出动画再关
+  [el.renameDialog, el.clearPromptDialog].forEach(dialog => {
+    if (!dialog || dialog.__motionCancelWired) return;
+    dialog.__motionCancelWired = true;
+    dialog.addEventListener('cancel', event => {
+      event.preventDefault();
+      closeCreatorDialog(dialog);
+    });
+  });
+  if (el.quickPreviewDialog && !el.quickPreviewDialog.__motionCancelWired) {
+    el.quickPreviewDialog.__motionCancelWired = true;
+    // Esc 与该对话框其余关闭路径同走 closeQuickPreview：顺带停掉预览媒体
+    el.quickPreviewDialog.addEventListener('cancel', event => {
+      event.preventDefault();
+      closeQuickPreview();
+    });
+  }
+  // 开关按钮（框选、剪映联动、创作资产等）统一按压回弹：委托监听，动画结束由 playMotionClass 自摘
+  document.addEventListener('click', event => {
+    const button = event.target.closest('button[aria-pressed]');
+    if (button && !button.disabled) playMotionClass(button, 'motion-tick', 400, ['motionTick']);
+  });
   el.addPlatform.addEventListener('click', () => {
-    const opening = el.platformPopover.classList.contains('hidden');
-    el.platformPopover.classList.toggle('hidden', !opening);
+    // 退出动画进行中（hidden 未落地）按"关"处理，否则快速关-开会吞掉重开
+    const opening = el.platformPopover.classList.contains('hidden')
+      || el.platformPopover.classList.contains('motion-unpop');
+    if (opening) {
+      // 上一场退出动画还没播完就重开：先取消退出排程，再进入弹入动画
+      cancelPendingPopOut(el.platformPopover);
+      el.platformPopover.classList.remove('hidden');
+      playMotionClass(el.platformPopover, 'motion-pop', 400, ['motionPopIn']);
+      requestAnimationFrame(() => el.platformName.focus());
+    } else {
+      closePlatformPopover();
+    }
     el.addPlatform.setAttribute('aria-expanded', String(opening));
-    if (opening) requestAnimationFrame(() => el.platformName.focus());
     queueBoundsUpdate();
   });
   el.cancelPlatform.addEventListener('click', () => {
@@ -4021,7 +4211,7 @@ function bindEvents() {
   el.openModeFolder.addEventListener('click', () => API.openFolder(state.mode).catch(error => showToast(error.message)));
   el.toggleAssets.addEventListener('click', toggleAssetPanel);
   el.renameForm.addEventListener('submit', saveRenamedItem);
-  el.renameCancel.addEventListener('click', () => el.renameDialog.close());
+  el.renameCancel.addEventListener('click', () => closeCreatorDialog(el.renameDialog));
   el.importLocalAssets.addEventListener('click', () => {
     el.quickFileInput.click();
   });
@@ -4137,7 +4327,8 @@ function bindEvents() {
   el.quickPreviewDialog.addEventListener('click', event => { if (event.target === el.quickPreviewDialog) closeQuickPreview(); });
   el.quickPreviewInLibrary.addEventListener('click', () => {
     const focusPath = quickPreviewItem?.path || '';
-    closeQuickPreview();
+    // 跳转完整资产库时立即关闭预览：随后的浮层切换不等这 180ms 淡出
+    closeQuickPreview({ instant: true });
     openFullAssetLibrary({ focusPath });
   });
   el.clearPrompt.addEventListener('click', () => {
@@ -4146,16 +4337,17 @@ function bindEvents() {
     openCreatorDialog(el.clearPromptDialog);
   });
   el.clearPromptConfirm.addEventListener('click', () => {
-    el.clearPromptDialog.close();
+    // 确认后用户会立即回到编辑器输入：模态关闭动画的 inert 窗口会吞掉紧随的输入，必须即时关
+    closeCreatorDialog(el.clearPromptDialog, { instant: true });
     clearPromptEditor();
   });
   el.clearPromptNever.addEventListener('click', () => {
     state.skipClearConfirm = true;
     saveWorkspace(true);
-    el.clearPromptDialog.close();
+    closeCreatorDialog(el.clearPromptDialog, { instant: true });
     clearPromptEditor();
   });
-  el.clearPromptCancel.addEventListener('click', () => el.clearPromptDialog.close());
+  el.clearPromptCancel.addEventListener('click', () => closeCreatorDialog(el.clearPromptDialog));
   document.querySelectorAll('[data-nav]').forEach(button => {
     button.addEventListener('click', () => {
       const action = button.dataset.action || button.dataset.nav;
@@ -4218,7 +4410,7 @@ function bindEvents() {
       closeTabContextMenu();
     }
   });
-  window.addEventListener('blur', closeTabContextMenu);
+  window.addEventListener('blur', () => closeTabContextMenu());
   API.onAssetDragResult?.(result => {
     document.querySelectorAll('.asset-card-wrap.asset-dragging').forEach(card => card.classList.remove('asset-dragging'));
     if (!result?.ok) showToast(result?.error || '文件拖拽失败，请重试');
@@ -4375,6 +4567,8 @@ async function applyPendingPrompt() {
 }
 
 async function boot() {
+  // 入场动画门闸：Playwright 自动化（navigator.webdriver=true）不加，保证自动化截图与断言稳定
+  if (!navigator.webdriver) document.body.classList.add('motion-boot');
   document.documentElement.classList.toggle('is-electron', !!API);
   document.documentElement.classList.toggle('is-macos', /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent));
   if (!API) {

@@ -66,7 +66,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 
 /* ---------------- 布局骨架 ---------------- */
 .creator-shell { height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr); }
-.creator-workspace { min-height: 0; display: grid; grid-template-columns: 360px minmax(0, 1fr); }
+.creator-workspace { min-height: 0; display: grid; grid-template-columns: 360px minmax(0, 1fr); transition: grid-template-columns 320ms var(--motion-ease-out); }
 
 /* ---------------- 顶部栏：两排（第一排品牌/模式/功能，第二排网页标签），毛玻璃 ---------------- */
 .creator-header {
@@ -342,6 +342,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   min-height: 54px; display: grid; grid-template-columns: 32px minmax(0, 1fr) 18px;
   align-items: center; gap: 10px; padding: 10px 12px;
   list-style: none; cursor: pointer; user-select: none;
+  transition: background-color 140ms ease;
 }
 .material-accordion > summary::-webkit-details-marker { display: none; }
 .material-accordion > summary:hover { background: var(--fill); }
@@ -358,7 +359,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   width: 7px; height: 7px; justify-self: center;
   border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted);
   transform: rotate(45deg) translate(-2px, -2px);
-  transition: transform 140ms ease;
+  transition: transform 200ms var(--motion-ease-out);
 }
 .material-accordion[open] .accordion-chevron { transform: rotate(225deg) translate(-1px, -1px); }
 .accordion-body { padding: 0 11px 12px; border-top: 1px solid var(--line); }
@@ -1216,3 +1217,156 @@ body.folder-reordering { user-select: none; -webkit-user-select: none; cursor: g
 }
 .quick-folder-row.folder-drop-above::before { top: -2px; }
 .quick-folder-row.folder-drop-below::after { bottom: -2px; }
+
+/* ============================================================
+   动效层（motion）
+   macOS / iOS 式克制顺滑：手风琴平滑滑出、对话框与弹层缩放淡入、
+   开关回弹、一次性入场渐显。
+   本层类名与时长是 JS 契约（JS 兜底定时器依赖这些数字），勿改。
+   ============================================================ */
+/* ================= 动效层（motion） ================= */
+:root {
+  /* 允许 height: auto 参与 transition，手风琴展开高度才能平滑插值 */
+  interpolate-size: allow-keywords;
+  --motion-ease-out: cubic-bezier(.22, 1, .36, 1);
+  --motion-ease-spring: cubic-bezier(.34, 1.2, .44, 1);
+  --motion-ease-in: cubic-bezier(.4, 0, .68, 1);
+}
+
+/* ---- 对话框：进入 280ms，backdrop 240ms；退出 180ms（JS 校验 animationName） ---- */
+@keyframes dialogSheetIn {
+  from { opacity: 0; transform: translateY(16px) scale(.94); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes dialogSheetOut {
+  to { opacity: 0; transform: translateY(8px) scale(.97); }
+}
+@keyframes backdropIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes backdropOut {
+  to { opacity: 0; }
+}
+.creator-dialog[open] { animation: dialogSheetIn 280ms var(--motion-ease-spring); }
+.creator-dialog[open]::backdrop { animation: backdropIn 240ms var(--motion-ease-out); }
+/* 退出必须胜过 [open] 的进入动画：同特异性下靠后声明取胜；forwards 停在透明态，等 JS 真正关闭 */
+.creator-dialog.motion-close { animation: dialogSheetOut 180ms var(--motion-ease-in) forwards; }
+.creator-dialog.motion-close::backdrop { animation: backdropOut 180ms var(--motion-ease-in) forwards; }
+
+/* ---- 浮层：进入 220ms，退出 150ms ---- */
+@keyframes motionPopIn {
+  from { opacity: 0; transform: translateY(-8px) scale(var(--motion-pop-from, .98)); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes motionPopOut {
+  to { opacity: 0; transform: translateY(-4px) scale(var(--motion-pop-from, .98)); }
+}
+.motion-pop { animation: motionPopIn 220ms var(--motion-ease-out); }
+.motion-unpop { animation: motionPopOut 150ms var(--motion-ease-in) forwards; pointer-events: none; }
+/* 缩放原点跟随锚点：「全部网页」按钮在右侧；右键菜单从触发点左上角展开，起点略小一档 */
+#allTabsPopover.motion-pop, #allTabsPopover.motion-unpop { transform-origin: top right; }
+.tab-context-menu.motion-pop, .tab-context-menu.motion-unpop { transform-origin: top left; --motion-pop-from: .96; }
+
+/* #platformPopover 是头部 in-flow 网格行：只做淡入 + 8px 下移，不缩放；
+   ID 选择器自然压过上面 .motion-pop 的 scale 版本，keyframes 单列以免动到网格行 */
+@keyframes platformRowIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes platformRowOut {
+  to { opacity: 0; transform: translateY(-4px); }
+}
+#platformPopover.motion-pop { animation: platformRowIn 220ms var(--motion-ease-out); }
+#platformPopover.motion-unpop { animation: platformRowOut 150ms var(--motion-ease-in) forwards; }
+
+/* ---- 手风琴：高度 300ms 滑出/滑回，不透明度 220ms ----
+   content-visibility 走 allow-discrete：展开瞬间即开始渲染、收起全程保持渲染直到高度走完。
+   open 态放开 overflow 是为保留资产区既有的内容溢出能力（拖拽框选等，.quick-marquee 依赖）；
+   收起瞬间选择器失配立即回到 clip，展开中的中间态溢出由卡片自身的 overflow: clip 兜底裁剪。 */
+.material-accordion::details-content {
+  height: 0;
+  overflow: clip;
+  opacity: 0;
+  transition:
+    height 300ms var(--motion-ease-out),
+    opacity 220ms ease,
+    content-visibility 300ms allow-discrete;
+}
+.material-accordion[open]::details-content {
+  height: auto;
+  opacity: 1;
+  overflow: visible;
+}
+
+/* ---- 开关回弹：260ms ---- */
+@keyframes motionTick {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+.motion-tick { animation: motionTick 260ms var(--motion-ease-spring); }
+
+/* ---- 一次性入场（全部收在 body.motion-boot 下；自动化测试不加该类则完全静态） ---- */
+@keyframes motionCardIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes motionHeaderIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+body.motion-boot .material-sidebar > * { animation: motionCardIn 420ms var(--motion-ease-out) backwards; }
+body.motion-boot .material-sidebar > *:nth-child(2) { animation-delay: 50ms; }
+body.motion-boot .material-sidebar > *:nth-child(3) { animation-delay: 100ms; }
+body.motion-boot .material-sidebar > *:nth-child(4) { animation-delay: 150ms; }
+body.motion-boot .creator-header-top { animation: motionHeaderIn 360ms var(--motion-ease-out) backwards; }
+
+/* ---- 按键体系增强：主按钮按压更沉稳，其余胶囊/图标键统一按压缩放（覆盖全局 scale(.97)） ---- */
+.primary-action:active:not(:disabled) {
+  transform: scale(.96);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.22), 0 1px 4px color-mix(in srgb, var(--mode) 22%, transparent);
+}
+.secondary-action:active:not(:disabled),
+.quiet-button:active:not(:disabled),
+.icon-button:active:not(:disabled) {
+  transform: scale(.96);
+}
+
+/* ---- 材料栏小组件反馈 ---- */
+.quick-folder-row { transition: background-color 120ms ease; }
+.asset-drop-zone { transition: border-color 160ms ease, background-color 130ms ease, transform 130ms ease; }
+.asset-drop-icon { transition: transform 160ms var(--motion-ease-out); }
+.asset-drop-zone:active .asset-drop-icon { transform: translateY(2px) scale(.94); }
+.creator-toast { transition: opacity 220ms var(--motion-ease-out), transform 260ms var(--motion-ease-spring); }
+.creator-toast.show { transform: translateY(0) scale(1); }
+
+/* ---- 右键菜单驻留期（creator.js 的 .context-menu-dismissing）：纯视觉告别，指针穿透，
+   用户对下层标签/按钮的操作不被悬着的菜单挡住；退出动画自身的 motion-unpop 也带穿透 ---- */
+.tab-context-menu.context-menu-dismissing { pointer-events: none; }
+
+/* ---- 折叠态「材料」竖标出现时淡入：display 翻转做不了消失侧动画，出现侧靠 animation 重放补上；
+   子内容的展开淡入无需另写——motionCardIn 挂在常驻的 body.motion-boot 规则上，display:none→显示
+   翻转时会自动重播，收起再展开即逐张淡入 ---- */
+@keyframes motionLabelIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+body.prompt-collapsed .prompt-panel::before { animation: motionLabelIn 160ms var(--motion-ease-out) backwards; }
+@media (max-width: 900px) {
+  .prompt-panel::before { animation: motionLabelIn 160ms var(--motion-ease-out) backwards; }
+}
+
+/* ---- 动效层降级：prefers-reduced-motion 时全部关掉（尤其 * 通配覆盖不到的 ::backdrop / ::details-content） ---- */
+@media (prefers-reduced-motion: reduce) {
+  .material-accordion::details-content { transition: none; }
+  .creator-dialog[open],
+  .creator-dialog.motion-close,
+  .creator-dialog[open]::backdrop,
+  .creator-dialog.motion-close::backdrop { animation: none; }
+  .motion-pop, .motion-unpop, .motion-tick,
+  body.motion-boot .material-sidebar > *,
+  body.motion-boot .creator-header-top,
+  body.prompt-collapsed .prompt-panel::before { animation: none !important; }
+  .creator-workspace { transition: none; }
+}

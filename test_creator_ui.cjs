@@ -2,11 +2,88 @@
 
 const assert = require('assert/strict');
 const fs = require('fs');
+const http = require('http');
 const path = require('path');
+const { spawn } = require('child_process');
 const { launchChromium } = require('./test-playwright.cjs');
 
 const BASE_URL = process.argv[2] || 'http://127.0.0.1:3790';
+const SELF_HOST_PORT = 3790;
 let activeBrowser = null;
+// 仅在「测试自己拉起的 server.js」时非空；复用外部已有服务时保持 null，不替别人收拾
+let spawnedServerChild = null;
+
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// 探测 creator.html：200=服务就绪；ECONNREFUSED=无人监听；其余（非 200、超时、其他错误）
+// 一律视为端口被别的程序占用或不提供本应用页面，调用方据此决定自起还是报错。
+function probeCreatorPage(url, timeoutMs) {
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = result => { if (!settled) { settled = true; resolve(result); } };
+    const request = http.get(url, { timeout: timeoutMs }, response => {
+      response.resume();
+      finish({ kind: 'response', status: response.statusCode });
+    });
+    request.once('timeout', () => request.destroy());
+    request.once('error', error => finish({ kind: 'error', code: error.code || 'PROBE_FAILED' }));
+  });
+}
+
+// main() 开头调用：3790 已有本应用（GET /creator.html → 200）就直接复用；
+// 无人监听（ECONNREFUSED）才自起 server.js 并轮询就绪（最多 15s）；
+// 端口被占用但不是本应用 → 报清晰错误退出，不硬闯。
+// 自起成功后 spawnedServerChild 非 null，由 stopSpawnedServer 在 main 收尾时清理。
+async function ensureCreatorServerAvailable() {
+  const creatorUrl = `${BASE_URL}/creator.html`;
+  const probe = await probeCreatorPage(creatorUrl, 800);
+  if (probe.kind === 'response' && probe.status === 200) {
+    console.log(`CREATOR_UI_SERVER: reusing existing server at ${BASE_URL}`);
+    return;
+  }
+  if (probe.kind === 'response' || probe.code !== 'ECONNREFUSED') {
+    const reason = probe.kind === 'response' ? `GET /creator.html 返回 ${probe.status}` : `探测失败 ${probe.code}`;
+    throw new Error(`端口 ${SELF_HOST_PORT} 被非本应用服务占用（${reason}）。本测试只接受视频制作 OS 的 creator.html，请清掉 3790 端口上的其他进程后重跑。`);
+  }
+  spawnedServerChild = spawn(process.execPath, ['server.js', '--port', String(SELF_HOST_PORT)], {
+    cwd: __dirname,
+    stdio: 'ignore',
+    detached: false,
+    windowsHide: true,
+  });
+  const child = spawnedServerChild;
+  console.log(`CREATOR_UI_SERVER: spawning server.js on port ${SELF_HOST_PORT} ...`);
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      throw new Error(`自起 server.js 提前退出（exit=${child.exitCode}），请检查 server.js 启动错误。`);
+    }
+    const ready = await probeCreatorPage(creatorUrl, 1000);
+    if (ready.kind === 'response' && ready.status === 200) {
+      console.log(`CREATOR_UI_SERVER: self-started server ready at ${creatorUrl}`);
+      return;
+    }
+    await wait(150);
+  }
+  throw new Error(`自起 server.js 在 15 秒内未就绪（${creatorUrl} 未返回 200）。`);
+}
+
+// 与 test_browser.cjs 的 stopIsolatedServer 同型：先 SIGTERM 等退出，超时兜底 SIGKILL。
+async function stopSpawnedServer() {
+  const child = spawnedServerChild;
+  spawnedServerChild = null;
+  if (!child || child.exitCode !== null) return;
+  await new Promise(resolve => {
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch {}
+      resolve();
+    }, 2500);
+    child.once('exit', () => { clearTimeout(timer); resolve(); });
+    try { child.kill(); } catch { clearTimeout(timer); resolve(); }
+  });
+}
 
 async function main() {
   const consoleErrors = [];
@@ -903,6 +980,9 @@ async function main() {
   assert.equal(await page.locator('.mode-checklist').count(), 0, '旧基础检查项不应继续占据左栏');
   assert.equal(await page.locator('#imageCompanion').count(), 0, '旧图片提示词小窗不应继续占据左栏');
   await page.locator('#promptAccordion > summary').click();
+  // 手风琴展开是 300ms 高度过渡：等它走完再继续，否则后续点击可能落在移动中的按钮上，
+  // 命中点漂移会误点 summary 把手风琴整个点关（偶发"表单 30 秒不可见"即此因）
+  await page.waitForTimeout(420);
   try {
     await page.locator('#promptEditor').fill('VIDEO-ONLY-DRAFT', { timeout: 5000 });
   } catch (error) {
@@ -913,6 +993,26 @@ async function main() {
   }
   // 固定提示词按钮已精简为一行：复制 + 清空 + 新建入口
   assert.equal(await page.locator('#copyPrompt').isVisible(), true, '复制按钮应保留');
+  const motionRegression = await page.evaluate(async () => {
+    const node = document.createElement('div');
+    document.body.append(node);
+    let completions = 0;
+    playPopOut(node, () => { completions++; node.hidden = true; });
+    node.dispatchEvent(new AnimationEvent('animationend', { animationName: 'motionPopOut' }));
+    node.hidden = false;
+    await new Promise(resolve => setTimeout(resolve, 300));
+    const staysOpen = !node.hidden && completions === 1;
+    node.remove();
+    const dialog = document.createElement('dialog');
+    document.body.append(dialog);
+    openCreatorDialog(dialog);
+    closeCreatorDialog(dialog);
+    closeCreatorDialog(dialog, { instant: true });
+    const closesImmediately = !dialog.open;
+    dialog.remove();
+    return { staysOpen, closesImmediately };
+  });
+  assert.deepEqual(motionRegression, { staysOpen: true, closesImmediately: true }, '退出动效不得把重开的浮层再次关闭，跳转时应立即收起');
   assert.equal(await page.locator('#clearPrompt').isVisible(), true, '清空按钮应保留');
   assert.equal(await page.locator('#copyAndFocus').count(), 0, '复制并切到网页按钮应已移除');
   assert.equal(await page.locator('#savePromptTemplate').count(), 0, '存为固定提示词按钮应已移除');
@@ -1285,11 +1385,21 @@ async function main() {
   console.log('CREATOR_UI PASS: modes, platform tabs, manual address, prompts, downloads, browser bounds and creative asset toggle');
 }
 
-main().catch(async error => {
+(async () => {
+  try {
+    // 未显式传入外部 URL 时才负责端口 3790 的探测与自起；传入 URL 则完全由外部管理
+    if (!process.argv[2]) await ensureCreatorServerAvailable();
+    await main();
+  } finally {
+    // 成功与失败两条路径都要回收自起的服务器
+    await stopSpawnedServer();
+  }
+})().catch(async error => {
   if (activeBrowser) {
     try { await activeBrowser.close(); } catch {}
     activeBrowser = null;
   }
+  await stopSpawnedServer();
   console.error(error.stack || error);
   process.exitCode = 1;
 });

@@ -14,7 +14,7 @@ const mainSource = fs.readFileSync(path.join(__dirname, 'electron/main.cjs'), 'u
 const functionNames = [
   'modeOrDefault', 'safeServiceUrl', 'tabById', 'serviceTabLabel', 'publicTabs', 'browserState',
   'updateTabDisplayLabel', 'pushBrowserState', 'persistBrowserSession', 'restoreBrowserSession',
-  'showEmptyBrowserMode', 'clearBrowserTabs', 'createTab', 'activateTab', 'selectServiceTab',
+  'showEmptyBrowserMode', 'confirmClearBrowserTabs', 'clearBrowserTabs', 'createTab', 'activateTab', 'selectServiceTab',
   'switchBrowserMode', 'destroyTab', 'closeTab', 'selectTab', 'applyCreatorLayout', 'clampBounds',
   'teardownCreatorViews', 'ensureWorkspaceWindow', 'navigateWorkspace',
 ];
@@ -38,6 +38,8 @@ function createController(filePath) {
   const initial = store.load();
   const writes = [];
   const diagnostics = [];
+  const confirmations = [];
+  let confirmationResponse = 0;
   const partitions = new Map();
   let sequence = 0;
   let failWrites = false;
@@ -124,6 +126,12 @@ function createController(filePath) {
   const context = vm.createContext({
     URL, console, path, __dirname: path.join(__dirname, 'electron'),
     WebContentsView: View, BrowserWindow: Window,
+    dialog: {
+      async showMessageBox(win, options) {
+        confirmations.push({ win, options: plain(options) });
+        return { response: confirmationResponse };
+      },
+    },
     setTimeout: () => ++sequence, clearTimeout: () => {},
     TEST_MODE: false, SMOKE_TEST: true, LOAD_TIMEOUT_MS: 30000,
     localServerInfo: { url: 'http://127.0.0.1:3750' },
@@ -167,7 +175,8 @@ function createController(filePath) {
   });
   vm.runInContext(controllerSource, context, { filename: 'main.cjs:browser-retention-controller' });
   const api = {
-    context, store, writes, diagnostics,
+    context, store, writes, diagnostics, confirmations,
+    confirmWith: response => { confirmationResponse = response; },
     failWrites: value => { failWrites = value; },
     async open() {
       await context.navigateWorkspace('creator', { mode: context.activeMode });
@@ -267,13 +276,26 @@ async function run() {
   const beforeFailedClear = app.state();
   const beforeFailedClearDisk = app.store.load();
   const retainedView = app.tabs()[0].view;
+  const writesBeforeCancel = app.writes.length;
+  const cancelled = await app.context.confirmClearBrowserTabs();
+  assert.equal(cancelled.clearCancelled, true);
+  assert.deepEqual(app.state(), beforeFailedClear, '取消确认必须保留全部标签和当前网页');
+  assert.deepEqual(app.store.load(), beforeFailedClearDisk, '取消确认不得修改会话存储');
+  assert.equal(app.writes.length, writesBeforeCancel);
+  assert.equal(retainedView.webContents.isDestroyed(), false);
+  assert.equal(app.confirmations.length, 1);
+  assert.equal(app.confirmations[0].win, app.context.creatorWindow, '确认框应属于创作浏览器原生窗口');
+  assert.deepEqual(app.confirmations[0].options.buttons, ['取消', '清空网页']);
+  assert.equal(app.confirmations[0].options.defaultId, 0, '回车默认取消，不能误清空');
+  assert.equal(app.confirmations[0].options.cancelId, 0, 'Esc 或关闭确认框均视为取消');
+  app.confirmWith(1);
   app.failWrites(true);
-  assert.throws(() => app.context.clearBrowserTabs(), /injected disk full/);
+  await assert.rejects(app.context.confirmClearBrowserTabs(), /injected disk full/);
   assert.deepEqual(app.state(), beforeFailedClear, '清空写盘失败必须保留全部标签状态');
   assert.equal(retainedView.webContents.isDestroyed(), false);
   assert.deepEqual(app.store.load(), beforeFailedClearDisk);
   app.failWrites(false);
-  app.context.clearBrowserTabs();
+  await app.context.confirmClearBrowserTabs();
   assert.equal(app.tabs().length, 0);
   assert.equal(retainedView.webContents.isDestroyed(), true);
   assert.deepEqual(app.store.load().initializedModes, { image: true, video: true });
@@ -292,7 +314,7 @@ async function run() {
   app.context.selectServiceTab('gpt', 'image');
   assert.equal(app.tabs().length, 1, '主动清空后仍应允许用户明确打开新网页');
   assert.equal(app.diagnostics.length, 0);
-  console.log('BROWSER_RETENTION_PASS sameWindow=true restartRestore=true lazyLoading=true emptyModes=true clearFailurePreservesTabs=true backgroundNavigationSaved=true closeDoesNotOverwrite=true');
+  console.log('BROWSER_RETENTION_PASS sameWindow=true restartRestore=true lazyLoading=true emptyModes=true clearConfirmation=true cancelPreservesTabs=true clearFailurePreservesTabs=true backgroundNavigationSaved=true closeDoesNotOverwrite=true');
 }
 
 run().catch(error => { console.error(error); process.exitCode = 1; }).finally(() => {

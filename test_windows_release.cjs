@@ -105,13 +105,38 @@ async function run() {
     page = await launch();
     const after = await page.evaluate(() => window.creatorAPI.automation('browser_state'));
     assert.deepEqual(after.tabs.map(tab => tab.id).sort(), tabIds);
-    await page.evaluate(() => window.creatorAPI.clearTabs());
+    // Exercise the packaged confirmation IPC without leaving a native dialog
+    // waiting for a human on the unattended Windows runner.
+    await application.evaluate(({ dialog }) => {
+      globalThis.__releaseClearPrompts = [];
+      globalThis.__releaseClearResponse = 0;
+      dialog.showMessageBox = async (_parent, options) => {
+        globalThis.__releaseClearPrompts.push(options);
+        return { response: globalThis.__releaseClearResponse };
+      };
+    });
+    const cancelled = await page.evaluate(() => window.creatorAPI.clearTabs());
+    assert.equal(cancelled.clearCancelled, true, 'cancel must keep the webpages');
+    const cancelState = await page.evaluate(() => window.creatorAPI.automation('browser_state'));
+    assert.deepEqual(cancelState.tabs.map(tab => tab.id).sort(), tabIds);
+    const savedAfterCancel = JSON.parse(fs.readFileSync(path.join(profile, 'creator-browser-session.json'), 'utf8'));
+    assert.deepEqual(savedAfterCancel.tabs.map(tab => tab.id).sort(), tabIds, 'cancel must preserve the saved session');
+    await application.evaluate(() => { globalThis.__releaseClearResponse = 1; });
+    const confirmed = await page.evaluate(() => window.creatorAPI.clearTabs());
+    assert.equal(confirmed.tabs.length, 0, 'confirm must clear both modes');
+    const prompts = await application.evaluate(() => globalThis.__releaseClearPrompts);
+    assert.equal(prompts.length, 2);
+    for (const prompt of prompts) {
+      assert.deepEqual(prompt.buttons, ['取消', '清空网页']);
+      assert.equal(prompt.defaultId, 0, 'clear must not be the default action');
+      assert.equal(prompt.cancelId, 0);
+    }
     await application.close(); application = null;
     page = await launch();
     const cleared = await page.evaluate(() => window.creatorAPI.automation('browser_state'));
     assert.equal(cleared.tabs.length, 0);
     assert.equal(fs.existsSync(path.join(appRoot, 'data')), false);
-    console.log('WINDOWS_EXE_LAUNCH_PASS: packaged=true userData=true restartTabs=true clearRemembered=true');
+    console.log('WINDOWS_EXE_LAUNCH_PASS: packaged=true userData=true restartTabs=true cancelPreservesTabs=true confirmClearsTabs=true clearRemembered=true');
   } finally {
     await application?.close();
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
