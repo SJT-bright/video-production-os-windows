@@ -36,7 +36,7 @@ const VideoDisposition = require('./assets/ui/video-disposition.js');
     review.choose(first.id, 'processing');
     store.activate(b.id);
     const pending = await review.finalize(first.id);
-    assert.ok(pending.path.includes('下载剧本甲/生成视频/待处理/核绘/2026-10-08/'));
+    assert.equal(path.dirname(pending.path), path.join(store.category(a.id, 'generated-videos').absolutePath, '待处理', '核绘', '2026-10-08'));
     assert.equal(fs.readFileSync(pending.path, 'utf8'), 'complete video');
     assert.equal(VideoDisposition.of({ path: path.relative(assets, pending.path) }), 'processing');
     assert.equal(review.list().length, 0);

@@ -8,6 +8,7 @@ const os = require('node:os');
 const http = require('node:http');
 const { spawnSync } = require('node:child_process');
 const { _electron } = require('playwright');
+const { findFFmpeg } = require('./voice-clips.cjs');
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn, label, timeout = 16000) {
@@ -25,9 +26,7 @@ async function until(fn, label, timeout = 16000) {
     const projectRoot = path.join(root, 'project'), assetRoot = path.join(projectRoot, '创作资产库'), data = path.join(root, 'data');
     fs.mkdirSync(path.join(assetRoot, '隔离剧本甲'), { recursive: true }); fs.mkdirSync(data); fs.mkdirSync(path.join(root, 'trash'));
     const movie = path.join(root, 'fixture.mp4');
-    const ffmpeg = path.join(__dirname, 'vendor/media-tools/darwin-arm64/ffmpeg');
-    const ff = fs.existsSync(ffmpeg) ? ffmpeg : '/opt/homebrew/bin/ffmpeg';
-    const generated = spawnSync(ff, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=128x72:d=0.5', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', movie], { timeout: 20000 });
+    const generated = spawnSync(findFFmpeg(), ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=128x72:d=0.5', '-c:v', 'mpeg4', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', movie], { timeout: 20000 });
     assert.equal(generated.status, 0, generated.stderr?.toString());
     const bytes = fs.readFileSync(movie);
     server = http.createServer((req, res) => {
@@ -71,7 +70,11 @@ async function until(fn, label, timeout = 16000) {
     assert.equal(await firstChoice.locator('[data-choice]').count(), 2);
     await firstChoice.locator('[data-choice="processing"]').click();
     const pending = await until(async () => (await downloads()).find(item => item.state === 'completed' && item.videoDisposition === 'processing'), '待处理归档');
-    assert.ok(pending.savePath.includes('/生成视频/待处理/')); assert.deepEqual(fs.readFileSync(pending.savePath), bytes);
+    const downloadParts = value => path.relative(fs.realpathSync.native(assetRoot), fs.realpathSync.native(value)).split(path.sep);
+    const pendingParts = downloadParts(pending.savePath);
+    assert.equal(pendingParts[0], folder); assert.equal(pendingParts[1], '生成视频');
+    assert.ok(pendingParts[2]); assert.equal(pendingParts[3], '第1集'); assert.equal(pendingParts[4], '待处理');
+    assert.deepEqual(fs.readFileSync(pending.savePath), bytes);
     results.realDownloadStagedAndClassified = true;
     console.log('WORKFLOW_STEP staged-download-choice-pass');
 
@@ -85,7 +88,10 @@ async function until(fn, label, timeout = 16000) {
     await api('activate', { id: projectId });
     const batch = await until(async () => { const values = (await downloads()).filter(item => item.state === 'completed' && item.videoDisposition === 'editable'); return values.length === 2 ? values : null; }, '并行同名下载');
     assert.notEqual(batch[0].savePath, batch[1].savePath);
-    assert.ok(batch.every(item => item.projectId === projectId && item.savePath.includes(`/${folder}/生成视频/可剪辑/`)), '项目切换不能改变下载归属');
+    assert.ok(batch.every(item => { const parts = downloadParts(item.savePath);
+      return item.projectId === projectId && parts[0] === folder && parts[1] === '生成视频'
+        && parts[2] === pendingParts[2] && parts[3] === '第1集' && parts[4] === '可剪辑';
+    }), '项目切换不能改变下载归属');
     results.concurrentDownloadsKeepOriginalProject = true;
     console.log('WORKFLOW_STEP concurrent-project-binding-pass');
 
@@ -152,7 +158,8 @@ async function until(fn, label, timeout = 16000) {
       Menu.prototype.popup = function(options) { this.items.find(item => item.label.startsWith('删除文件夹'))?.click(); options.callback?.(); };
       dialog.showMessageBox = async (_owner, options) => { globalThis.__workflowConfirm.push(options); return { response: globalThis.__workflowResponse }; };
       shell.trashItem = async absolute => {
-        if (!absolute.includes('/video-os-workflow-native-')) throw new Error('拒绝操作非隔离数据');
+        const relative = path.relative(fs.realpathSync.native(path.dirname(trash)), fs.realpathSync.native(absolute));
+        if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('拒绝操作非隔离数据');
         fs.renameSync(absolute, path.join(trash, path.basename(absolute)));
       };
     }, path.join(root, 'trash'));

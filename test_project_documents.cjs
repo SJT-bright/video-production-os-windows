@@ -105,8 +105,11 @@ async function main() {
   };
   let scansFinished = false;
   const scans = Promise.all(Array.from({ length: 8 }, () => api('/api/scan'))).then(value => { scansFinished = true; return value; });
-  for (let i = 0; i < 100 && !output.includes('DOC_SCAN_START'); i++) await delay(5);
-  assert.ok(output.includes('DOC_SCAN_START'));
+  // Attach failure handling before a diagnostic assertion can tear down the
+  // child. Cold filesystem scans may precede the deliberately delayed phase.
+  scans.catch(() => {});
+  for (let i = 0; i < 1000 && !output.includes('DOC_SCAN_START'); i++) await delay(5);
+  assert.ok(output.includes('DOC_SCAN_START'), output);
   const pingStarted = performance.now();
   const health = await api('/api/production/health');
   const healthMs = performance.now() - pingStarted;

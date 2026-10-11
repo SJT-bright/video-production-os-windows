@@ -69,8 +69,8 @@ async function main() {
     store.advance({ ...scope, expectedEpisode: 4 }, folderOperations);
     review.choose(downloaded[0].id, 'editable'); review.choose(downloaded[1].id, 'processing');
     const results = await Promise.all(downloaded.map(entry => review.finalize(entry.id)));
-    assert.ok(results[0].path.includes('生成视频/核绘/第1集/可剪辑/'));
-    assert.ok(results[1].path.includes('生成视频/核绘/第1集/待处理/'));
+    assert.equal(path.dirname(results[0].path), path.join(categoryFor('project-a'), '核绘', '第1集', '可剪辑'));
+    assert.equal(path.dirname(results[1].path), path.join(categoryFor('project-a'), '核绘', '第1集', '待处理'));
     assert.equal(VideoDisposition.of({ path: results[1].path }), 'processing');
     assert.equal(VideoDisposition.of({ path: '剧本/生成视频/待处理/核绘/2026-09-18/旧视频.mp4' }), 'processing');
     results.forEach((result, index) => assert.equal(fs.readFileSync(result.path, 'utf8'), downloaded[index].id));
@@ -83,7 +83,7 @@ async function main() {
     assert.equal(original.platformFolder, '核绘', '下载开始时的原始快照保持不变');
     review.choose(beforeRename.id, 'editable');
     const renamedPending = await review.finalize(beforeRename.id);
-    assert.ok(renamedPending.path.includes('生成视频/核绘站点/第1集/可剪辑/'), '已知目录改名沿用同一网站身份，不返回旧目录，也不改为当前第5集');
+    assert.equal(path.dirname(renamedPending.path), path.join(categoryFor('project-a'), '核绘站点', '第1集', '可剪辑'), '已知目录改名沿用同一网站身份，不返回旧目录，也不改为当前第5集');
     store = createDownloadEpisodeStore({ filePath });
     assert.equal(store.get(scope).platformFolder, '核绘站点', '重启后继续使用改名网站目录');
 
@@ -94,13 +94,13 @@ async function main() {
     assert.equal(review.list()[0].episodeSnapshot.episode, 1);
     review.choose(restart.id, 'editable');
     const restored = await review.finalize(restart.id);
-    assert.ok(restored.path.includes('project-b/生成视频/核绘/第1集/可剪辑/'), '重启后分类不能用当前第2集代替原快照');
+    assert.equal(path.dirname(restored.path), path.join(categoryFor('project-b'), '核绘', '第1集', '可剪辑'), '重启后分类不能用当前第2集代替原快照');
     assert.equal(fs.readFileSync(restored.path, 'utf8'), 'restart');
 
     const old = review.begin({ id: 'dl-legacy', projectId: 'project-a', serviceId: 'hehui', serviceLabel: '核绘',
       filename: '旧待审.mp4', day: '2026-10-08', startedAt: '2026-10-08T00:00:00Z' });
     fs.writeFileSync(old.stagePath, 'old pending'); review.complete(old.id); review.choose(old.id, 'processing');
-    assert.ok((await review.finalize(old.id)).path.includes('生成视频/待处理/核绘/2026-10-08/'), '旧待审记录仍回原日期目标，不冒认任何新集');
+    assert.equal(path.dirname((await review.finalize(old.id)).path), path.join(categoryFor('project-a'), '待处理', '核绘', '2026-10-08'), '旧待审记录仍回原日期目标，不冒认任何新集');
     assert.throws(() => review.begin({ id: 'dl-mismatch', projectId: 'project-b', serviceId: 'hehui',
       filename: '错误.mp4', episodeSnapshot: original }), /不一致/);
     assert.equal(review.list().length, 0);
