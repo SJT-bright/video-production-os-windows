@@ -94,8 +94,8 @@ async function checkServer() {
       VIDEO_OS_DATA_DIR: path.join(root, 'data'), VIDEO_OS_OBSIDIAN_VAULT: path.join(root, 'vault') },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  let output = '';
   const port = await new Promise((resolve, reject) => {
-    let output = '';
     const timeout = setTimeout(() => reject(new Error(output || '服务器启动超时')), 10000);
     const collect = data => {
       output += data;
@@ -109,7 +109,9 @@ async function checkServer() {
   async function api(route, body) {
     const response = await fetch(base + route, { method: body ? 'POST' : 'GET',
       headers: { Origin: base, ...(body ? { 'Content-Type': 'application/json' } : {}) },
-      body: body ? JSON.stringify(body) : undefined });
+      body: body ? JSON.stringify(body) : undefined }).catch(error => {
+        throw new Error(`${route}: ${error.message}; childExit=${child.exitCode}; ${output}`, { cause: error });
+      });
     const payload = await response.json();
     assert.ok(response.ok, JSON.stringify(payload));
     return payload;

@@ -1316,16 +1316,27 @@ function scheduleCreativeAssetBroadcast() {
   creativeAssetTimer = setTimeout(broadcastCreativeAssets, 300);
 }
 
+function watchLocalDirectory(directory, options, onChange) {
+  // Expand Windows short-name aliases before entering the native watcher.
+  // An asynchronous watcher error must not terminate the shared HTTP/UI process.
+  const watcher = fs.watch(fs.realpathSync.native(directory), options, onChange);
+  watcher.on('error', error => {
+    watcher.close();
+    console.warn(`[asset-watch] stopped: ${error.code || 'filesystem unavailable'}`);
+  });
+  return watcher;
+}
+
 function watchAssets() {
   try {
     if (fs.existsSync(ASSET_DIR)) {
-      fs.watch(ASSET_DIR, { recursive: true }, () => scheduleRescanBroadcast());
+      watchLocalDirectory(ASSET_DIR, { recursive: true }, () => scheduleRescanBroadcast());
     } else {
       // 素材库目录还没建：先盯住项目根目录，等它出现后转成递归监听
-      const rootWatcher = fs.watch(ROOT, () => {
+      const rootWatcher = watchLocalDirectory(ROOT, {}, () => {
         if (fs.existsSync(ASSET_DIR)) {
           rootWatcher.close();
-          fs.watch(ASSET_DIR, { recursive: true }, () => scheduleRescanBroadcast());
+          watchLocalDirectory(ASSET_DIR, { recursive: true }, () => scheduleRescanBroadcast());
           scheduleRescanBroadcast();
         }
       });
@@ -1337,7 +1348,7 @@ watchAssets();
 function watchCreativeAssets() {
   try {
     ensureCreativeAssetRoot(CREATIVE_ASSET_DIR);
-    fs.watch(CREATIVE_ASSET_DIR, { recursive: true }, () => scheduleCreativeAssetBroadcast());
+    watchLocalDirectory(CREATIVE_ASSET_DIR, { recursive: true }, () => scheduleCreativeAssetBroadcast());
   } catch {}
 }
 watchCreativeAssets();
