@@ -130,10 +130,11 @@ async function build() {
       overwrite: true,
       prune: false,
       asar: false,
-      sanitizePackageJson: false,
     });
     if (!Array.isArray(apps) || apps.length !== 1) throw new Error('Packager 没有返回唯一 macOS 应用路径');
     const appBundle = path.join(apps[0], `${PRODUCT_NAME}.app`);
+    // 在本机签名前恢复源码清单所校验的原始 package.json。
+    fs.copyFileSync(path.join(APP_DIR, 'package.json'), path.join(appBundle, 'Contents', 'Resources', 'app', 'package.json'));
     await execFileAsync('/usr/bin/plutil', [
       '-replace', 'CFBundleDisplayName', '-string', PRODUCT_NAME,
       path.join(appBundle, 'Contents', 'Info.plist'),

@@ -143,8 +143,6 @@ async function build() {
       overwrite: true,
       prune: false,
       asar: false,
-      // 发行合同逐字校验 package.json；保持与源码一致，不自动移除开发字段。
-      sanitizePackageJson: false,
     });
     if (!Array.isArray(apps) || apps.length !== 1) {
       throw new Error('Packager 未返回唯一 Windows 应用路径');
@@ -152,6 +150,9 @@ async function build() {
     if (path.resolve(apps[0]) !== path.resolve(TARGET_DIR)) {
       throw new Error(`Packager 输出路径异常：${apps[0]}`);
     }
+
+    // Packager 20 会清理开发字段并重写换行；发行合同要求保留原始字节。
+    fs.copyFileSync(path.join(APP_DIR, 'package.json'), path.join(TARGET_DIR, 'resources', 'app', 'package.json'));
 
     const productExe = path.join(TARGET_DIR, `${PRODUCT_NAME}.exe`);
     if (!fs.existsSync(productExe)) {
