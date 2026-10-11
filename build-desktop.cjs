@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const { packager } = require('@electron/packager');
 const { SOURCE_FILES, SOURCE_DIRS, BUILD_SCHEMA_VERSION } = require('./build-contract.cjs');
 const { prepareMediaTools } = require('./prepare-media-tools.cjs');
+const { verifyPackagedApp } = require('./verify-build-manifest.cjs');
 
 const APP_DIR = __dirname;
 const PROJECT_ROOT = path.dirname(APP_DIR);
@@ -175,7 +176,11 @@ async function build() {
       'utf-8',
     );
 
-    console.log(`DESKTOP_BUILD_PASS ${productExe}${legacyBackup ? ` legacy_backup=${legacyBackup}` : ''}`);
+    const verified = verifyPackagedApp({ sourceRoot: APP_DIR,
+      appRoot: path.join(TARGET_DIR, 'resources', 'app'), projectRoot: PROJECT_ROOT,
+      dataDir: path.join(APP_DIR, 'data'), platform: 'win32', arch: 'x64',
+      portable: PORTABLE_RELEASE, compatibilityMode: true });
+    console.log(`DESKTOP_BUILD_PASS ${productExe} verified_resources=${verified.checkedFiles}${legacyBackup ? ` legacy_backup=${legacyBackup}` : ''}`);
   } finally {
     fs.rmSync(stageDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
   }

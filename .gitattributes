@@ -1,0 +1,16 @@
+# Keep the same source bytes on Windows and Mac. Packager writes JSON as LF,
+# and the release manifest intentionally checks exact file hashes.
+* text=auto eol=lf
+*.png -text
+*.jpg -text
+*.jpeg -text
+*.webp -text
+*.gif -text
+*.ico -text
+*.icns -text
+*.woff2 -text
+*.zip -text
+*.xz -text
+*.docx -text
+*.mp4 -text
+*.wav -text
