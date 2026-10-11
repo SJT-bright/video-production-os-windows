@@ -143,6 +143,8 @@ async function build() {
       overwrite: true,
       prune: false,
       asar: false,
+      // 发行合同逐字校验 package.json；保持与源码一致，不自动移除开发字段。
+      sanitizePackageJson: false,
     });
     if (!Array.isArray(apps) || apps.length !== 1) {
       throw new Error('Packager 未返回唯一 Windows 应用路径');

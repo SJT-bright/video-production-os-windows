@@ -130,6 +130,7 @@ async function build() {
       overwrite: true,
       prune: false,
       asar: false,
+      sanitizePackageJson: false,
     });
     if (!Array.isArray(apps) || apps.length !== 1) throw new Error('Packager 没有返回唯一 macOS 应用路径');
     const appBundle = path.join(apps[0], `${PRODUCT_NAME}.app`);
