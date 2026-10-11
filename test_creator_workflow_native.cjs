@@ -213,6 +213,6 @@ async function until(fn, label, timeout = 16000) {
     clearTimeout(watchdog);
     if (app) await app.close().catch(() => app.process()?.kill('SIGTERM'));
     if (server) await new Promise(resolve => server.close(resolve));
-    fs.rmSync(root, { recursive: true, force: true });
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });

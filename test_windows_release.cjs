@@ -30,7 +30,7 @@ async function run() {
   const verified = verifyPackagedApp({ sourceRoot: __dirname, appRoot, portable: true,
     platform: 'win32', arch: 'x64', compatibilityMode: true });
   console.log(`WINDOWS_RELEASE_MANIFEST_PASS: ${verified.checkedFiles} source hashes`);
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'video-os-release-'));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'video-os-release-')));
   let application;
   try {
     const server = net.createServer();
@@ -139,7 +139,10 @@ async function run() {
     console.log('WINDOWS_EXE_LAUNCH_PASS: packaged=true userData=true restartTabs=true cancelPreservesTabs=true confirmClearsTabs=true clearRemembered=true');
   } finally {
     await application?.close();
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
+    // Electron's renderer / crash-handler processes can release their Windows
+    // profile handles shortly after close(). Retry asynchronously so process
+    // shutdown can finish; never suppress a remaining cleanup failure.
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 });
   }
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });
