@@ -1273,13 +1273,14 @@ function scheduleCreativeAssetBroadcast() {
 function watchAssets() {
   try {
     if (fs.existsSync(ASSET_DIR)) {
-      fs.watch(ASSET_DIR, { recursive: true }, () => scheduleRescanBroadcast());
+      // Windows 8.3 短路径必须先展开，避免 libuv 收到长路径事件时触发原生断言。
+      fs.watch(fs.realpathSync(ASSET_DIR), { recursive: true }, () => scheduleRescanBroadcast());
     } else {
       // 素材库目录还没建：先盯住项目根目录，等它出现后转成递归监听
-      const rootWatcher = fs.watch(ROOT, () => {
+      const rootWatcher = fs.watch(fs.realpathSync(ROOT), () => {
         if (fs.existsSync(ASSET_DIR)) {
           rootWatcher.close();
-          fs.watch(ASSET_DIR, { recursive: true }, () => scheduleRescanBroadcast());
+          fs.watch(fs.realpathSync(ASSET_DIR), { recursive: true }, () => scheduleRescanBroadcast());
           scheduleRescanBroadcast();
         }
       });
@@ -1291,7 +1292,7 @@ watchAssets();
 function watchCreativeAssets() {
   try {
     ensureCreativeAssetRoot(CREATIVE_ASSET_DIR);
-    fs.watch(CREATIVE_ASSET_DIR, { recursive: true }, () => scheduleCreativeAssetBroadcast());
+    fs.watch(fs.realpathSync(CREATIVE_ASSET_DIR), { recursive: true }, () => scheduleCreativeAssetBroadcast());
   } catch {}
 }
 watchCreativeAssets();
