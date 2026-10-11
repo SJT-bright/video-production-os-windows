@@ -18,7 +18,7 @@ async function until(fn, label, timeout = 16000) {
 }
 
 (async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'video-os-workflow-native-'));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'video-os-workflow-native-')));
   let app, server;
   const results = {};
   const watchdog = setTimeout(() => { console.error('WORKFLOW_NATIVE_WATCHDOG'); app?.process()?.kill('SIGKILL'); process.exit(1); }, 100000).unref();
@@ -110,19 +110,19 @@ async function until(fn, label, timeout = 16000) {
       const result = await response.json(); if (!response.ok) throw new Error(JSON.stringify(result)); return result;
     }, { operation, body });
     await postAssets('folder', { parent: folder, name: '第01集' });
-    const oldPendingRel = path.relative(fs.realpathSync(assetRoot), fs.realpathSync(pending.savePath)).split(path.sep).join('/');
+    const oldPendingRel = path.relative(fs.realpathSync.native(assetRoot), fs.realpathSync.native(pending.savePath)).split(path.sep).join('/');
     const movedPending = await postAssets('move', { path: oldPendingRel, folder: `${folder}/第01集` });
     assert.equal(movedPending.videoDisposition, 'processing');
     const movedDownload = (await downloads()).find(item => item.id === pending.id);
-    assert.equal(fs.realpathSync(movedDownload.savePath), fs.realpathSync(path.join(assetRoot, movedPending.path)));
+    assert.equal(fs.realpathSync.native(movedDownload.savePath), fs.realpathSync.native(path.join(assetRoot, movedPending.path)));
     pending.savePath = movedDownload.savePath;
-    const editableRel = path.relative(fs.realpathSync(assetRoot), fs.realpathSync(batch[0].savePath)).split(path.sep).join('/');
+    const editableRel = path.relative(fs.realpathSync.native(assetRoot), fs.realpathSync.native(batch[0].savePath)).split(path.sep).join('/');
     const movedEditable = await postAssets('move', { path: editableRel, folder: `${folder}/第01集` });
     assert.equal(movedEditable.videoDisposition, 'editable');
     results.persistentStatusMatchesNativeAfterMove = true;
     console.log('WORKFLOW_STEP asset-status-after-move-pass');
 
-    const rel = path.relative(fs.realpathSync(assetRoot), fs.realpathSync(pending.savePath)).split(path.sep).join('/');
+    const rel = path.relative(fs.realpathSync.native(assetRoot), fs.realpathSync.native(pending.savePath)).split(path.sep).join('/');
     await creator.evaluate(p => window.creatorAPI.floatVideoAsset({ path: p, origin: { x: 80, y: 180, width: 140, height: 170 } }), rel);
     const float = await until(() => app.windows().find(page => page.url().includes('/float-video.html')), '视频浮窗');
     const motion = await app.evaluate(({ BrowserWindow }) => {
