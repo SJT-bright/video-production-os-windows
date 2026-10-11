@@ -41,7 +41,7 @@ const assetRoot = path.join(projectRoot, '创作资产库');
 // 端口按进程号偏移，避免与并行运行的其他定向测试（drag-tray 3784 等）或残留实例相撞：
 // 一旦相撞，startServer 会静默退到备用端口，而测试里的 HTTP 断言会打到别人的实例上，得到假失败。
 const PORT = Number(process.env.FLOAT_VIDEO_TEST_PORT || 3860 + (process.pid % 120));
-const FFMPEG_PATH = '/opt/homebrew/bin/ffmpeg';
+const FFMPEG_PATH = require('./voice-clips.cjs').findFFmpeg();
 
 function post(port, route, body) {
   return new Promise((resolve, reject) => {
@@ -459,7 +459,12 @@ async function run() {
     results.otherProjectVideoAllowed = openedC.resolved === true && openedC.value?.path === videoC;
     const domC = await waitFloatDom(dom => dom.ready === 'true' && dom.cardPath === videoC);
     results.otherProjectDom = domC.name === '乙片段-001.mp4' && domC.project === '浮窗乙剧本';
+    // DOM 数据就绪早于原生窗口显示。Windows 上必须等 showInactive 完成后再模拟用户拖动，
+    // 否则是在用户尚不可见的隐藏窗口上发起拖拽，正确触发“浮窗已收起”门禁。
+    const visibleC = await waitFloat('shown');
+    results.otherProjectVisible = visibleC.count === 1 && visibleC.visible === true && visibleC.alwaysOnTop === true;
     const dragC = await dragCard();
+    console.log('FLOAT_VIDEO_NEW_PROJECT_DRAG', JSON.stringify(dragC));
     results.newProjectDragOk = dragC.ok === true && dragC.path === videoC;
     const hiddenC = await waitFloat('hidden');
     const draggedCEvents = await waitClosedCount(5);

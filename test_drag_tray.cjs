@@ -66,7 +66,7 @@ function getJson(port, route) {
 }
 
 // —— 有效合成媒体夹具（见文件头说明）——
-const FFMPEG_PATH = '/opt/homebrew/bin/ffmpeg';
+const FFMPEG_PATH = require('./voice-clips.cjs').findFFmpeg();
 
 function box(type, size = 16) {
   const buffer = Buffer.alloc(size);
