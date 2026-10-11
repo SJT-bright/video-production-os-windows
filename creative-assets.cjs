@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const AssetOrder = require('./assets/ui/asset-order.js');
 
 const TYPE_EXTENSIONS = Object.freeze({
   image: new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif']),
@@ -113,6 +114,7 @@ function buildCreativeAssetTree(root, { maxEntries = 20000, scopePath = '', incl
     let entries = [];
     try { entries = fs.readdirSync(absoluteFolder, { withFileTypes: true }); } catch { return { children, fileCount: 0 }; }
     entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name, 'zh-CN'));
+    entries = [...AssetOrder.orderFolders(entries.filter(entry => entry.isDirectory())), ...entries.filter(entry => !entry.isDirectory())];
     let fileCount = 0;
     for (const entry of entries) {
       if (remaining <= 0) { truncated = true; break; }
@@ -149,7 +151,9 @@ function buildCreativeAssetTree(root, { maxEntries = 20000, scopePath = '', incl
         size: stat.size, sizeText: formatBytes(stat.size), mtime: stat.mtime.toISOString(),
       });
     }
-    return { children, fileCount };
+    const folders = children.filter(child => child.kind === 'folder');
+    const files = children.filter(child => child.kind === 'file').sort(AssetOrder.newestFirst);
+    return { children: [...folders, ...files], fileCount };
   };
 
   const rootNode = walk(scope.abs, scope.rel);

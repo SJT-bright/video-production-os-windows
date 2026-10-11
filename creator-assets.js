@@ -288,16 +288,14 @@ function readFolderOrder() {
 }
 function orderFolderSiblings(folders, parentPath) {
   const saved = readFolderOrder()[parentPath];
-  if (!Array.isArray(saved) || folders.length < 2) return folders;
-  const ranks = new Map(saved.map((path, index) => [path, index]));
-  const sorted = folders.filter(folder => folder.depth > 0 && folder.node.name !== '浏览器下载')
-    .sort((a, b) => (ranks.get(a.node.path) ?? Infinity) - (ranks.get(b.node.path) ?? Infinity));
+  const sorted = AssetOrder.orderFolders(folders.filter(folder => folder.depth > 0 && folder.node.name !== '浏览器下载'), saved);
   let cursor = 0;
   return folders.map(folder => folder.depth === 0 || folder.node.name === '浏览器下载' ? folder : sorted[cursor++]);
 }
 function reorderableSiblings(folder) {
   return orderFolderSiblings(state.folders.filter(item =>
-    item.depth > 0 && item.parentPath === folder.parentPath && item.node.name !== '浏览器下载'), folder.parentPath);
+    item.depth > 0 && item.parentPath === folder.parentPath && item.node.name !== '浏览器下载'
+      && !AssetOrder.dateFolderKey(item.node.name)), folder.parentPath);
 }
 function saveFolderSiblingOrder(parentPath, siblings) {
   const order = readFolderOrder();
@@ -429,7 +427,7 @@ function collectTree(root) {
   };
   walk(root);
   state.folders = folders;
-  state.assets = assets;
+  state.assets = assets.sort(AssetOrder.newestFirst);
   if (!knownPaths.has(state.selectedFolder)) state.selectedFolder = root?.path || '';
 }
 
@@ -467,6 +465,15 @@ function toggleFolderRow(row) {
   }
 }
 
+function applyLibraryFolderRename(change) {
+  if (!change || change.projectId !== activeProjectId()) return;
+  const remap = value => FolderEditor.remap(value, change);
+  state.selectedFolder = remap(state.selectedFolder);
+  state.collapsedFolders = new Set([...state.collapsedFolders].map(remap));
+  state.selectedPaths = new Set([...state.selectedPaths].map(remap));
+  try { FolderEditor.rememberOrder(change); } catch {}
+}
+
 function buildFolderRow(folder) {
   const key = folder.node.path || '';
   const collapsed = state.collapsedFolders.has(key);
@@ -502,6 +509,18 @@ function buildFolderRow(folder) {
   name.className = 'folder-name';
   name.textContent = folder.depth ? folder.node.name : '全部资产';
   button.append(name);
+  if (folder.depth > 0) row.addEventListener('contextmenu', event => {
+    event.preventDefault(); event.stopPropagation();
+    if (typeof API.showFolderMenu !== 'function') { showToast('文件夹右键删除需要最新版桌面程序'); return; }
+    API.showFolderMenu({ path: key, x: event.clientX, y: event.clientY })
+      .then(result => {
+        if (result?.rename) FolderEditor.edit(button, result, API, async change => {
+          applyLibraryFolderRename(change); await loadLibrary({ select: change.path }); showToast('文件夹已改名；新导入仍按 001、002 编号');
+        }, showToast);
+        if (result?.deleted) { showToast('文件夹已移入废纸篓'); loadLibrary(); }
+      })
+      .catch(error => showToast(error.message || '文件夹操作失败'));
+  });
   button.addEventListener('click', () => {
     selectFolder(key);
     // Obsidian 习惯：选中收起中的文件夹时自动展开；收起只由箭头控制，避免误收。
@@ -512,7 +531,7 @@ function buildFolderRow(folder) {
   count.className = 'folder-count';
   count.textContent = String(folder.node.fileCount || 0);
   row.append(disclosure, button, count);
-  if (folder.depth > 0 && folder.node.name !== '浏览器下载') {
+  if (folder.depth > 0 && folder.node.name !== '浏览器下载' && !AssetOrder.dateFolderKey(folder.node.name)) {
     const grip = document.createElement('button');
     grip.type = 'button';
     grip.className = 'folder-order-grip';
@@ -631,8 +650,8 @@ function visibleAssets() {
   });
   return filtered.sort((a, b) => {
     if (state.sort === 'name') return a.name.localeCompare(b.name, 'zh-CN');
-    if (state.sort === 'folder') return a.folderPath.localeCompare(b.folderPath, 'zh-CN') || a.name.localeCompare(b.name, 'zh-CN');
-    return String(b.mtime || '').localeCompare(String(a.mtime || '')) || a.name.localeCompare(b.name, 'zh-CN');
+    if (state.sort === 'folder') return AssetOrder.compareFolderPaths(a.folderPath, b.folderPath) || AssetOrder.newestFirst(a, b);
+    return AssetOrder.newestFirst(a, b);
   });
 }
 
@@ -936,7 +955,9 @@ function setZoom(value) {
   if (image) image.style.transform = `scale(${zoom / 100})`;
 }
 
+let voiceEditor = null;
 function clearPreview() {
+  voiceEditor?.destroy(); voiceEditor = null;
   const media = el.previewMedia.querySelector('audio, video');
   if (media) {
     media.pause();
@@ -981,6 +1002,13 @@ function openPreview(item) {
     media.src = assetUrl(item.path);
     media.setAttribute('aria-label', `${item.name} ${TYPE_COPY[item.type]}预览`);
     el.previewMedia.appendChild(media);
+    if (item.type === 'video') voiceEditor = window.VoiceClipEditor?.mount({
+      host: document.getElementById('voiceClipHost'),
+      actions: el.previewDialog.querySelector('.preview-primary-actions'),
+      item, video: media, getProjectId: activeProjectId,
+      exportAudio: typeof API.saveAudioAs === 'function' ? file => API.saveAudioAs(file) : undefined,
+      onSaved: async () => { await loadLibrary(); showToast('人物音频已保存到本剧'); },
+    });
   } else if (item.type === 'document') {
     const documentPreview = document.createElement('div');
     documentPreview.className = 'document-preview';
@@ -1923,7 +1951,8 @@ async function boot() {  bindEvents();
         loadAudioLibrary().catch(error => showToast(error.message));
       }
     });
-    events.addEventListener('creative-assets', () => {
+    events.addEventListener('creative-assets', event => {
+      try { applyLibraryFolderRename(JSON.parse(event.data).folderRename); } catch {}
       scheduleLibraryReload();
     });
     // 剧本被其他入口（创作浏览器/主窗口）切换时，面板原地跟随新剧本。

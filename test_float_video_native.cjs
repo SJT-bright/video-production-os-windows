@@ -344,7 +344,7 @@ async function run() {
       && preloadSurface.noRequire === true
       && preloadSurface.noProcess === true
       && preloadSurface.noIpc === true
-      && JSON.stringify(preloadSurface.keys) === JSON.stringify(['closeWindow', 'getInfo', 'moveWindow', 'onDragResult', 'startAssetDrag']);
+      && JSON.stringify(preloadSurface.keys) === JSON.stringify(['closeWindow', 'getInfo', 'moveWindow', 'onDragResult', 'onPrepare', 'onPresent', 'onSettled', 'readyToPresent', 'settlePresentation', 'startAssetDrag']);
     if (!results.preloadOnlyWindowAndAsset) console.log('FLOAT_VIDEO_PRELOAD', JSON.stringify(preloadSurface));
 
     // —— 2. 门禁 ——

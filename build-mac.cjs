@@ -11,6 +11,7 @@ const packagerUnzip = require('./node_modules/@electron/packager/dist/unzip.js')
 const { SOURCE_FILES, SOURCE_DIRS, BUILD_SCHEMA_VERSION } = require('./build-contract.cjs');
 const { assertMacBundle, EXECUTABLE_NAME } = require('./verify-mac-bundle.cjs');
 const { MAC_PROJECT_ROOT_FROM_APP } = require('./electron/runtime-project-path.cjs');
+const { prepareMediaTools } = require('./prepare-media-tools.cjs');
 
 const APP_DIR = __dirname;
 const PROJECT_ROOT = path.dirname(APP_DIR);
@@ -69,6 +70,7 @@ async function build() {
   if (process.platform !== 'darwin') throw new Error('macOS .app 必须在真实 macOS 主机上构建；Windows 只维护构建脚本和静态契约。');
   const arch = readArg('--arch') || process.env.VIDEO_OS_MAC_ARCH || process.arch;
   if (!['arm64', 'x64', 'universal'].includes(arch)) throw new Error('未知 macOS 架构');
+  await prepareMediaTools('darwin', arch);
   const electronVersion = require('./node_modules/electron/package.json').version;
   const { downloadArtifact } = await import('@electron/get');
   const electronZip = await downloadArtifact({

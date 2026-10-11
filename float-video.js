@@ -15,6 +15,48 @@ const el = Object.fromEntries([
 let info = null;            // {path, name, fileUrl, projectId, projectName, size}
 let loading = null;         // 进行中的读取，避免 focus/visibility 并发重复请求
 let toastTimer = null;
+const shell = document.getElementById('fvShell');
+let presentation = null, presentationAnimation = null;
+
+function resetPresentation() {
+  presentationAnimation?.cancel(); presentationAnimation = null; presentation = null;
+  shell.classList.remove('is-presenting'); shell.removeAttribute('style');
+  document.body.dataset.presenting = 'false';
+}
+
+function finishPresentation() {
+  const id = presentation?.id;
+  if (!id) return;
+  // 指针按下可立即中断动效；关闭和拖出不必等待动画播完。
+  presentationAnimation?.cancel(); presentationAnimation = null;
+  shell.style.transform = 'none'; shell.style.opacity = '1';
+  document.body.dataset.presenting = 'false';
+  window.floatVideoAPI?.settlePresentation?.(id);
+}
+
+function preparePresentation(next) {
+  if (!next?.id || presentation?.id === next.id) return;
+  resetPresentation(); presentation = next;
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const from = reduced ? 'none' : `translate(${next.dx}px, ${next.dy}px) scale(${next.scaleX}, ${next.scaleY})`;
+  Object.assign(shell.style, { inset: 'auto', left: `${next.left}px`, top: `${next.top}px`, width: `${next.width}px`, height: `${next.height}px`, transform: from, opacity: reduced ? '0' : '.7' });
+  shell.classList.add('is-presenting'); document.body.dataset.presenting = 'prepared';
+  requestAnimationFrame(() => requestAnimationFrame(() => { if (presentation?.id === next.id) window.floatVideoAPI?.readyToPresent?.(next.id); }));
+}
+
+window.floatVideoAPI?.onPrepare?.(preparePresentation);
+window.floatVideoAPI?.onPresent?.(({ id }) => {
+  if (!presentation || presentation.id !== id) return;
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  document.body.dataset.presenting = 'true';
+  presentationAnimation = shell.animate([
+    { transform: shell.style.transform, opacity: reduced ? 0 : .7 },
+    { transform: 'none', opacity: 1 },
+  ], { duration: reduced ? 120 : 300, easing: 'cubic-bezier(.22,1,.36,1)', fill: 'forwards' });
+  presentationAnimation.finished.then(() => { if (presentation?.id === id) finishPresentation(); }).catch(() => {});
+});
+window.floatVideoAPI?.onSettled?.(({ id }) => { if (!presentation || presentation.id === id) resetPresentation(); });
+shell.addEventListener('pointerdown', finishPresentation, true);
 
 function showToast(message) {
   el.fvToast.textContent = message;
@@ -43,7 +85,9 @@ function render(next) {
   el.fvProject.textContent = next.projectName || '灵感生成';
   el.fvName.textContent = next.name;
   el.fvName.title = next.name;
-  el.fvKind.textContent = '视频 · 拖到剪映松手导入';
+  const processing = next.disposition === 'processing';
+  el.fvKind.textContent = processing ? '待处理 · 拖到 Updream 处理' : '可剪辑 · 拖到剪映松手导入';
+  el.fvGrip.textContent = processing ? '按住此卡拖动，松手放入 Updream' : '按住此卡拖动，松手放入剪映';
   el.fvCard.dataset.path = next.path;
   el.fvCard.dataset.projectId = next.projectId || '';
   el.fvCard.classList.remove('unavailable');
@@ -55,6 +99,7 @@ function render(next) {
     el.fvPreview.src = `${next.fileUrl}#t=0.001`;
     setStageState('正在读取首帧…');
   }
+  if (next.presentation) preparePresentation(next.presentation);
 }
 
 function renderUnavailable(message) {

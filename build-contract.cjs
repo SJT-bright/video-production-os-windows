@@ -27,6 +27,7 @@ const SOURCE_FILES = Object.freeze([
   'script-breakdown-store.cjs',
   'server.js',
   'style.css',
+  'voice-clips.cjs',
   'tab-menu.css',
   'tab-menu.html',
   'tab-menu.js',

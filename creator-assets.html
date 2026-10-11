@@ -8,6 +8,7 @@
   <title>创作资产库｜视频制作 OS</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="creator-assets.css">
+  <link rel="stylesheet" href="assets/ui/voice-clips.css">
   <link rel="stylesheet" href="assets/ui/editor-exports.css">
   <link rel="stylesheet" href="assets/ui/asset-sources.css">
   <link rel="stylesheet" href="assets/ui/creator/ui-icons.css">
@@ -98,7 +99,7 @@
           <div class="library-meta">
             <span id="assetCount">0 项</span>
             <select id="assetSort" aria-label="资产排序">
-              <option value="recent">最近使用</option>
+              <option value="recent">最新在前</option>
               <option value="name">按名称</option>
               <option value="folder">按文件夹</option>
             </select>
@@ -147,6 +148,7 @@
       <div class="preview-canvas" id="previewCanvas">
         <div id="previewMedia"></div>
       </div>
+      <div id="voiceClipHost"></div>
       <div class="preview-actions">
         <div class="zoom-controls" id="zoomControls" hidden>
           <button class="quiet-button" id="zoomOut" type="button" aria-label="缩小图片">−</button>
@@ -240,8 +242,11 @@
 
   <div class="asset-toast" id="assetToast" role="status" aria-live="polite"></div>
   <script src="assets/ui/creator/ui-icons.js"></script>
+  <script src="assets/ui/asset-order.js"></script>
+  <script src="assets/ui/folder-editor.js"></script>
   <script src="assets/ui/editor-exports.js"></script>
   <script src="assets/ui/asset-sources.js"></script>
+  <script src="assets/ui/voice-clips.js"></script>
 <script src="creator-assets.js"></script>
 </body>
 </html>

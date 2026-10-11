@@ -36,6 +36,7 @@ function flattenAssets(node, out) {
     (node.children || []).forEach(child => flattenAssets(child, out));
     return;
   }
+  if (node.type === 'video' && VideoDisposition.of(node) === 'processing') return;
   if (['video', 'audio'].includes(node.type)) out.push(node);
 }
 
@@ -47,19 +48,7 @@ function flattenAssets(node, out) {
 function assetBadge(item) {
   const stem = item.name.replace(/\.[^.]+$/, '');
   const seq = (stem.match(/[-_\s](\d{1,4})$/) || [])[1] || '';
-  const dirPart = String(item.path || '').replace(/[^/]+$/, '');
-  const dateMatches = [...dirPart.matchAll(/(\d{4})-(\d{2})-(\d{2})/g)];
-  let year, month, day;
-  if (dateMatches.length) {
-    [, year, month, day] = dateMatches[dateMatches.length - 1];
-  } else if (item.mtime) {
-    const local = new Date(item.mtime);
-    if (!Number.isNaN(local.getTime())) {
-      year = String(local.getFullYear());
-      month = String(local.getMonth() + 1).padStart(2, '0');
-      day = String(local.getDate()).padStart(2, '0');
-    }
-  }
+  const [year, month, day] = AssetOrder.assetDateKey(item).split('-');
   const shortDate = month ? `${Number(month)}/${Number(day)}` : '';
   const fullDate = year ? `${year}-${month}-${day}` : '';
   return {
@@ -72,9 +61,7 @@ function assetBadge(item) {
 }
 
 function newestFirst(a, b) {
-  return assetBadge(b).date.localeCompare(assetBadge(a).date)
-    || ((Date.parse(b.mtime) || 0) - (Date.parse(a.mtime) || 0))
-    || b.name.localeCompare(a.name, 'zh-CN', { numeric: true });
+  return AssetOrder.newestFirst(a, b);
 }
 
 let coverObserver = null;

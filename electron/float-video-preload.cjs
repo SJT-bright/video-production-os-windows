@@ -15,6 +15,11 @@ function subscribe(channel, callback) {
 // 主进程每次都按当前剧本重新校验：切剧本后旧视频既读不到也拖不出。
 contextBridge.exposeInMainWorld('floatVideoAPI', Object.freeze({
   getInfo: () => ipcRenderer.invoke('float-video:get-info'),
+  onPrepare: callback => subscribe('float-video:prepare', callback),
+  onPresent: callback => subscribe('float-video:present', callback),
+  onSettled: callback => subscribe('float-video:settled', callback),
+  readyToPresent: id => ipcRenderer.send('float-video:ready', id),
+  settlePresentation: id => ipcRenderer.send('float-video:settle', id),
   startAssetDrag: relativePath => ipcRenderer.send('float:start-asset-drag', {
     path: relativePath && typeof relativePath === 'object' ? relativePath.path : relativePath,
   }),

@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'">
+<title>选择视频分类</title><link rel="stylesheet" href="download-review.css"></head>
+<body><main><h1>这个视频准备怎么用？</h1>
+<p id="download-name" class="filename">正在读取视频…</p><p id="download-project" class="project"></p>
+<div class="choices">
+<button type="button" data-choice="editable"><span class="symbol">✓</span><strong>可剪辑</strong><small>无需处理，放入剪映联动列表</small></button>
+<button type="button" data-choice="processing"><span class="symbol">↻</span><strong>待处理</strong><small>需要去字幕等处理，可拖到 Updream</small></button>
+</div><footer><span>选择后归档，下载会在后台继续。</span><button type="button" id="cancel">取消下载</button></footer>
+<p id="error" role="alert"></p></main><script src="download-review.js"></script></body></html>

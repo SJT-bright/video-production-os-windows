@@ -104,8 +104,17 @@ const scopedVideoTarget = resolveDownloadTarget({
 assert.equal(scopedVideoTarget.kind, 'video');
 assert.equal(scopedVideoTarget.isImage, false);
 assert.equal(scopedVideoTarget.projectScoped, true);
-assert.equal(scopedVideoTarget.directory, path.join(projectDirectories.video, 'Updream', '2026-08-22'));
+assert.equal(scopedVideoTarget.directory, path.join(projectDirectories.video, 'Updream', '素材001'));
 assertScoped(scopedVideoTarget, projectDirectories.video, '视频下载');
+for (const videoDisposition of ['', 'editable', 'processing']) {
+  const input = { projectRoot, projectDirectories, serviceId: 'hewai', serviceLabel: '核绘', mode: 'video',
+    filename: 'scene.mp4', mimeType: 'video/mp4', videoDisposition, exists: () => false };
+  const first = resolveDownloadTarget({ ...input, now: new Date(2026, 9, 11) });
+  const tomorrow = resolveDownloadTarget({ ...input, now: new Date(2026, 9, 12) });
+  assert.equal(first.directory, tomorrow.directory, '新视频跨日仍在同一个素材文件夹，不再建日期目录');
+  assert.equal(path.basename(first.directory), '素材001');
+  assert.equal(path.basename(path.dirname(first.directory)), '核绘');
+}
 
 const scopedAudioTarget = resolveDownloadTarget({
   projectRoot,

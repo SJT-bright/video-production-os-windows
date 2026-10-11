@@ -74,15 +74,19 @@ function resolveDownloadTarget({
   filename,
   mimeType,
   projectDirectories,
+  videoDisposition = '',
   now = new Date(),
   exists,
 }) {
   if (!projectRoot) throw new Error('项目下载目录尚未连接');
   const kind = classifyDownload({ filename, mimeType, mode, serviceId });
+  if (kind === 'video' && videoDisposition && !['editable', 'processing'].includes(videoDisposition)) throw new Error('视频下载分类无效');
   const platformFolder = sanitizeFilename(serviceLabel || serviceId || '其他平台', now);
   const day = dateFolder(now);
   const isImage = kind === 'image';
   const scopedDirectories = projectDirectories && typeof projectDirectories === 'object' ? projectDirectories : null;
+  const directoryKey = kind === 'file' ? 'downloads' : kind;
+  if (scopedDirectories && !scopedDirectories[directoryKey]) throw new Error('目标分类已删除或不可用，请先恢复文件夹或选择其他分类');
   if (isImage && !scopedDirectories?.image && !obsidianVault) throw new Error('图片归档目录尚未连接');
   if (kind === 'file' && scopedDirectories && !scopedDirectories.downloads) throw new Error('下载目录尚未连接');
   const base = kind === 'file'
@@ -92,7 +96,12 @@ function resolveDownloadTarget({
       : kind === 'audio'
         ? (scopedDirectories?.audio || path.join(projectRoot, '素材库', '浏览器生成'))
         : (scopedDirectories?.video || path.join(projectRoot, '素材库', '浏览器生成'));
-  const directory = path.join(base, platformFolder, day);
+  // New project video imports share a material folder across dates. Old dated
+  // directories and recovery journal paths remain valid and are not migrated.
+  const group = kind === 'video' && scopedDirectories ? '素材001' : day;
+  const directory = kind === 'video' && videoDisposition
+    ? path.join(base, videoDisposition === 'editable' ? '可剪辑' : '待处理', platformFolder, group)
+    : path.join(base, platformFolder, group);
   const safeName = sanitizeFilename(filename, now);
   const targetPath = uniquePath(path.join(directory, safeName), exists);
   return { kind, directory, targetPath, isImage, projectScoped: !!scopedDirectories };

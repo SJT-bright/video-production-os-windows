@@ -4,10 +4,17 @@
 html, body { height: 100%; }
 body {
   margin: 0; display: flex; flex-direction: column; overflow: hidden;
-  background: #131317; color: #f2f2f5;
+  background: transparent; color: #f2f2f5;
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", system-ui, sans-serif;
   font-size: 12px; user-select: none;
 }
+.fv-shell {
+  position: absolute; inset: 0; display: flex; flex-direction: column; overflow: hidden;
+  background: #131317; border: 1px solid #4a4a54; border-radius: 14px;
+  transform-origin: 0 0;
+}
+.fv-shell.is-presenting { will-change: transform, opacity; }
+.fv-shell.is-presenting .fv-head { -webkit-app-region: no-drag; }
 
 .fv-head {
   -webkit-app-region: drag;
@@ -37,7 +44,7 @@ body {
 
 /* 可拖拽卡：整卡是一个原生拖出把手（拖出原文件，不复制、不移动） */
 .fv-card {
-  display: flex; flex-direction: column; min-height: 0; border: 1px solid #3a3a40; border-radius: 12px;
+  display: flex; flex: 1; flex-direction: column; min-height: 0; border: 1px solid #3a3a40; border-radius: 12px;
   background: #1f1f25; color: inherit; cursor: grab; overflow: hidden;
   transition: border-color .12s ease, background .12s ease, box-shadow .12s ease;
 }
@@ -100,7 +107,6 @@ body {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
 }
-body { animation: motionFloatIn 200ms var(--motion-ease-out) backwards; }
 
 /* ---- 关闭键按压反馈：按压缩放更深一档；既有 hover 高亮/上浮过渡原样保留 ---- */
 .fv-close:active { transform: translateY(0) scale(.92); }

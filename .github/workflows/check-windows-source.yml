@@ -1,0 +1,63 @@
+name: Reproduce Windows source
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clean-windows-build:
+    if: github.repository == 'SJT-bright/video-production-os-windows'
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: 视频制作OS
+    steps:
+      - name: Checkout fixed source
+        uses: actions/checkout@v4
+        with:
+          path: 视频制作OS
+      - name: Setup pinned Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: 视频制作OS/.nvmrc
+          cache: npm
+          cache-dependency-path: 视频制作OS/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Prepare Windows audio component
+        run: node prepare-media-tools.cjs win32 x64
+      - name: Check shared source and Windows workflows
+        run: npm run test:source
+      - name: Check native menus and template migration
+        run: |
+          node test_creator_context_menu.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node test_prompt_template_migration_native.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build isolated Windows App
+        run: npm run build:windows:release
+      - name: Launch packaged EXE and verify retained data
+        run: node test_windows_release.cjs
+      - name: Verify bundled audio clipping
+        env:
+          VOICE_TEST_APP_ROOT: dist/视频制作OS-win32-x64/resources/app
+        run: node test_voice_clips.cjs
+      - name: Verify packaged downloads, folders and floating video
+        env:
+          WORKFLOW_TEST_EXECUTABLE: dist/视频制作OS-win32-x64/视频制作OS.exe
+        run: node test_creator_workflow_native.cjs
+      - name: Verify floating positions and drag tray
+        run: |
+          node test_float_video_native.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node test_drag_tray.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+# Source-only verification; no App or upstream audio binary is published.
+# source-v* tags do not trigger the existing installer-release workflow.

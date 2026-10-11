@@ -308,6 +308,18 @@ class ProductionStore {
     });
   }
 
+  relocateFolder(oldPath, newPath) {
+    const prefix = `${oldPath}${path.sep}`;
+    const destination = `${newPath}${path.sep}`;
+    return this.transaction(() => {
+      const assets = this.db.prepare('UPDATE asset_refs SET path = ? || substr(path, length(?) + 1) WHERE substr(path, 1, length(?)) = ?')
+        .run(destination, prefix, prefix, prefix).changes;
+      const inbox = this.db.prepare('UPDATE inbox_items SET asset_path = ? || substr(asset_path, length(?) + 1), updated_at = ? WHERE substr(asset_path, 1, length(?)) = ?')
+        .run(destination, prefix, nowIso(), prefix, prefix).changes;
+      return { assets, inbox };
+    });
+  }
+
   getShot(id, projectId = this.activeProjectId()) {
     if (!id) return null;
     const safeProjectId = cleanText(projectId, 100, this.activeProjectId()) || this.defaultProjectId;

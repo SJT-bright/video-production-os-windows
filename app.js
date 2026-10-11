@@ -297,11 +297,10 @@ function fmtDur(seconds) {
 function sortAssets(files, mode) {
   const sorted = [...files];
   sorted.sort((a, b) => {
-    if (mode === 'oldest') return a.mtime.localeCompare(b.mtime);
     if (mode === 'name') return a.name.localeCompare(b.name, 'zh-CN');
     if (mode === 'size') return b.size - a.size || a.name.localeCompare(b.name, 'zh-CN');
-    if (mode === 'folder') return parentFolderOf(a.displayPath || a.path).localeCompare(parentFolderOf(b.displayPath || b.path), 'zh-CN') || a.name.localeCompare(b.name, 'zh-CN');
-    return b.mtime.localeCompare(a.mtime);
+    if (mode === 'folder') return AssetOrder.compareFolderPaths(parentFolderOf(a.displayPath || a.path), parentFolderOf(b.displayPath || b.path)) || AssetOrder.newestFirst(a, b);
+    return AssetOrder.newestFirst(a, b);
   });
   return sorted;
 }
@@ -961,8 +960,7 @@ const AssetsApp = {
           .map(([t, n]) => h('option', { value: t, selected: S.tag === t ? 'selected' : null }, `${t} (${n})`)),
       ),
       h('select', { class: 'field sort-field', title: '素材排序', onchange: e => { S.sort = e.target.value; this.render(root, win); } },
-        h('option', { value: 'newest', selected: S.sort === 'newest' ? 'selected' : null }, '最新修改'),
-        h('option', { value: 'oldest', selected: S.sort === 'oldest' ? 'selected' : null }, '最早修改'),
+        h('option', { value: 'newest', selected: S.sort === 'newest' || S.sort === 'oldest' ? 'selected' : null }, '最新在前'),
         h('option', { value: 'name', selected: S.sort === 'name' ? 'selected' : null }, '按名称'),
         h('option', { value: 'size', selected: S.sort === 'size' ? 'selected' : null }, '按大小'),
         h('option', { value: 'folder', selected: S.sort === 'folder' ? 'selected' : null }, '按文件夹'),
@@ -1289,7 +1287,8 @@ const AudioApp = {
         h('div', { class: 'audio-row-meta' },
           S.durSpans[f.path] = h('span', { class: 'audio-dur' }, ''),
           h('span', {}, f.sizeText),
-          h('span', { class: 'tag green' }, f.audioRole === 'bgm' ? 'BGM' : f.audioRole === 'sfx' ? '音效' : f.exportKind === 'voice' ? '人物音频' : '对白 / 音频'),
+          h('span', { class: 'tag green' }, f.audioRole === 'bgm' ? 'BGM' : f.audioRole === 'sfx' ? '音效' : f.voice?.sourcePath || f.exportKind === 'voice' ? '人物音频' : '对白 / 音频'),
+          ...(f.voice?.characterName ? [h('span', { class: 'tag blue', title: f.voice.description || '' }, f.voice.characterName)] : []),
           ...tags.map(tag => h('span', { class: 'tag blue' }, tag)),
         ),
       ),

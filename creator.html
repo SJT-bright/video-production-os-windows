@@ -15,6 +15,7 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
   <title>创作浏览器｜视频制作 OS</title>
   <link rel="icon" type="image/png" href="assets/ui/creator/studio-3d-v1.png">
   <link rel="stylesheet" href="creator.css">
+  <link rel="stylesheet" href="assets/ui/voice-clips.css">
   <link rel="stylesheet" href="assets/ui/creator/ui-icons.css">
 </head>
 <body data-mode="image" data-ready="loading">
@@ -86,6 +87,11 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
       <div class="all-tabs-popover hidden" id="allTabsPopover" role="dialog" aria-label="全部网页">
         <input class="all-tabs-search" id="allTabsSearch" type="text" autocomplete="off" spellcheck="false" aria-label="按名称或平台搜索已打开的网页" placeholder="搜索网页名称或平台…">
         <div class="all-tabs-list" id="allTabsList" role="listbox" aria-label="全部网页"></div>
+      </div>
+      <div class="project-popover hidden" id="projectPopover" role="menu" aria-label="切换剧本">
+        <div class="project-menu-hint">右键剧本，可迁移固定提示词</div>
+        <div class="project-menu-list" id="projectMenuList"></div>
+        <button class="project-menu-manage" id="projectMenuManage" type="button" role="menuitem">新建或管理剧本…</button>
       </div>
     </header>
 
@@ -275,6 +281,7 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
         <button class="icon-button" id="quickPreviewClose" type="button" aria-label="关闭">×</button>
       </header>
       <div class="quick-preview-stage" id="quickPreviewStage"></div>
+      <div id="quickVoiceClipHost"></div>
       <footer class="creator-dialog-foot">
         <button class="secondary-action" id="quickPreviewInLibrary" type="button">在完整资产库中查看</button>
         <button class="primary-action" id="quickPreviewDone" type="button">关闭</button>
@@ -318,6 +325,11 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
   <div class="tab-context-menu" id="tabContextMenu" role="menu" aria-label="网页标签操作" hidden></div>
 
   <script src="assets/ui/creator/ui-icons.js"></script>
+  <script src="assets/ui/asset-order.js"></script>
+  <script src="assets/ui/folder-editor.js"></script>
+  <script src="assets/ui/video-disposition.js"></script>
+  <script src="assets/ui/prompt-template-store.js"></script>
+  <script src="assets/ui/voice-clips.js"></script>
 <script src="creator.js"></script>
 <script src="creator-automation-ui.js"></script>
 </body>

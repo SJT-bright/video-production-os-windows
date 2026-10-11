@@ -180,6 +180,25 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   box-shadow: 0 18px 44px rgba(0, 0, 0, .16), 0 2px 8px rgba(0, 0, 0, .08);
 }
 .all-tabs-popover.hidden { display: none; }
+.project-popover {
+  position: absolute; top: 100%; z-index: 42; width: min(280px, calc(100vw - 20px));
+  margin-top: 5px; padding: 6px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface-solid, #fff); box-shadow: 0 12px 32px rgba(0,0,0,.14);
+  -webkit-app-region: no-drag;
+}
+.project-popover.hidden { display: none; }
+.project-menu-hint { padding: 3px 8px 6px; color: var(--faint); font-size: 10px; }
+.project-menu-list { display: grid; gap: 2px; max-height: min(336px, calc(100vh - 180px)); overflow-y: auto; overscroll-behavior: contain; }
+.project-menu-item, .project-menu-manage {
+  width: 100%; min-height: 30px; padding: 4px 9px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--text); text-align: left; font-size: 11.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+}
+.project-menu-item[aria-checked="true"] { background: var(--mode-soft); color: var(--mode); font-weight: 650; }
+.project-menu-item:hover:not(:disabled), .project-menu-manage:hover { background: var(--fill); }
+.project-menu-item:focus-visible, .project-menu-manage:focus-visible { outline: 2px solid var(--mode); outline-offset: -2px; }
+.project-menu-item:disabled { color: var(--faint); cursor: default; }
+.project-menu-manage { margin-top: 5px; border-top: 1px solid var(--line); border-radius: 0; }
 .all-tabs-search {
   min-width: 0; height: 30px; padding: 0 11px;
   border: 1px solid var(--line-strong); border-radius: 980px;

@@ -24,7 +24,11 @@ const { isSafeBrowserAddress, normalizeBrowserAddress } = require('./browser-add
 const { createCreatorPlatformStore } = require('./creator-platforms.cjs');
 const { createBrowserSessionStore } = require('./browser-session.cjs');
 const { buildCreatorContextMenuTemplate } = require('./creator-context-menu.cjs');
-const { classifyDownload, resolveDownloadTarget, deleteBrowserDownloadFile } = require('./download-router.cjs');
+const { classifyDownload, resolveDownloadTarget, deleteBrowserDownloadFile, dateFolder } = require('./download-router.cjs');
+const { createDownloadReview } = require('./download-review.cjs');
+const { createDownloadReviewUI } = require('./download-review-ui.cjs');
+const { createFloatPresentation } = require('./float-presentation.cjs');
+const VideoDisposition = require('../assets/ui/video-disposition.js');
 const { classifyCreativeAsset, ensureCreativeAssetRoot, resolveCreativeAsset, buildCreativeAssetTree } = require('../creative-assets.cjs');
 const { createCreatorAutomation, serveAutomation } = require('./creator-automation.cjs');
 const { resolveMacProjectRootFromBundle, macProjectDataDir } = require('./runtime-project-path.cjs');
@@ -195,6 +199,39 @@ const downloadOwners = new WeakMap();
 const configuredSessions = new Set();
 const recentDownloads = [];
 const activeDownloadItems = new Map();
+let downloadReviewUI = null;
+let appQuitting = false;
+let recoveringVideoDownloads = false;
+function validateVideoDownloadTarget(entry, destination) {
+  const project = creativeProjectStore.get(entry.projectId);
+  if (!project?.available || !['editable', 'processing'].includes(entry.choice)) throw new Error('下载所属剧本目录不可用');
+  const base = creativeProjectStore.category(project.id, 'generated-videos').absolutePath;
+  const allowed = path.join(base, entry.choice === 'processing' ? '待处理' : '可剪辑');
+  const relative = path.relative(allowed, destination);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('下载归档路径越界');
+  for (let current = destination; current !== CREATIVE_ASSET_DIR; current = path.dirname(current)) {
+    if (fs.existsSync(current) && fs.lstatSync(current).isSymbolicLink()) throw new Error('下载归档路径不能包含符号链接');
+    if (current === path.dirname(current)) throw new Error('下载归档路径无效');
+  }
+}
+const videoDownloadReview = createDownloadReview({
+  dataDir: process.env.VIDEO_OS_DATA_DIR,
+  targetFor(entry) {
+    const project = creativeProjectStore.get(entry.projectId);
+    if (!project || !project.available) throw new Error('下载所属剧本目录不可用，视频仍保留在暂存区');
+    const category = creativeProjectStore.category(project.id, 'generated-videos');
+    const base = category.absolutePath;
+    const target = resolveDownloadTarget({
+      projectRoot: PROJECT_ROOT, serviceId: entry.serviceId, serviceLabel: entry.serviceLabel,
+      filename: entry.filename, mimeType: 'video/mp4', mode: 'video', videoDisposition: entry.choice,
+      projectDirectories: { video: base }, now: new Date(`${entry.day}T12:00:00`),
+    });
+    validateVideoDownloadTarget(entry, target.targetPath);
+    fs.mkdirSync(target.directory, { recursive: true });
+    return sequentialImportTarget(target.directory, 'video', entry.filename, category.label);
+  },
+  validateTarget: validateVideoDownloadTarget,
+});
 let diagnosticLog = '';
 
 function initDiagnostics() {
@@ -730,7 +767,9 @@ function publicDownload(record) {
     mode: record.mode,
     kind: record.kind,
     filename: record.filename,
-    savePath: record.savePath,
+    savePath: record.pendingReview ? '' : record.savePath,
+    pendingReview: !!record.pendingReview,
+    videoDisposition: record.videoDisposition || '',
     state: record.state,
     receivedBytes: record.receivedBytes,
     totalBytes: record.totalBytes,
@@ -782,6 +821,67 @@ function archiveDownloadInProduction(record) {
 
 function broadcastDownload(record) {
   sendCreator('creator:download', publicDownload(record));
+}
+
+function chooseVideoDownload(record) {
+  if (!downloadReviewUI || appQuitting) return Promise.resolve('defer');
+  return downloadReviewUI.choose({ ...record, projectName: creativeProjectStore.get(record.productionSnapshot?.projectId)?.name || '原剧本' })
+    .then(choice => {
+      if (['editable', 'processing'].includes(choice)) {
+        videoDownloadReview.choose(record.id, choice);
+        record.videoDisposition = choice;
+        broadcastDownload(record);
+      }
+      return choice;
+    });
+}
+
+async function finishReviewedVideo(record) {
+  const result = await videoDownloadReview.finalize(record.id);
+  record.savePath = result.path;
+  record.filename = path.basename(result.path);
+  record.videoDisposition = result.choice;
+  record.pendingReview = false;
+  record.state = 'completed';
+  activeDownloadItems.delete(record.id);
+  if (!appQuitting) {
+    archiveDownloadInProduction(record);
+    broadcastDownload(record);
+    serverModule.broadcastCreativeAssets?.();
+    sendMain('os:download-complete', publicDownload(record));
+  }
+}
+
+async function recoverVideoDownloads() {
+  if (recoveringVideoDownloads || appQuitting || !downloadReviewUI) return;
+  recoveringVideoDownloads = true;
+  try {
+    for (const entry of videoDownloadReview.list()) {
+      if (activeDownloadItems.has(entry.id) || appQuitting) continue;
+      if (!entry.completed) {
+        // 退出时被中断的网络下载不能被当作完整视频。只清自己的暂存文件。
+        await videoDownloadReview.discard(entry.id);
+        sendCreator('creator:notice', '上次有视频下载未完成，请返回平台重新下载。');
+        continue;
+      }
+      const record = { ...entry, kind: 'video', mode: 'video', savePath: entry.stagePath,
+        pendingReview: true, state: 'paused', productionSnapshot: entry.productionSnapshot || { projectId: entry.projectId },
+        totalBytes: entry.size || 0, receivedBytes: entry.size || 0 };
+      recentDownloads.unshift(record);
+      activeDownloadItems.set(record.id, { item: null, record });
+      const choice = entry.choice || await chooseVideoDownload(record);
+      if (appQuitting || choice === 'defer') break;
+      if (choice === 'cancel') {
+        await videoDownloadReview.discard(record.id);
+        record.state = 'cancelled'; record.error = '下载已取消'; activeDownloadItems.delete(record.id);
+        broadcastDownload(record);
+      } else {
+        try { await finishReviewedVideo(record); }
+        catch (error) { record.error = `视频仍在暂存区：${error.message}`; broadcastDownload(record); }
+      }
+    }
+  } catch (error) { logDiagnostic('video-download-recovery', error); }
+  finally { recoveringVideoDownloads = false; }
 }
 
 function configureSession(serviceId, ses) {
@@ -843,6 +943,7 @@ function configureSession(serviceId, ses) {
     const productionSnapshot = captureProductionContext(serviceId, mode);
     const originalName = item.getFilename() || `download-${Date.now()}`;
     const id = `dl-${Date.now()}-${++downloadSequence}`;
+    const startedAt = new Date().toISOString();
     let target;
     let savePath;
     try {
@@ -856,11 +957,14 @@ function configureSession(serviceId, ses) {
         mimeType: item.getMimeType(),
         projectDirectories: activeProjectDirectories(),
       });
-      fs.mkdirSync(target.directory, { recursive: true });
-      // 图片/视频统一按“分类-序号”落盘（平台内点击下载也一样），UUID 乱名不再进入素材库。
-      savePath = (target.kind === 'image' || target.kind === 'video')
-        ? sequentialImportTarget(target.directory, target.kind, originalName)
-        : target.targetPath;
+      if (target.kind === 'video') {
+        const staged = videoDownloadReview.begin({ id, projectId: productionSnapshot.projectId, serviceId,
+          serviceLabel: displayLabel, filename: originalName, startedAt, day: dateFolder(), productionSnapshot });
+        savePath = staged.stagePath;
+      } else {
+        fs.mkdirSync(target.directory, { recursive: true });
+        savePath = target.kind === 'image' ? sequentialImportTarget(target.directory, target.kind, originalName) : target.targetPath;
+      }
       item.setSavePath(savePath);
     } catch (error) {
       event.preventDefault();
@@ -896,13 +1000,19 @@ function configureSession(serviceId, ses) {
       state: 'progressing',
       receivedBytes: 0,
       totalBytes: Math.max(0, item.getTotalBytes()),
-      startedAt: new Date().toISOString(),
+      startedAt,
       productionSnapshot,
+      pendingReview: target.kind === 'video',
     };
     recentDownloads.unshift(record);
     if (recentDownloads.length > 50) recentDownloads.length = 50;
-    activeDownloadItems.set(id, { item, record });
+    activeDownloadItems.set(id, { item, record, finished: false });
     broadcastDownload(record);
+    const classification = target.kind === 'video' ? chooseVideoDownload(record) : null;
+    if (classification) classification.then(choice => {
+      const transfer = activeDownloadItems.get(id);
+      if (choice === 'cancel' && transfer?.item === item && !transfer.finished) item.cancel();
+    }).catch(error => { record.error = `视频分类失败：${error.message}`; broadcastDownload(record); });
 
     item.on('updated', (_downloadEvent, state) => {
       record.state = state === 'interrupted' ? 'interrupted' : (item.isPaused() ? 'paused' : 'progressing');
@@ -911,13 +1021,36 @@ function configureSession(serviceId, ses) {
       broadcastDownload(record);
     });
 
-    item.once('done', (_downloadEvent, state) => {
-      activeDownloadItems.delete(id);
-      record.state = state;
+    item.once('done', async (_downloadEvent, state) => {
+      const transfer = activeDownloadItems.get(id);
+      if (transfer) transfer.finished = true;
+      record.state = state === 'completed' && record.pendingReview ? 'paused' : state;
       record.receivedBytes = Math.max(0, item.getReceivedBytes());
       record.totalBytes = Math.max(0, item.getTotalBytes());
       record.endedAt = new Date().toISOString();
       if (state !== 'completed') record.error = state === 'cancelled' ? '下载已取消' : '下载中断，可返回平台重试';
+      if (record.pendingReview) {
+        try {
+          if (state === 'completed') videoDownloadReview.complete(id);
+          else downloadReviewUI?.cancel(id);
+          const choice = await classification;
+          if (appQuitting || choice === 'defer') return;
+          if (state !== 'completed' || choice === 'cancel') {
+            await videoDownloadReview.discard(id);
+            activeDownloadItems.delete(id);
+            record.pendingReview = false; record.savePath = '';
+            if (choice === 'cancel') { record.state = 'cancelled'; record.error = '下载已取消'; }
+            broadcastDownload(record);
+          } else await finishReviewedVideo(record);
+        } catch (error) {
+          record.state = 'paused'; record.error = `视频仍保留在暂存区：${error.message}`;
+          broadcastDownload(record);
+          sendCreator('creator:notice', record.error);
+          logDiagnostic('video-download-finalize', error);
+        }
+        return;
+      }
+      activeDownloadItems.delete(id);
       if (state === 'completed') archiveDownloadInProduction(record);
       broadcastDownload(record);
       if (state === 'completed') {
@@ -951,28 +1084,16 @@ async function copyFileWithProgress(sourcePath, targetPath, onProgress) {
   }
 }
 
-// 导入资产自动按“类别-序号”重命名（例如 生成图片-007.png），序号在落盘目录内递增；
-// 平台点击下载保持原文件名，只有拖拽/手动导入走这条规则。
-const IMPORT_SEQUENCE_LABELS = Object.freeze({ image: '生成图片', video: '生成视频', audio: '音频' });
+// 自动编号的导入与图片/视频下载只保留数字（例如 007.png），在落盘目录内递增。
+// 分类名仅用于识别旧编号，不再加入新文件名。
+const { nextSequentialImportName } = require('./import-names.cjs');
 
-function sequentialImportTarget(directory, kind, originalName) {
-  const label = IMPORT_SEQUENCE_LABELS[kind];
+function sequentialImportTarget(directory, kind, originalName, categoryLabel) {
+  const categoryId = { image: 'generated-images', video: 'generated-videos', audio: 'audio' }[kind];
+  const label = categoryLabel || (categoryId && creativeProjectStore.category(creativeProjectStore.active().id, categoryId).label);
   const extension = path.extname(originalName).toLowerCase();
   if (!label || !extension) return path.join(directory, path.basename(originalName));
-  let max = 0;
-  try {
-    const pattern = new RegExp(`^${label}-(\\d+)\\.`);
-    for (const entry of fs.readdirSync(directory)) {
-      const match = entry.match(pattern);
-      if (match) max = Math.max(max, Number.parseInt(match[1], 10) || 0);
-    }
-  } catch {}
-  let candidate = '';
-  do {
-    max += 1;
-    candidate = path.join(directory, `${label}-${String(max).padStart(3, '0')}${extension}`);
-  } while (fs.existsSync(candidate));
-  return candidate;
+  return path.join(directory, nextSequentialImportName(directory, label, originalName));
 }
 
 async function archiveExternalPaths(filePaths, allowedKinds) {
@@ -1802,6 +1923,7 @@ async function createCreatorWindow(initialRequest = 'image') {
   serverModule.broadcastProduction?.();
   activeMode = mode;
   const { reused } = await navigateWorkspace('creator', { mode, project: project.id });
+  setImmediate(() => { recoverVideoDownloads().catch(error => logDiagnostic('video-download-recovery', error)); });
   if (reused) {
     sendCreator('creator:project-changed', project);
     sendCreator('creator:set-mode', mode);
@@ -1848,6 +1970,7 @@ function lookupDownloadSavePath(downloadId) {
   const id = String(downloadId || '');
   if (!id) return '';
   const recent = recentDownloads.find(item => item.id === id);
+  if (recent?.pendingReview || (recent && recent.state !== 'completed')) return '';
   if (recent?.savePath) return recent.savePath;
   if (!productionStore || typeof productionStore.listInbox !== 'function') return '';
   try {
@@ -1948,7 +2071,6 @@ function createDragTrayWindow() {
       try { fs.writeFileSync(dragTrayBoundsFile(), JSON.stringify(dragTrayWindow.getBounds())); } catch {}
     }, 300);
   };
-  // move also covers setPosition-driven dragging on Windows; moved does not.
   dragTrayWindow.on('move', saveBounds);
   dragTrayWindow.on('resize', saveBounds);
   dragTrayWindow.on('closed', () => { clearTimeout(saveBoundsTimer); dragTrayWindow = null; });
@@ -2359,6 +2481,8 @@ function floatVideoPublicInfo(asset) {
     projectId: project.id,
     projectName: project.name || '',
     size: Number(asset.size) || 0,
+    disposition: VideoDisposition.of({ path: rel }),
+    presentation: floatVideoWindow?.__floatVideoRecord?.presentation?.render || null,
     fileUrl: `${localServerInfo.url}/api/creative-assets/file?project=${encodeURIComponent(project.id)}&p=${encodeURIComponent(rel)}`,
   };
 }
@@ -2422,7 +2546,28 @@ function closeFloatVideoWindow(reason = 'closed') {
   return true;
 }
 
-function createFloatVideoWindow(asset) {
+function floatVideoSourceRect(payload) {
+  const raw = payload?.origin;
+  if (!raw || !creatorWindow || creatorWindow.isDestroyed()) return null;
+  if (!['x', 'y', 'width', 'height'].every(key => Number.isFinite(raw[key]))) return null;
+  const owner = creatorWindow.getContentBounds(), zoom = creatorWindow.webContents.getZoomFactor();
+  const x = Math.max(0, raw.x * zoom), y = Math.max(0, raw.y * zoom);
+  const width = Math.min(raw.width * zoom, owner.width - x), height = Math.min(raw.height * zoom, owner.height - y);
+  if (width < 1 || height < 1) return null;
+  return { x: Math.round(owner.x + x), y: Math.round(owner.y + y), width: Math.round(width), height: Math.round(height) };
+}
+
+function settleFloatVideoPresentation(win, id) {
+  const record = win?.__floatVideoRecord, presentation = record?.presentation;
+  if (!win || win.isDestroyed() || !presentation || (id && id !== presentation.render.id)) return;
+  clearTimeout(record.presentationTimer);
+  record.presentation = null;
+  win.setBounds(presentation.target, false);
+  win.setMaximumSize(760, 900);
+  if (!win.webContents.isDestroyed()) win.webContents.send('float-video:settled', { id: presentation.render.id });
+}
+
+function createFloatVideoWindow(asset, payload) {
   if (!localServerInfo) throw new Error('本地服务尚未就绪');
   const project = creativeProjectStore.active();
   let saved = {};
@@ -2430,14 +2575,15 @@ function createFloatVideoWindow(asset) {
   const bounds = Number.isFinite(saved.x) && Number.isFinite(saved.y)
     ? clampFloatVideoBounds({ x: saved.x, y: saved.y, width: saved.width, height: saved.height })
     : defaultFloatVideoBounds();
+  const presentation = createFloatPresentation(bounds, floatVideoSourceRect(payload), `float-${Date.now()}`);
   const win = new BrowserWindow({
-    ...bounds,
+    ...presentation.bounds,
     minWidth: FLOAT_VIDEO_SIZE.minWidth, minHeight: FLOAT_VIDEO_SIZE.minHeight,
-    maxWidth: 760, maxHeight: 900,
     title: '置顶视频浮窗',
     frame: false, show: false, alwaysOnTop: true, fullscreenable: false,
     minimizable: false, maximizable: false, skipTaskbar: true,
-    backgroundColor: '#131317',
+    transparent: true, backgroundColor: '#00000000', hasShadow: false,
+    ...(process.platform === 'darwin' ? { type: 'panel', focusable: false } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'float-video-preload.cjs'),
       nodeIntegration: false, contextIsolation: true, sandbox: true,
@@ -2447,6 +2593,7 @@ function createFloatVideoWindow(asset) {
   const record = {
     info: { path: asset.path, projectId: project ? project.id : '', name: path.basename(asset.path) },
     reason: 'closed',
+    presentation,
   };
   win.__floatVideoRecord = record;
   floatVideoWindow = win;
@@ -2461,6 +2608,7 @@ function createFloatVideoWindow(asset) {
     clearTimeout(saveBoundsTimer);
     saveBoundsTimer = setTimeout(() => {
       if (win.isDestroyed()) return;
+      if (record.presentation) return;
       try { fs.writeFileSync(floatVideoBoundsFile(), JSON.stringify(win.getBounds())); } catch {}
     }, 300);
   };
@@ -2468,6 +2616,7 @@ function createFloatVideoWindow(asset) {
   win.on('resize', saveBounds);
   win.on('closed', () => {
     clearTimeout(saveBoundsTimer);
+    clearTimeout(record.presentationTimer);
     if (floatVideoWindow === win) {
       floatVideoWindow = null;
       floatVideoState = null;
@@ -2478,9 +2627,13 @@ function createFloatVideoWindow(asset) {
   win.once('ready-to-show', () => {
     // 显示后再钉一次：macOS 可能在 show 时丢掉「所有空间可见」或 floating 级别。
     // 不抢创作面板焦点：右键时左栏可能正在做内联编辑，showInactive 与联动窗同一策略。
-    if (win.isDestroyed()) return;
-    pinFloatVideoWindow(win);
-    bringFloatVideoForward();
+    if (win.isDestroyed() || !record.presentation || record.presented) return;
+    // 渲染层先摆在来源卡片的位置，绘制完成后再显示并播放，避免暗框闪一下。
+    record.presentationTimer = setTimeout(() => {
+      if (win.isDestroyed() || win !== floatVideoWindow) return;
+      settleFloatVideoPresentation(win);
+      bringFloatVideoForward();
+    }, 2000);
   });
   return win;
 }
@@ -2498,7 +2651,16 @@ function openFloatVideoWindow(payload) {
     if (sameFile) {
       // 已拖出收起的窗口再次浮出，开启新一轮关闭/还原通知。
       if (floatVideoWindow.__floatVideoRecord) floatVideoWindow.__floatVideoRecord.notified = false;
-      bringFloatVideoForward();
+      if (!floatVideoWindow.isVisible()) {
+        const win = floatVideoWindow, record = win.__floatVideoRecord;
+        settleFloatVideoPresentation(win);
+        record.presentation = createFloatPresentation(clampFloatVideoBounds(win.getBounds()), floatVideoSourceRect(payload), `float-${Date.now()}`);
+        record.presented = false;
+        win.setMaximumSize(12000, 12000);
+        win.setBounds(record.presentation.bounds, false);
+        win.webContents.send('float-video:prepare', record.presentation.render);
+        record.presentationTimer = setTimeout(() => { if (!win.isDestroyed()) { settleFloatVideoPresentation(win); bringFloatVideoForward(); } }, 2000);
+      } else bringFloatVideoForward();
       return { ok: true, path: asset.path, reused: true };
     }
     // 换文件：旧窗关闭会通知 creator 还原旧卡片，随后左栏只保留新卡片处于浮窗态。
@@ -2507,11 +2669,92 @@ function openFloatVideoWindow(payload) {
     floatVideoWindow = null;
     floatVideoState = null;
   }
-  createFloatVideoWindow(asset);
+  createFloatVideoWindow(asset, payload);
   return { ok: true, path: asset.path, reused: false };
 }
 
 function registerIpc() {
+  downloadReviewUI = createDownloadReviewUI({ BrowserWindow, ipcMain,
+    parent: () => creatorWindow, url: () => `${localServerInfo.url}/assets/ui/download-review.html`,
+    preload: path.join(__dirname, 'download-review-preload.cjs'),
+    onError: error => logDiagnostic('video-download-choice', error),
+  });
+  ipcMain.handle('asset:folder-menu', async (event, payload = {}) => {
+    if (!isTrustedCreatorSender(event) && !isTrustedAssetSender(event)) throw new Error('拒绝未经授权的文件夹操作');
+    const owner = creatorWindow;
+    const project = creativeProjectStore.active();
+    const relative = String(payload.path || '').replace(/\\/g, '/');
+    if (!project || !relative.startsWith(`${project.folder}/`)) throw new Error('不能删除整个剧本，请选择具体文件夹');
+    const entry = resolveCreativeAsset(CREATIVE_ASSET_DIR, relative, 'folder');
+    if (!entry || !owner || owner.isDestroyed()) throw new Error('文件夹不存在');
+    const zoom = event.sender.getZoomFactor();
+    const bounds = isTrustedAssetSender(event) ? assetView.getBounds() : { x: 0, y: 0 };
+    const chosen = await new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = value => { if (settled) return; settled = true; owner.removeListener('closed', onClosed); resolve(value); };
+      const onClosed = () => finish(null);
+      owner.once('closed', onClosed);
+      try {
+        Menu.buildFromTemplate([
+          { label: '改名…', enabled: relative !== project.categories.find(item => item.id === 'browser-downloads')?.path, click: () => finish('rename') },
+          { label: '在文件夹中显示', click: () => finish('reveal') },
+          { type: 'separator' },
+          { label: `删除文件夹「${path.basename(entry.abs)}」…`, click: () => finish('delete') },
+        ]).popup({ window: owner,
+          x: Math.max(0, Math.round((Number(payload.x) || 0) * zoom + bounds.x)),
+          y: Math.max(0, Math.round((Number(payload.y) || 0) * zoom + bounds.y)),
+          callback: () => setImmediate(() => finish(null)),
+        });
+      } catch (error) { owner.removeListener('closed', onClosed); reject(error); }
+    });
+    if (!chosen || owner.isDestroyed()) return { cancelled: true };
+    if (chosen === 'reveal') { shell.showItemInFolder(entry.abs); return { revealed: true }; }
+    if (chosen === 'rename') return { rename: true, path: relative, name: path.basename(entry.abs), projectId: project.id };
+    const { response } = await dialog.showMessageBox(owner, {
+      type: 'warning', title: '删除文件夹', message: `删除「${path.basename(entry.abs)}」及其中的全部内容？`,
+      detail: '文件夹将移入系统废纸篓。删除后，资产列表和数量会同步更新；可以从废纸篓恢复。',
+      buttons: ['取消', '删除文件夹'], defaultId: 0, cancelId: 0, noLink: true,
+    });
+    if (response !== 1 || owner.isDestroyed()) return { cancelled: true };
+    if (creativeProjectStore.active()?.id !== project.id) throw new Error('剧本已切换，未删除原文件夹');
+    const current = resolveCreativeAsset(CREATIVE_ASSET_DIR, relative, 'folder');
+    if (!current || current.abs !== entry.abs) throw new Error('文件夹已变更，未执行删除');
+    const videoRoot = project.categories.find(item => item.id === 'generated-videos')?.path;
+    const containsActiveDownload = [...activeDownloadItems.values()].some(({ record }) =>
+      (record.savePath && pathIsInside(entry.abs, record.savePath)) ||
+      (record.pendingReview && record.productionSnapshot?.projectId === project.id && (relative === videoRoot || relative.startsWith(`${videoRoot}/`))));
+    if (containsActiveDownload) throw new Error('这个文件夹仍有下载任务，请完成或取消后再删除');
+    const result = await creativeProjectStore.deleteFolder(project.id, relative, absolute => shell.trashItem(absolute));
+    if (floatVideoState?.path.startsWith(`${relative}/`)) closeFloatVideoWindow('folder-deleted');
+    serverModule.broadcastCreativeAssets?.();
+    return { ...result, deleted: true };
+  });
+  ipcMain.handle('asset:rename-folder', (event, payload = {}) => {
+    if (!isTrustedCreatorSender(event) && !isTrustedAssetSender(event)) throw new Error('拒绝未经授权的文件夹操作');
+    const project = creativeProjectStore.active();
+    if (!project || project.id !== payload.projectId) throw new Error('剧本已切换，请重新选择文件夹');
+    const relative = String(payload.path || '');
+    if (!relative.startsWith(`${project.folder}/`)) throw new Error('只能修改当前剧本内的文件夹');
+    const entry = resolveCreativeAsset(CREATIVE_ASSET_DIR, relative, 'folder');
+    if (!entry) throw new Error('文件夹不存在');
+    const videos = project.categories.find(item => item.id === 'generated-videos')?.path;
+    if ([...activeDownloadItems.values()].some(({ record }) =>
+      (record.savePath && pathIsInside(entry.abs, record.savePath)) ||
+      (record.pendingReview && record.productionSnapshot?.projectId === project.id && relative === videos))) {
+      throw new Error('这个文件夹仍有下载任务，请完成或取消后再改名');
+    }
+    const result = serverModule.renameCreativeFolder(project.id, relative, payload.name);
+    const target = path.join(CREATIVE_ASSET_DIR, ...result.path.split('/'));
+    for (const record of recentDownloads) {
+      if (record.savePath && pathIsInside(entry.abs, record.savePath)) {
+        record.savePath = path.join(target, path.relative(entry.abs, record.savePath));
+        broadcastDownload(record);
+      }
+    }
+    if (floatVideoState?.path.startsWith(`${relative}/`)) closeFloatVideoWindow('folder-renamed');
+    serverModule.broadcastCreativeAssets?.({ folderRename: result });
+    return result;
+  });
   ipcMain.handle('creator:automation', (event, request = {}) => {
     requireTrusted(event, 'media');
     if (!creatorAutomation) throw new Error('自动化接口正在启动');
@@ -2895,6 +3138,7 @@ function registerIpc() {
   ipcMain.handle('creator:open-download', async (event, downloadId) => {
     requireTrusted(event, 'creator');
     const id = String(downloadId || '');
+    if (recentDownloads.find(record => record.id === id)?.pendingReview) return false;
     let savePath = recentDownloads.find(item => item.id === id)?.savePath || '';
     if (!savePath && productionStore) {
       const row = productionStore.listInbox({ limit: 200, includeDismissed: true })
@@ -2915,10 +3159,28 @@ function registerIpc() {
     return true;
   });
 
-  ipcMain.handle('creator:download-action', (event, payload = {}) => {
+  ipcMain.handle('creator:download-action', async (event, payload = {}) => {
     requireTrusted(event, 'creator');
     const action = String(payload.action || '');
     const transfer = activeDownloadItems.get(String(payload.downloadId || ''));
+    if (transfer?.record.pendingReview && (!transfer.item || transfer.finished)) {
+      const record = transfer.record;
+      if (record.reviewBusy) return false;
+      record.reviewBusy = true;
+      try {
+        if (action === 'cancel') {
+          downloadReviewUI?.cancel(record.id);
+          await videoDownloadReview.discard(record.id);
+          activeDownloadItems.delete(record.id); record.state = 'cancelled'; record.pendingReview = false; record.savePath = '';
+          broadcastDownload(record); return true;
+        }
+        if (action !== 'resume') return false;
+        const entry = videoDownloadReview.list().find(item => item.id === record.id);
+        const choice = entry?.choice || await chooseVideoDownload(record);
+        if (['editable', 'processing'].includes(choice)) { await finishReviewedVideo(record); return true; }
+        return false;
+      } finally { record.reviewBusy = false; }
+    }
     const item = transfer?.item;
     if (!item || !ALLOWED_DOWNLOAD_ACTIONS.has(action)) return false;
     if (action === 'pause' && !item.isPaused()) item.pause();
@@ -3000,6 +3262,52 @@ function registerIpc() {
     return createCreatorWindow({ mode, projectId: selection.projectId });
   });
 
+  ipcMain.handle('creator:select-project', (event, payload = {}) => {
+    requireTrusted(event, 'creator');
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('剧本参数无效');
+    const project = creativeProjectStore.list().find(item => item.id === payload.projectId && item.available !== false);
+    if (!project) throw new Error('剧本不存在或目录不可用');
+    return createCreatorWindow({ mode: modeOrDefault(payload.mode), projectId: project.id });
+  });
+
+  // HTML 剧本列表接收逐项右键；真正的上下文菜单仍用原生 Menu，避免被网页视图盖住。
+  // 主进程只返回用户选择的目标，模板由同源存储一次追加提交，不替换草稿或历史。
+  ipcMain.handle('creator:show-project-template-menu', async (event, payload = {}) => {
+    requireTrusted(event, 'creator');
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('迁移菜单参数无效');
+    const projects = creativeProjectStore.list();
+    const source = projects.find(item => item.id === payload.sourceProjectId && item.available !== false);
+    if (!source) throw new Error('来源剧本不存在或目录不可用');
+    const targets = projects.filter(item => item.id !== source.id && item.available !== false);
+    const owner = creatorWindow;
+    if (!owner || owner.isDestroyed()) return { cancelled: true };
+    const count = mode => Number.isSafeInteger(payload.counts?.[mode]) && payload.counts[mode] >= 0 ? payload.counts[mode] : 0;
+    const zoom = event.sender.getZoomFactor(), [width, height] = owner.getContentSize();
+    const x = Number.isFinite(payload.x) ? Math.max(0, Math.min(width - 1, Math.round(payload.x * zoom))) : 0;
+    const y = Number.isFinite(payload.y) ? Math.max(0, Math.min(height - 1, Math.round(payload.y * zoom))) : 74;
+    const selected = await new Promise((resolve, reject) => {
+      let settled = false;
+      const onClosed = () => finish(null);
+      const finish = value => {
+        if (settled) return; settled = true;
+        owner.removeListener('closed', onClosed); resolve(value);
+      };
+      owner.once('closed', onClosed);
+      try {
+        Menu.buildFromTemplate([
+          { label: `「${source.name}」：图片 ${count('image')} 条 · 视频 ${count('video')} 条`, enabled: false },
+          { type: 'separator' },
+          { label: '迁移固定提示词到…', enabled: targets.length > 0 && count('image') + count('video') > 0,
+            submenu: targets.map(target => ({ label: target.name, click: () => finish(target.id) })) },
+        ]).popup({ window: owner, x, y, callback: () => setImmediate(() => finish(null)) });
+      } catch (error) { owner.removeListener('closed', onClosed); reject(error); }
+    });
+    if (!selected || owner.isDestroyed()) return { cancelled: true };
+    const target = creativeProjectStore.list().find(item => item.id === selected && item.available !== false);
+    if (!target) throw new Error('目标剧本已不可用，未执行迁移');
+    return { targetProjectId: target.id, targetName: target.name };
+  });
+
   ipcMain.handle('creator:show-project-picker', async (event, mode) => {
     requireTrusted(event, 'creator');
     await createMainWindow(mode);
@@ -3067,6 +3375,21 @@ function registerIpc() {
     };
   });
 
+  ipcMain.handle('creator:export-audio', async (event, payload = {}) => {
+    requireTrusted(event, 'media');
+    const asset = requireCreativeAsset(payload.path, 'audio');
+    const result = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender) || creatorWindow || mainWindow, {
+      title: '另存人物音频',
+      defaultPath: path.join(app.getPath('downloads'), path.basename(asset.absolutePath)),
+      filters: [{ name: 'WAV 音频', extensions: ['wav'] }],
+    });
+    if (result.canceled || !result.filePath) return { canceled: true };
+    if (path.resolve(result.filePath) !== path.resolve(asset.absolutePath)) {
+      await fs.promises.copyFile(asset.absolutePath, result.filePath);
+    }
+    return { canceled: false };
+  });
+
   ipcMain.handle('asset:pick-source-folder', async event => {
     requireTrusted(event, 'asset');
     const result = await dialog.showOpenDialog(creatorWindow || mainWindow, {
@@ -3090,6 +3413,7 @@ function registerIpc() {
       if (!requested.length) throw new Error('缺少资产路径');
       if (requested.length > 100) throw new Error('一次最多拖拽 100 个文件');
       const absolutePaths = requested.map(rel => {
+        if (kind === 'tray' && VideoDisposition.of({ path: rel }) === 'processing') throw new Error('待处理视频请先处理，再移入可剪辑文件夹');
         const absolutePath = resolveDragAbsolute(rel);
         if (fs.statSync(absolutePath).size > 20 * 1024 * 1024 * 1024) throw new Error(`${rel} 超过 20 GB，拒绝直接拖拽`);
         return absolutePath;
@@ -3151,6 +3475,22 @@ function registerIpc() {
     }
     return floatVideoPublicInfo(asset);
   });
+  ipcMain.on('float-video:ready', (event, id) => {
+    requireTrusted(event, 'float');
+    const win = floatVideoWindow, record = win?.__floatVideoRecord;
+    if (!record?.presentation || record.presentation.render.id !== id) return;
+    clearTimeout(record.presentationTimer);
+    record.presented = true;
+    pinFloatVideoWindow(win);
+    bringFloatVideoForward();
+    win.webContents.send('float-video:present', { id });
+    // 渲染器失去回执也会自动收敛，包络窗口不会留在屏幕上。
+    record.presentationTimer = setTimeout(() => settleFloatVideoPresentation(win, id), 700);
+  });
+  ipcMain.on('float-video:settle', (event, id) => {
+    requireTrusted(event, 'float');
+    settleFloatVideoPresentation(floatVideoWindow, id);
+  });
   // 原生拖出：与剪映联动窗同一条 webContents.startDrag 路线；只允许浮窗当前那一个视频，
   // 且在此刻再校验一次「当前剧本 + 真实视频文件」，杜绝把旧剧本或别的素材拖进剪映。
   ipcMain.on('float:start-asset-drag', (event, payload = {}) => {
@@ -3163,6 +3503,7 @@ function registerIpc() {
       if (!floatVideoState) throw new Error('浮窗已关闭');
       if (requested !== floatVideoState.path) throw new Error('浮窗只能拖出当前置顶的视频');
       const { absolutePath } = requireFloatVideoAsset(requested);
+      settleFloatVideoPresentation(win);
       event.sender.startDrag({ file: absolutePath, icon: dragIconFor(absolutePath) });
       if (!event.sender.isDestroyed()) event.sender.send(resultChannel, { ok: true, path: requested, count: 1 });
       dismissFloatVideoAfterDrag(win);
@@ -3180,6 +3521,7 @@ function registerIpc() {
     requireTrusted(event, 'float');
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win.isDestroyed() || win !== floatVideoWindow) return;
+    settleFloatVideoPresentation(win);
     const dx = Math.round(Number(payload.dx) || 0);
     const dy = Math.round(Number(payload.dy) || 0);
     if (!dx && !dy) return;
@@ -4016,6 +4358,8 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
+  appQuitting = true;
+  downloadReviewUI?.stop();
   persistBrowserSession();
   creatorAutomationServer?.close();
   if (serverModule.server.listening) serverModule.server.close();

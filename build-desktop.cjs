@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { packager } = require('@electron/packager');
 const { SOURCE_FILES, SOURCE_DIRS, BUILD_SCHEMA_VERSION } = require('./build-contract.cjs');
+const { prepareMediaTools } = require('./prepare-media-tools.cjs');
 
 const APP_DIR = __dirname;
 const PROJECT_ROOT = path.dirname(APP_DIR);
@@ -84,6 +85,7 @@ function backupLegacyDataBeforeReplace() {
 }
 
 async function build() {
+  await prepareMediaTools('win32', 'x64');
   assertGeneratedTarget(TARGET_DIR);
   const legacyBackup = backupLegacyDataBeforeReplace();
 

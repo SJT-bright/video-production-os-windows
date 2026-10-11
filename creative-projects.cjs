@@ -6,6 +6,7 @@ const path = require('path');
 const {
   ensureCreativeAssetRoot,
   normalizeRelativePath,
+  resolveCreativeAsset,
   validateFolderName,
 } = require('./creative-assets.cjs');
 
@@ -75,7 +76,14 @@ function validateProject(value) {
   }
   const createdAt = Number.isFinite(Date.parse(value.createdAt)) ? value.createdAt : nowIso();
   const updatedAt = Number.isFinite(Date.parse(value.updatedAt)) ? value.updatedAt : createdAt;
-  return { id, name, folder, kind, createdAt, updatedAt };
+  const deletedFolders = [...new Set((Array.isArray(value.deletedFolders) ? value.deletedFolders : [])
+    .filter(item => typeof item === 'string' && normalizeRelativePath(item) === item && item.startsWith(`${folder}/`)))];
+  const categoryFolders = {};
+  for (const category of PROJECT_CATEGORIES) {
+    const custom = value.categoryFolders?.[category.id];
+    if (typeof custom === 'string') categoryFolders[category.id] = validateFolderName(custom);
+  }
+  return { id, name, folder, kind, createdAt, updatedAt, categoryFolders, ...(deletedFolders.length ? { deletedFolders } : {}) };
 }
 
 function readDocument(filePath, onWarning) {
@@ -207,22 +215,25 @@ function createCreativeProjectStore(options = {}) {
         .map(entry => [nameKey(entry.name), entry.name]),
     );
     const categories = [];
+    const wasDeleted = relative => (project.deletedFolders || []).some(folder => relative === folder || relative.startsWith(`${folder}/`));
     for (const definition of PROJECT_CATEGORIES) {
-      const existing = definition.aliases.map(alias => entries.get(nameKey(alias))).find(Boolean);
-      const folder = existing || definition.label;
+      const custom = project.categoryFolders?.[definition.id];
+      const existing = (custom ? [custom] : definition.aliases).map(alias => entries.get(nameKey(alias))).find(Boolean);
+      const folder = existing || custom || definition.label;
       const absolute = path.join(root, folder);
-      if (!existing) fs.mkdirSync(absolute);
+      if (!existing && !wasDeleted(`${project.folder}/${folder}`)) fs.mkdirSync(absolute);
       const children = [];
       for (const child of definition.children || []) {
         const childAbsolute = path.join(absolute, child);
-        if (!fs.existsSync(childAbsolute)) fs.mkdirSync(childAbsolute);
+        if (fs.existsSync(absolute) && !fs.existsSync(childAbsolute) && !wasDeleted(`${project.folder}/${folder}/${child}`)) fs.mkdirSync(childAbsolute);
         children.push({ label: child, path: `${project.folder}/${folder}/${child}` });
       }
       categories.push({
         id: definition.id,
-        label: definition.label,
+        label: custom || definition.label,
         folder,
         path: `${project.folder}/${folder}`,
+        available: fs.existsSync(absolute),
         children,
       });
     }
@@ -362,7 +373,56 @@ function createCreativeProjectStore(options = {}) {
       if (!project) throw new Error('剧本不存在');
       const category = ensureStructure(project).find(item => item.id === categoryId);
       if (!category) throw new Error('剧本资产分类不存在');
+      if (!category.available) throw new Error('剧本资产分类已删除，请先恢复文件夹或选择其他分类');
       return { ...category, absolutePath: path.join(assetRoot, ...category.path.split('/')) };
+    },
+    renameFolder(id, relativePath, inputName, rename = fs.renameSync) {
+      const project = projectById(id);
+      const relative = normalizeRelativePath(relativePath);
+      if (!project || !relative || !relative.startsWith(`${project.folder}/`)) throw new Error('只能修改当前剧本内的文件夹');
+      const source = resolveCreativeAsset(assetRoot, relative, 'folder');
+      if (!source) throw new Error('文件夹不存在');
+      const name = validateFolderName(normalizeName(inputName));
+      const categories = ensureStructure(project);
+      const category = categories.find(item => item.path === relative);
+      if (category?.id === 'browser-downloads') throw new Error('浏览器下载是固定入口，请在全部资产中选择分类');
+      const destination = `${path.posix.dirname(relative)}/${name}`;
+      if (destination === relative) return { projectId: id, oldPath: relative, path: relative, name };
+      const collision = fs.readdirSync(path.dirname(source.abs)).some(entry => nameKey(entry) === nameKey(name));
+      const reserved = category && PROJECT_CATEGORIES.some(item => item.id !== category.id && item.aliases.some(alias => nameKey(alias) === nameKey(name)));
+      if (collision || reserved) throw new Error('同名文件夹或分类已经存在，请换一个名称');
+      const remap = value => value === relative || value.startsWith(`${relative}/`) ? destination + value.slice(relative.length) : value;
+      const next = { ...project, updatedAt: nowIso(),
+        deletedFolders: [...(project.deletedFolders || []).map(remap), ...(!category ? [relative] : [])],
+        categoryFolders: { ...project.categoryFolders, ...(category ? { [category.id]: name } : {}) } };
+      const target = path.join(assetRoot, ...destination.split('/'));
+      // 先保存分类身份，回调失败时恢复注册表及目录，避免扫描补回旧的默认分类。
+      const previous = document;
+      commit({ ...document, projects: document.projects.map(item => item.id === id ? next : item) });
+      try { rename(source.abs, target); }
+      catch (error) {
+        if (!fs.existsSync(source.abs) && fs.existsSync(target)) fs.renameSync(target, source.abs);
+        commit(previous);
+        throw error;
+      }
+      return { projectId: id, oldPath: relative, path: destination, name };
+    },
+    async deleteFolder(id, relativePath, remove) {
+      const project = projectById(id);
+      const relative = normalizeRelativePath(relativePath);
+      if (!project || !relative || !relative.startsWith(`${project.folder}/`)) throw new Error('只能删除当前剧本内的文件夹，不能删除整个剧本');
+      const target = resolveCreativeAsset(assetRoot, relative, 'folder');
+      if (!target || typeof remove !== 'function') throw new Error('文件夹不存在或路径无效');
+      const alreadyMarked = (project.deletedFolders || []).includes(relative);
+      const next = { ...project, deletedFolders: [...new Set([...(project.deletedFolders || []), relative])] };
+      commit({ ...document, projects: document.projects.map(item => item.id === id ? next : item) });
+      try { await remove(target.abs); }
+      catch (error) {
+        if (!alreadyMarked) commit({ ...document, projects: document.projects.map(item => item.id === id
+          ? { ...item, deletedFolders: (item.deletedFolders || []).filter(folder => folder !== relative) } : item) });
+        throw error;
+      }
+      return { path: relative, projectId: id };
     },
     snapshot() {
       return {

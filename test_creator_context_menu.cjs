@@ -122,9 +122,9 @@ async function runTabMenuIpcSection() {
         windowsHide: true,
         env: {
           ...process.env,
-          VIDEO_OS_TAB_MENU_TEST: '1',
           CREATOR_BROWSER_TEST: '1',
           VIDEO_OS_SMOKE_TEST: '0',
+          VIDEO_OS_TAB_MENU_TEST: '1',
           VIDEO_OS_LOAD_TIMEOUT_MS: '4000',
           VIDEO_OS_PORT: '3786',
           VIDEO_OS_PROJECT_ROOT: path.join(runRoot, 'project'),

@@ -1,0 +1,46 @@
+.voice-clip-panel { padding: 12px 16px; color: #25262b; font-size: 12px; background: #fafbfe; border-block: 1px solid #e1e6ef; }
+.voice-clip-panel[hidden], .voice-clip-panel [hidden] { display: none !important; }
+.voice-heading, .voice-range, .voice-listen, .voice-save, .voice-result { display: flex; align-items: center; gap: 10px; }
+.voice-heading { justify-content: space-between; }
+.voice-heading strong { font-size: 13px; }
+.voice-button { padding: 6px 12px; border: 1px solid #d8deea; border-radius: 9px; background: #fff; color: #333a48; font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.voice-button:hover { background: #eff4ff; }
+.voice-button:focus-visible, .voice-clip-panel input:focus-visible, .voice-clip-panel textarea:focus-visible, .voice-notes summary:focus-visible { outline: 2px solid #1876ef; outline-offset: 2px; }
+.voice-button:disabled { opacity: .5; cursor: wait; }
+.voice-primary { background: #087afa; border-color: #087afa; color: #fff; }
+.voice-primary:hover { background: #006ce5; }
+.voice-status { margin: 6px 0 9px; line-height: 1.5; color: #657184; font-size: 11px; }
+.voice-editor { display: grid; gap: 9px; }
+.voice-track { width: 100%; height: 32px; }
+.voice-wave { position: relative; height: 82px; border: 1px solid #d8e2f0; border-radius: 8px; background: #f0f4fa; touch-action: none; user-select: none; cursor: crosshair; }
+.voice-wave canvas { display: block; width: 100%; height: 82px; border-radius: inherit; }
+.voice-selection { position: absolute; top: 0; bottom: 0; background: #0a7aff20; border-block: 2px solid #147efb; cursor: grab; }
+.voice-selection:active { cursor: grabbing; }
+.voice-handle { position: absolute; top: 0; bottom: 0; width: 14px; padding: 0; transform: translateX(-50%); border: 0; border-radius: 4px; background: #147efb; cursor: ew-resize; z-index: 2; touch-action: none; }
+.voice-handle::after { content: ''; position: absolute; width: 2px; height: 22px; top: 30px; left: 6px; border-radius: 2px; background: #fff; }
+.voice-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #fa634c; pointer-events: none; z-index: 3; }
+.voice-range { flex-wrap: wrap; gap: 8px 12px; }
+.voice-time { display: flex; align-items: center; gap: 5px; color: #657184; }
+.voice-clip-panel input[type=number] { width: 82px; padding: 5px 7px; border: 1px solid #d8deea; border-radius: 7px; background: #fff; font: inherit; }
+.voice-check { display: flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
+.voice-check input { margin: 0; accent-color: #087afa; }
+.voice-duration { color: #0a6cdd; font-weight: 600; font-variant-numeric: tabular-nums; }
+.voice-listen { flex-wrap: wrap; }
+.voice-hint { color: #8791a1; font-size: 11px; }
+.voice-save input, .voice-notes-fields input, .voice-notes-fields textarea { min-width: 0; padding: 7px 9px; border: 1px solid #d8deea; border-radius: 8px; background: #fff; font: inherit; }
+.voice-save input { flex: 1; }
+.voice-notes { color: #738094; font-size: 11px; }
+.voice-notes summary { cursor: pointer; width: fit-content; }
+.voice-notes-fields { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(160px, 2fr); gap: 8px; margin-top: 7px; }
+.voice-notes-fields textarea { resize: vertical; }
+.voice-result { justify-content: space-between; padding-top: 4px; color: #39744e; }
+.voice-result span { min-width: 0; overflow-wrap: anywhere; }
+.voice-editing .quick-preview-stage { min-height: 100px; max-height: 25vh; }
+.voice-editing .quick-preview-stage .quick-preview-media { max-height: 22vh; cursor: default; }
+.voice-editing .quick-preview-sheet { max-height: 92vh; overflow-y: auto; }
+.preview-dialog.voice-editing .preview-frame { height: auto; max-height: 92vh; overflow-y: auto; grid-template-rows: auto auto auto auto; }
+.preview-dialog.voice-editing .preview-canvas { min-height: 100px; padding: 8px; }
+.preview-dialog.voice-editing #previewMedia video { max-height: 24vh; }
+.preview-dialog.voice-editing .preview-primary-actions { flex-wrap: wrap; }
+.preview-dialog #zoomControls[hidden] { display: none; }
+@media (max-width: 500px) { .voice-clip-panel { padding-inline: 12px; } .voice-notes-fields { grid-template-columns: 1fr; } .voice-hint { display: none; } }

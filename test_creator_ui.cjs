@@ -119,6 +119,13 @@ async function main() {
       }],
     }),
   }));
+  await page.route('**/api/creative-projects', route => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({ activeProjectId: 'project-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', projects: [
+      { id: 'project-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: '校园心动', folder: '校园心动', kind: 'script', available: true, categories: [] },
+      { id: 'project-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: '雨夜来信', folder: '雨夜来信', kind: 'script', available: true, categories: [] },
+    ] }),
+  }));
   await page.route('**/api/creative-assets?*', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -654,6 +661,12 @@ async function main() {
       focusBrowser: async () => true,
       showMainWindow: async () => true,
       showProjectPicker: async () => { window.__creatorTest.projectPickerOpened = true; return true; },
+      selectProject: async ({ projectId }) => {
+        const name = projectId === 'project-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' ? '校园心动' : '雨夜来信';
+        currentProject = { id: projectId, name, folder: name, kind: 'script', categories: [] };
+        events.project.forEach(callback => callback(currentProject));
+        return { project: currentProject };
+      },
       showProjectMenu: async options => {
         window.__creatorTest.projectMenuOptions = options;
         window.__creatorTest.projectMenuOpened = (window.__creatorTest.projectMenuOpened || 0) + 1;
@@ -683,8 +696,9 @@ async function main() {
   assert.equal(await page.locator('body').getAttribute('data-mode'), 'video');
   assert.match(await page.locator('#currentProject').textContent(), /校园心动/);
   await page.locator('#currentProject').click();
-  await page.waitForFunction(() => window.__creatorTest.projectMenuOpened === 1, null, { timeout: 5000 });
-  assert.equal(await page.evaluate(() => window.__creatorTest.projectMenuOpened), 1, '当前剧本按钮应打开面板内剧本菜单');
+  await page.locator('#projectPopover:not(.hidden)').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#projectMenuList [data-project-id]').count(), 2, '当前剧本按钮应打开内联剧本菜单');
+  await page.locator('#currentProject').click();
   assert.equal(await page.locator('#currentShotContext, #shotDialog, #queueImportBreakdown, #queueAccordion, #queueAddCurrent').count(), 0, '已移除镜头台账、拆解导入和提示词队列');
   // 顶部条只显示已打开的网页标签；启动后只有默认平台一个标签
   assert.deepEqual(await page.locator('.platform-tab').allTextContents(), ['Updream']);
@@ -1084,7 +1098,7 @@ async function main() {
   await page.waitForFunction(() => document.querySelector('#currentProject')?.textContent.includes('雨夜来信'));
   assert.equal(await page.locator('#promptEditor').inputValue(), '', '新剧本不得继承上一剧本的视频草稿');
 
-  assert.equal(await page.locator('.saved-template-item').count(), 2, '固定提示词应跨剧本通用，不得随切换剧本清空');
+  assert.equal(await page.locator('.saved-template-item').count(), 0, '新剧本固定提示词应为空，不应自动继承来源模板');
   if ((await page.locator('#promptAccordion').getAttribute('open')) === null) await page.locator('#promptAccordion > summary').click();
   await page.locator('#promptEditor').fill('PROJECT-B-VIDEO-DRAFT');
   await page.evaluate(() => window.__creatorTest.emitProject({
@@ -1092,6 +1106,7 @@ async function main() {
   }));
   await page.waitForFunction(() => document.querySelector('#currentProject')?.textContent.includes('校园心动'));
   assert.equal(await page.locator('#promptEditor').inputValue(), 'VIDEO-ONLY-DRAFT', '切回剧本后应恢复自己的草稿');
+  assert.equal(await page.locator('.saved-template-item').count(), 2, '来源剧本自己的固定提示词必须保留');
   if ((await page.locator('#promptAccordion').getAttribute('open')) === null) await page.locator('#promptAccordion > summary').click();
 
   // 跨剧本撤销失效：A 剧本清空后切到 B，切换提示顶掉撤销入口，B 不得被 A 草稿覆盖

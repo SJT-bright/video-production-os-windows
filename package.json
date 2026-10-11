@@ -1,6 +1,6 @@
 {
   "name": "video-production-os",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "private": true,
   "description": "青春校园短剧项目的本地视频制作与创作浏览器工作台",
   "main": "electron/main.cjs",
@@ -15,6 +15,9 @@
     "build:mac": "node build-mac.cjs",
     "check": "node --check server.js && node --check creative-assets.cjs && node --check creative-projects.cjs && node --check production-store.cjs && node --check script-breakdown-store.cjs && node --check app.js && node --check creator.js && node --check creator-assets.js && node --check build-contract.cjs && node --check build-desktop.cjs && node --check build-mac.cjs && node --check verify-build-manifest.cjs && node --check verify-desktop-build.cjs && node --check verify-mac-build.cjs && node --check verify-mac-bundle.cjs && node --check test-playwright.cjs && node --check electron/main.cjs && node --check electron/creator-page-patch-preload.cjs && node --check electron/main-preload.cjs && node --check electron/creator-preload.cjs && node --check electron/asset-preload.cjs && node --check electron/browser-address.cjs && node --check electron/creator-context-menu.cjs && node --check electron/creator-platforms.cjs && node --check electron/media-sources.cjs && node --check electron/download-router.cjs && node --check electron/obsidian-assets.cjs && node --check test_creator_context_menu.cjs && node --check test_creator_platforms.cjs && node --check test_media_sources.cjs && node --check test_production_store.cjs && node --check test_script_breakdown_store.cjs && node --check test_creative_projects.cjs && node --check test_build_manifest.cjs && node --check test_browser.cjs && node --check test_browser_address.cjs && node --check test_creator_ui.cjs && node --check test_creator_assets.cjs && node --check test_desktop_package.cjs && node --check test_mac_contract.cjs && node --check test_download_router.cjs && node --check test_electron.cjs && node --check test_media_import.cjs && node --check test_obsidian_assets.cjs && node --check test_drag_tray.cjs && node --check test_focus_link.cjs && node --check run-tests-parallel.cjs && node --check drag-tray.js && node --check tab-menu.js && node --check electron/tab-menu-preload.cjs && node --check electron/automation-store.cjs && node --check electron/automation-page.cjs && node --check electron/creator-automation.cjs && node --check electron/creator-mcp.cjs && node --check creator-automation-ui.js",
     "test:parallel": "node run-tests-parallel.cjs",
+    "check:features": "node --check voice-clips.cjs && node --check prepare-media-tools.cjs && node --check assets/ui/asset-order.js && node --check assets/ui/video-disposition.js && node --check assets/ui/folder-editor.js && node --check assets/ui/prompt-template-store.js && node --check assets/ui/voice-clips.js && node --check assets/ui/download-review.js && node --check electron/import-names.cjs && node --check electron/download-review.cjs && node --check electron/download-review-ui.cjs && node --check electron/download-review-preload.cjs && node --check electron/float-presentation.cjs && node --check float-video.js && node --check electron/float-video-preload.cjs",
+    "test:source": "npm run check && npm run check:features && node test_browser_session.cjs && node test_browser_retention.cjs && node test_asset_order.cjs && node test_prompt_template_store.cjs && node test_download_router.cjs && node test_download_review.cjs && node test_editor_exports.cjs && node test_asset_linkage.cjs && node test_creative_projects.cjs && node test_build_manifest.cjs && node test_voice_clips.cjs && node test_folder_management.cjs && node test_media_import.cjs && node test_production_store.cjs",
+    "test:mac-native": "node test_creator_context_menu.cjs && node test_prompt_template_migration_native.cjs && node test_creator_workflow_native.cjs && node test_float_video_native.cjs && node test_drag_tray.cjs",
     "setup:test-browser": "playwright install chromium",
     "test:browser": "node test_browser.cjs",
     "test:browser-address": "node test_browser_address.cjs",
@@ -25,6 +28,7 @@
     "test:media-sources": "node test_media_sources.cjs",
     "test:creator-assets": "node test_creator_assets.cjs http://127.0.0.1:3750",
     "test:creative-projects": "node test_creative_projects.cjs",
+    "test:prompt-templates": "node test_prompt_template_store.cjs && node test_prompt_template_migration_native.cjs",
     "test:editor-exports": "node test_editor_exports.cjs",
     "test:asset-linkage": "node test_asset_linkage.cjs",
     "test:focus-link": "node test_focus_link.cjs",
@@ -44,6 +48,11 @@
   "devDependencies": {
     "@electron/packager": "^18.3.1",
     "electron": "43.4.1",
+    "ffmpeg-static": "5.3.0",
     "playwright": "^1.62.1"
+  },
+  "allowScripts": {
+    "electron@43.4.1": true,
+    "ffmpeg-static@5.3.0": true
   }
 }

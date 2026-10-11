@@ -5,6 +5,7 @@ const API = typeof window.creatorOS?.getConfig === 'function' ? window.creatorOS
 const LEGACY_STORAGE_KEY = 'videoOS.creator.workspace.v1';
 const GLOBAL_STORAGE_KEY = 'videoOS.creator.global.v2';
 const PROJECT_STORAGE_PREFIX = 'videoOS.creator.project.v2.';
+const promptTemplateStore = window.PromptTemplateStore.create(localStorage);
 const ASSET_LAYOUT_VERSION = 3;
 const DEFAULT_ASSET_PANEL = Object.freeze({ open: false, layout: 'overlay', width: 520, layoutVersion: ASSET_LAYOUT_VERSION });
 
@@ -74,6 +75,7 @@ const el = Object.fromEntries([
   'browserRecoveryExternal', 'browserRecoveryImport', 'toggleAssets',
   'downloadBadge',
   'currentProject',
+  'projectPopover', 'projectMenuList', 'projectMenuManage',
   'promptEditor', 'characterCount', 'copyPrompt',
   'clearPrompt', 'clearPromptDialog', 'clearPromptConfirm', 'clearPromptCancel', 'clearPromptNever',
   'quickPreviewDialog', 'quickPreviewName', 'quickPreviewMeta', 'quickPreviewStage', 'quickPreviewClose', 'quickPreviewDone', 'quickPreviewInLibrary',
@@ -84,6 +86,7 @@ let saveTimer = null;
 let boundsFrame = null;
 let assetPanelSaveTimer = null;
 let assetDragDepth = 0;
+let workspaceReadFailed = false;
 
 function showToast(message, options = {}) {
   const text = document.createElement('span');
@@ -107,6 +110,7 @@ function showToast(message, options = {}) {
 }
 
 function loadWorkspace() {
+  workspaceReadFailed = false;
   try {
     const legacy = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY) || '{}');
     const global = JSON.parse(localStorage.getItem(GLOBAL_STORAGE_KEY) || '{}');
@@ -114,7 +118,7 @@ function loadWorkspace() {
       && state.config?.project?.folder === '青春校园短剧';
     const saved = JSON.parse(localStorage.getItem(`${PROJECT_STORAGE_PREFIX}${state.projectId}`) || '{}');
     const project = canMigrateLegacy ? legacy : saved;
-    const globalTemplatesMissing = !global.templates;
+    promptTemplateStore.claimLegacy(state.projectId);
     for (const mode of ['image', 'video']) {
       if (typeof project.prompts?.[mode] === 'string') state.prompts[mode] = withoutLegacySkeleton(mode, project.prompts[mode]);
       if (typeof global.services?.[mode] === 'string') state.services[mode] = global.services[mode];
@@ -124,17 +128,8 @@ function loadWorkspace() {
           .filter(item => item && typeof item.body === 'string' && item.at)
           .slice(0, 20);
       }
-      // 固定提示词跨剧本通用：优先读全局；旧数据存在各剧本下时自动提升为全局。
-      if (Array.isArray(global.templates?.[mode])) {
-        state.promptTemplates[mode] = global.templates[mode]
-          .filter(item => item && typeof item.id === 'string' && typeof item.title === 'string' && typeof item.body === 'string')
-          .slice(0, 50);
-      } else if (Array.isArray(project.promptTemplates?.[mode])) {
-        state.promptTemplates[mode] = project.promptTemplates[mode]
-          .filter(item => item && typeof item.id === 'string' && typeof item.title === 'string' && typeof item.body === 'string')
-          .slice(0, 50);
-      }
     }
+    state.promptTemplates = promptTemplateStore.load(state.projectId, canMigrateLegacy ? legacy : null);
     // 剧本面板按剧本项目存储：每个剧本各自的集数分组与段落内容。
     if (project.scripts && Array.isArray(project.scripts.groups)) {
       state.scripts = {
@@ -151,7 +146,6 @@ function loadWorkspace() {
           })),
       };
     }
-    if (globalTemplatesMissing) saveWorkspace(true);
     const savedPanel = global.assetPanel || legacy.assetPanel;
     if (savedPanel && typeof savedPanel === 'object') {
       state.assetPanel = {
@@ -173,16 +167,21 @@ function loadWorkspace() {
     const currentPromptHasContent = !!state.prompts[state.mode].trim();
     const currentModeHasTemplates = state.promptTemplates[state.mode].length > 0;
     if (!currentPromptHasContent && !currentModeHasTemplates) state.accordions.prompt = false;
-    if (canMigrateLegacy) saveWorkspace(true);
+    if (canMigrateLegacy || saved.promptTemplatesVersion !== 3) saveWorkspace(true);
   } catch {
-    showToast('旧工作区状态无法读取，已使用空白创作栏');
+    workspaceReadFailed = true;
+    showToast('工作区记录无法读取，已保留原数据，暂不写入或迁移');
   }
 }
 
 function resetProjectWorkspace() {
   state.prompts = { image: '', video: '' };
   state.history = { image: [], video: [] };
-  // 固定提示词是全局资产，切换剧本时不清空。
+  state.promptTemplates = { image: [], video: [] };
+  expandedTemplates.clear(); templateDrafts.clear();
+  activeTemplateIds.image = ''; activeTemplateIds.video = '';
+  el.templateCreateForm.classList.add('hidden');
+  el.templateCreateName.value = ''; el.templateCreateBody.value = '';
   state.assetItems = [];
   state.browserDownloadFolderFilter = '';
   // 剧本面板按剧本项目存储：切换后由 loadWorkspace 读入新剧本的分组。
@@ -197,6 +196,7 @@ function resetProjectWorkspace() {
 
 function saveWorkspace(immediate = false) {
   clearTimeout(saveTimer);
+  if (workspaceReadFailed) return false;
   // 防抖提交可能在切换剧本之后才落地：调度时快照项目数据，提交时按快照写回原剧本，
   // 避免输入后立即切剧本把 A 的草稿/历史写进 B 的存储。
   const snapshot = {
@@ -204,22 +204,24 @@ function saveWorkspace(immediate = false) {
     prompts: { ...state.prompts },
     history: { image: [...state.history.image], video: [...state.history.video] },
     scripts: JSON.parse(JSON.stringify(state.scripts)),
+    promptTemplates: JSON.parse(JSON.stringify(state.promptTemplates)),
   };
   const commit = () => {
     // localStorage 写满（超大纲剧本/素材积累）会抛 QuotaExceededError：必须接住并明确提示，不能静默丢保存
     try {
+      const global = JSON.parse(localStorage.getItem(GLOBAL_STORAGE_KEY) || '{}');
       localStorage.setItem(GLOBAL_STORAGE_KEY, JSON.stringify({
+        ...global,
         version: 2,
         services: state.services,
         assetPanel: state.assetPanel,
         accordions: state.accordions,
-        templates: state.promptTemplates,
         skipClearConfirm: state.skipClearConfirm,
       }));
       const projectKey = `${PROJECT_STORAGE_PREFIX}${snapshot.projectId}`;
       // 保留旧版本的存储字段；已停用功能不再读取或更新，避免清掉用户历史内容。
-      let previous = {};
-      try { previous = JSON.parse(localStorage.getItem(projectKey) || '{}'); } catch {}
+      const previous = JSON.parse(localStorage.getItem(projectKey) || '{}');
+      if (!previous || typeof previous !== 'object' || Array.isArray(previous)) throw new Error('工作区记录无效');
       localStorage.setItem(projectKey, JSON.stringify({
         ...previous,
         version: 2,
@@ -227,19 +229,25 @@ function saveWorkspace(immediate = false) {
         prompts: snapshot.prompts,
         history: snapshot.history,
         scripts: snapshot.scripts,
+        promptTemplatesVersion: 3,
+        promptTemplates: snapshot.promptTemplates,
       }));
     } catch (error) {
-      el.draftStatus.textContent = '保存失败：本机存储空间不足';
-      showToast('工作区保存失败：本机存储空间不足，请清理浏览器存储或拆分超大剧本');
-      return;
+      const quota = error.name === 'QuotaExceededError';
+      el.draftStatus.textContent = quota ? '保存失败：本机存储空间不足' : '保存失败：原记录未覆盖';
+      showToast(quota ? '工作区保存失败：本机存储空间不足，请拆分超大剧本'
+        : '工作区保存失败：原记录未覆盖，请先检查本机记录');
+      return false;
     }
     el.draftStatus.textContent = '已在本机自动保存';
+    return true;
   };
-  if (immediate) commit();
+  if (immediate) return commit();
   else {
     el.draftStatus.textContent = '正在保存…';
     saveTimer = setTimeout(commit, 260);
   }
+  return true;
 }
 
 /* 提示词历史：编辑停顿 6 秒后落一版快照，最多保留 20 版 */
@@ -396,39 +404,102 @@ function renderProject() {
 
 let projectChangeTask = Promise.resolve();
 let projectMenuOpen = false;
+let templateMigrationBusy = false;
 
 function queueProjectChange(project) {
   projectChangeTask = projectChangeTask.catch(() => {}).then(() => applyProjectChange(project));
   return projectChangeTask;
 }
 
+function closeProjectMenu(restoreFocus = false) {
+  projectMenuOpen = false;
+  el.projectPopover.classList.add('hidden');
+  el.currentProject.setAttribute('aria-expanded', 'false');
+  syncCreatorDialogVisibility();
+  if (restoreFocus) el.currentProject.focus({ preventScroll: true });
+}
+
+async function migrateProjectTemplates(project, event) {
+  event?.preventDefault();
+  if (templateMigrationBusy) return;
+  templateMigrationBusy = true;
+  try {
+    await projectChangeTask.catch(() => {});
+    if (!saveWorkspace(true)) throw new Error('当前工作区未保存，请先检查本机存储');
+    const source = promptTemplateStore.load(project.id);
+    const counts = { image: source.image.length, video: source.video.length };
+    if (!counts.image && !counts.video) { showToast('这个剧本没有已保存的固定提示词'); return; }
+    if (typeof API.showProjectTemplateMenu !== 'function') throw new Error('请重启更新后的 App，以启用迁移菜单');
+    closeProjectMenu();
+    const rect = el.currentProject.getBoundingClientRect();
+    const result = await API.showProjectTemplateMenu({ sourceProjectId: project.id, counts,
+      x: event?.clientX || rect.left, y: event?.clientY || rect.bottom });
+    if (!result?.targetProjectId) return;
+    if (!saveWorkspace(true)) throw new Error('当前工作区未保存，未执行迁移');
+    const moved = promptTemplateStore.migrate(project.id, result.targetProjectId);
+    if (state.projectId === result.targetProjectId) {
+      state.promptTemplates = moved.templates;
+      renderPromptTemplates();
+    }
+    const targetName = result.targetName || '目标剧本';
+    showToast(moved.added ? `已新增到「${targetName}」：图片 ${moved.counts.image} 条、视频 ${moved.counts.video} 条，原有模板未覆盖`
+      : '目标剧本已包含这些模板，无需重复添加');
+  } catch (error) { showToast(`迁移未完成：${error.message}`); }
+  finally { templateMigrationBusy = false; }
+}
+
 async function openProjectMenu() {
-  if (projectMenuOpen) return;
-  if (typeof API.showProjectMenu !== 'function') {
-    showToast('请完全退出并重新打开更新后的桌面版，以启用剧本下拉菜单');
-    return;
+  if (templateMigrationBusy) return;
+  if (projectMenuOpen) { closeProjectMenu(true); return; }
+  if (typeof API.selectProject !== 'function') {
+    showToast('请重启更新后的 App，以启用剧本切换与迁移'); return;
   }
-  projectMenuOpen = true;
   closePlatformPopover();
+  closeAllTabsPopover();
+  projectMenuOpen = true;
   el.currentProject.setAttribute('aria-expanded', 'true');
   try {
     await projectChangeTask.catch(() => {});
-    saveWorkspace(true);
-    const rect = el.currentProject.getBoundingClientRect();
-    const result = await API.showProjectMenu({ mode: state.mode, x: rect.left, y: rect.bottom + 5 });
-    el.currentProject.setAttribute('aria-expanded', 'false');
-    if (result?.project) {
-      el.currentProject.setAttribute('aria-busy', 'true');
-      // Also handle the invoke result; queuing makes it safe if the project event arrived first.
-      await queueProjectChange(result.project);
+    if (!saveWorkspace(true)) throw new Error('当前工作区未保存');
+    const response = await fetch('/api/creative-projects');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const catalog = await response.json();
+    if (!projectMenuOpen) return;
+    el.projectMenuList.replaceChildren();
+    for (const project of catalog.projects || []) {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'project-menu-item'; button.dataset.projectId = project.id;
+      button.setAttribute('role', 'menuitemradio');
+      button.setAttribute('aria-checked', String(project.id === state.projectId));
+      button.disabled = project.available === false;
+      button.textContent = project.name + (button.disabled ? '（目录不可用）' : '');
+      button.title = `${project.name}｜右键迁移此剧本的固定提示词`;
+      button.addEventListener('contextmenu', event => migrateProjectTemplates(project, event));
+      button.addEventListener('keydown', event => {
+        if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) migrateProjectTemplates(project, event);
+      });
+      button.addEventListener('click', async () => {
+        if (templateMigrationBusy) return;
+        closeProjectMenu();
+        try {
+          el.currentProject.setAttribute('aria-busy', 'true');
+          const result = await API.selectProject({ projectId: project.id, mode: state.mode });
+          if (result?.project) await queueProjectChange(result.project);
+        } catch (error) { showToast(`切换剧本失败：${error.message}`); }
+        finally { el.currentProject.removeAttribute('aria-busy'); }
+      });
+      el.projectMenuList.append(button);
     }
-    if (!result?.manage) el.currentProject.focus({ preventScroll: true });
+    el.projectPopover.classList.remove('hidden');
+    const rect = el.currentProject.getBoundingClientRect();
+    const header = el.projectPopover.offsetParent.getBoundingClientRect();
+    el.projectPopover.style.left = Math.max(8, Math.min(rect.left - header.left,
+      header.width - el.projectPopover.offsetWidth - 8)) + 'px';
+    syncCreatorDialogVisibility();
+    el.projectMenuList.querySelector('[aria-checked="true"]')?.focus({ preventScroll: true });
   } catch (error) {
+    closeProjectMenu(true);
     showToast(`切换剧本失败：${error.message}`);
-  } finally {
-    projectMenuOpen = false;
-    el.currentProject.setAttribute('aria-expanded', 'false');
-    el.currentProject.removeAttribute('aria-busy');
   }
 }
 
@@ -440,10 +511,15 @@ async function applyProjectChange(project) {
     }
     return;
   }
-  saveWorkspace(true);
+  closeProjectMenu();
+  if (!saveWorkspace(true)) throw new Error('原剧本工作区未保存，未切换创作材料');
+  // 原生模式通知和面板自动保存可在 getConfig 等待期间到达。
+  // 先获取配置，再同步切换键/重置/加载；不能把目标键暴露给尚未加载的空工作区。
+  const config = await API.getConfig();
+  if (!saveWorkspace(true)) throw new Error('原剧本工作区未保存，未切换创作材料');
   state.projectId = project.id;
   resetProjectWorkspace();
-  state.config = await API.getConfig();
+  state.config = config;
   state.config.project = state.config.project || project;
   loadWorkspace();
   state.downloads.clear();
@@ -1157,11 +1233,17 @@ function allTabsOverlapsStage() {
     && popover.left < stage.right && popover.right > stage.left;
 }
 
+function projectMenuOverlapsStage() {
+  if (el.projectPopover.classList.contains('hidden')) return false;
+  const menu = el.projectPopover.getBoundingClientRect(), stage = el.browserStage.getBoundingClientRect();
+  return menu.top < stage.bottom && menu.bottom > stage.top && menu.left < stage.right && menu.right > stage.left;
+}
+
 // 弹层是 HTML 层，而平台网页是原生 WebContentsView（永远在 HTML 之上）：
 // 仅当弹层几何上压住网页舞台时才临时隐藏原生视图（与模态对话框同一机制），避免弹层被网页盖住。
 function syncAllTabsNativeShield() {
   if (typeof API?.setPlatformViewHidden !== 'function') return;
-  const hidden = !!document.querySelector('dialog[open]') || allTabsOverlapsStage();
+  const hidden = !!document.querySelector('dialog[open]') || allTabsOverlapsStage() || projectMenuOverlapsStage();
   API.setPlatformViewHidden(hidden).catch(() => {});
 }
 
@@ -1221,6 +1303,7 @@ function refreshAllTabsList() {
 }
 
 function openAllTabsPopover() {
+  closeProjectMenu();
   // 上一场退出动画还没播完就重开：先取消退出排程，再进入弹入动画
   cancelPendingPopOut(el.allTabsPopover);
   el.allTabsPopover.classList.remove('hidden');
@@ -2000,7 +2083,7 @@ function collectAssetItems(root) {
   if (!folders.some(folder => (folder.node.path || '') === state.quickAssetFolder)) {
     state.quickAssetFolder = '';
   }
-  return items.sort((a, b) => String(b.mtime || '').localeCompare(String(a.mtime || '')));
+  return items.sort(AssetOrder.newestFirst);
 }
 
 function quickFolderLabel(path) {
@@ -2233,7 +2316,7 @@ function collectBrowserDownloadCards(folderPath) {
   const merged = [...byPath.values(), ...loose];
   merged.sort((a, b) => {
     const rank = item => (item.downloadState === 'progressing' || item.downloadState === 'paused') ? 0 : 1;
-    return rank(a) - rank(b) || String(b.mtime || '').localeCompare(String(a.mtime || ''));
+    return rank(a) - rank(b) || AssetOrder.newestFirst(a, b);
   });
   return merged;
 }
@@ -2276,7 +2359,7 @@ function refreshBrowserDownloadCards() {
       back.addEventListener('click', () => { state.browserDownloadFolderFilter = ''; refreshBrowserDownloadCards(); });
       nav.appendChild(back);
     }
-    for (const folder of folders.filter(folder => folder.parentPath === current)) {
+    for (const folder of AssetOrder.orderFolders(folders.filter(folder => folder.parentPath === current))) {
       const path = folder.node.path;
       const count = items.filter(item => item.path === path || item.path?.startsWith(`${path}/`)).length;
       const button = document.createElement('button');
@@ -2464,7 +2547,7 @@ function buildQuickFileCard(item) {
     button.addEventListener('contextmenu', event => {
       event.preventDefault();
       event.stopPropagation();
-      floatQuickVideo(item);
+      floatQuickVideo(item, button.getBoundingClientRect());
     });
   }
   wrapper.appendChild(button);
@@ -2527,6 +2610,16 @@ function buildQuickFileCard(item) {
   return wrapper;
 }
 
+function applyQuickFolderRename(change) {
+  if (!change || change.projectId !== state.projectId) return;
+  const remap = value => FolderEditor.remap(value, change);
+  state.quickAssetFolder = remap(state.quickAssetFolder);
+  state.collapsedQuickFolders = new Set([...state.collapsedQuickFolders].map(remap));
+  state.quickSelectionOrder = state.quickSelectionOrder.map(remap);
+  try { FolderEditor.rememberOrder(change); } catch {}
+  assetFolderOrderCache = { projectId: null, data: {} };
+}
+
 function buildQuickFolderRow(folder) {
   const key = folder.node.path || '';
   const collapsed = state.collapsedQuickFolders.has(key);
@@ -2562,6 +2655,18 @@ function buildQuickFolderRow(folder) {
     toggle();
   });
   name.addEventListener('click', toggle);
+  if (folder.depth > 0) row.addEventListener('contextmenu', event => {
+    event.preventDefault(); event.stopPropagation();
+    if (typeof API.showFolderMenu !== 'function') { showToast('文件夹右键删除需要最新版桌面程序'); return; }
+    API.showFolderMenu({ path: key, x: event.clientX, y: event.clientY })
+      .then(result => {
+        if (result?.rename) FolderEditor.edit(name, result, API, async change => {
+          applyQuickFolderRename(change); await loadAssetItems(); showToast('文件夹已改名；新导入仍按 001、002 编号');
+        }, showToast);
+        if (result?.deleted) { showToast('文件夹已移入废纸篓'); loadAssetItems(); }
+      })
+      .catch(error => showToast(error.message || '文件夹操作失败'));
+  });
 
   const count = document.createElement('span');
   count.className = 'quick-folder-count';
@@ -2613,7 +2718,7 @@ function buildQuickFolderRow(folder) {
 
   // 非根分类行末尾的独立拖动手柄：只做同级显示排序；根「全部资产」固定，不给手柄。
   row.append(disclosure, name, count);
-  if (folder.depth > 0) row.append(buildQuickFolderGrip(row, folder));
+  if (folder.depth > 0 && !AssetOrder.dateFolderKey(folder.node.name)) row.append(buildQuickFolderGrip(row, folder));
   row.append(dropHint);
 
   // Obsidian 式：展开文件夹后，里面的图片直接嵌在树下（连同子文件夹一起收纳）。
@@ -2693,19 +2798,9 @@ function saveAssetFolderOrder(order) {
   }
 }
 
-// 把同级分类按已保存顺序排在前面，其余保持原相对顺序（Array.sort 稳定）追加在后。
+// 普通分类保留手动顺序；所有日期目录强制最新在前，覆盖旧的日期拖动记录。
 function orderAssetFolderEntries(entries, parentPath) {
-  const list = loadAssetFolderOrder()[parentPath];
-  if (!Array.isArray(list) || !list.length || entries.length < 2) return entries;
-  const rank = new Map(list.map((path, index) => [path, index]));
-  const unknownRank = Number.MAX_SAFE_INTEGER;
-  return [...entries].sort((a, b) => {
-    const pathA = a.node.path || '';
-    const pathB = b.node.path || '';
-    const rankA = rank.has(pathA) ? rank.get(pathA) : unknownRank;
-    const rankB = rank.has(pathB) ? rank.get(pathB) : unknownRank;
-    return rankA - rankB;
-  });
+  return AssetOrder.orderFolders(entries, loadAssetFolderOrder()[parentPath]);
 }
 
 function commitAssetFolderOrder(parentPath, entries) {
@@ -2720,7 +2815,8 @@ function commitAssetFolderOrder(parentPath, entries) {
 function quickFolderSiblings(folder) {
   return orderAssetFolderEntries(
     (state.quickFolders || []).filter(item =>
-      item.depth > 0 && item.parentPath === folder.parentPath && item.node?.name !== '浏览器下载'),
+      item.depth > 0 && item.parentPath === folder.parentPath && item.node?.name !== '浏览器下载'
+        && !AssetOrder.dateFolderKey(item.node?.name)),
     folder.parentPath || ''
   );
 }
@@ -2978,13 +3074,13 @@ function applyAllFloatedVideoCardState() {
   for (const assetPath of state.floatedVideoPaths.keys()) applyFloatedVideoCardState(assetPath);
 }
 
-async function floatQuickVideo(item) {
+async function floatQuickVideo(item, rect) {
   if (typeof API.floatVideoAsset !== 'function') {
     showToast('右键浮出视频小窗需要更新桌面程序后使用');
     return;
   }
   try {
-    const result = await API.floatVideoAsset(item.path);
+    const result = await API.floatVideoAsset({ path: item.path, origin: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : undefined });
     // 以卡片携带的相对路径为准记状态；桌面程序返回的 path 仅作关闭事件对账。
     state.floatedVideoPaths.set(item.path, result?.path || item.path);
     applyFloatedVideoCardState(item.path);
@@ -3081,6 +3177,7 @@ async function loadAssetItems() {
     const data = await response.json().catch(() => ({}));
     if (requestId !== assetItemsRequestId || state.projectId !== requestProjectId) return;
     if (!response.ok || !data.tree) throw new Error(data.error || `HTTP ${response.status}`);
+    if (data.project) state.config.project = data.project;
     state.assetItems = collectAssetItems(data.tree);
     // 框选导入序列按现存资产过滤：已删除/已不存在的选项自动剔除并明确提示，避免整批拖出失败。
     const existingPaths = new Set(state.assetItems.map(item => item.path));
@@ -3134,7 +3231,7 @@ async function loadMoreInbox() {
 function syncCreatorDialogVisibility() {
   if (typeof API.setPlatformViewHidden === 'function') {
     // 模态对话框与「全部网页」弹层同为 HTML 层：两者都关闭时才恢复原生网页视图。
-    API.setPlatformViewHidden(!!document.querySelector('dialog[open]') || allTabsOverlapsStage()).catch(() => {});
+    API.setPlatformViewHidden(!!document.querySelector('dialog[open]') || allTabsOverlapsStage() || projectMenuOverlapsStage()).catch(() => {});
   }
 }
 
@@ -3259,6 +3356,7 @@ function formatBytes(bytes) {
 }
 
 function downloadStateLabel(download) {
+  if (download.pendingReview && download.state === 'paused') return download.error ? '归档待重试' : '等待分类归档';
   if (download.source === 'import') {
     return ({
       progressing: '正在导入', paused: '导入已暂停', completed: '已导入并归档',
@@ -3480,8 +3578,11 @@ function registerQuickCoverLazy(video, coverUrl) {
 
 /* 快捷面板内置预览：图片放大查看（点击切换原始大小），视频/音频直接播放。 */
 let quickPreviewItem = null;
+let quickVoiceEditor = null;
 
 function openQuickPreview(item) {
+  quickVoiceEditor?.destroy(); quickVoiceEditor = null;
+  el.quickPreviewStage.querySelector('audio, video')?.pause();
   quickPreviewItem = item;
   el.quickPreviewName.textContent = item.name;
   el.quickPreviewMeta.textContent = `${item.folder || '创作资产库'} · ${item.type === 'image' ? '点击图片可在适配与原始大小间切换' : item.type === 'video' ? '视频预览' : '音频预览'}`;
@@ -3504,6 +3605,13 @@ function openQuickPreview(item) {
     video.loop = true;
     video.playsInline = true;
     stage.appendChild(video);
+    quickVoiceEditor = window.VoiceClipEditor?.mount({
+      host: document.getElementById('quickVoiceClipHost'),
+      actions: el.quickPreviewDialog.querySelector('.creator-dialog-foot'),
+      item, video, getProjectId: () => state.projectId,
+      exportAudio: typeof API.saveAudioAs === 'function' ? file => API.saveAudioAs(file) : undefined,
+      onSaved: async () => { await loadAssetItems(); showToast('人物音频已保存到本剧'); },
+    });
   } else if (item.type === 'audio') {
     const audio = document.createElement('audio');
     audio.className = 'quick-preview-audio';
@@ -3521,6 +3629,8 @@ function openQuickPreview(item) {
 }
 
 function closeQuickPreview({ instant = false } = {}) {
+  quickVoiceEditor?.destroy(); quickVoiceEditor = null;
+  el.quickPreviewStage.querySelector('audio, video')?.pause();
   closeCreatorDialog(el.quickPreviewDialog, { instant });
   el.quickPreviewStage.replaceChildren();
   quickPreviewItem = null;
@@ -4037,6 +4147,7 @@ function bindEvents() {
     if (button && !button.disabled) playMotionClass(button, 'motion-tick', 400, ['motionTick']);
   });
   el.addPlatform.addEventListener('click', () => {
+    closeProjectMenu();
     // 退出动画进行中（hidden 未落地）按"关"处理，否则快速关-开会吞掉重开
     const opening = el.platformPopover.classList.contains('hidden')
       || el.platformPopover.classList.contains('motion-unpop');
@@ -4180,7 +4291,6 @@ function bindEvents() {
       body,
       at: Date.now(),
     });
-    state.promptTemplates[state.mode] = state.promptTemplates[state.mode].slice(0, 50);
     expandedTemplates.add(state.promptTemplates[state.mode][0].id);
     activeTemplateIds[state.mode] = state.promptTemplates[state.mode][0].id;
     el.templateCreateForm.classList.add('hidden');
@@ -4189,7 +4299,7 @@ function bindEvents() {
     state.accordions.prompt = true;
     saveWorkspace(true);
     renderPromptTemplates();
-    showToast(`已保存固定提示词「${title}」，所有剧本通用`);
+    showToast(`已保存到当前剧本：「${title}」`);
   });
   el.promptAccordion.addEventListener('toggle', () => {
     state.accordions.prompt = el.promptAccordion.open;
@@ -4273,11 +4383,36 @@ function bindEvents() {
     importDroppedAssets(event.dataTransfer);
   });
   el.currentProject.addEventListener('click', openProjectMenu);
+  el.currentProject.addEventListener('contextmenu', event => migrateProjectTemplates(state.config.project, event));
   el.currentProject.addEventListener('keydown', event => {
+    if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+      migrateProjectTemplates(state.config.project, event); return;
+    }
     if (event.key !== 'ArrowDown') return;
     event.preventDefault();
     openProjectMenu();
   });
+  el.projectMenuManage.addEventListener('click', () => {
+    closeProjectMenu();
+    API.showProjectPicker(state.mode).catch(error => showToast(error.message));
+  });
+  document.addEventListener('pointerdown', event => {
+    if (projectMenuOpen && !event.target.closest('#projectPopover, #currentProject')) closeProjectMenu();
+  });
+  el.projectPopover.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault(); closeProjectMenu(true); return; }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const buttons = [...el.projectPopover.querySelectorAll('button:not(:disabled)')];
+    const current = buttons.indexOf(document.activeElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+      : (current + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+    buttons[next]?.focus();
+  });
+  document.addEventListener('keydown', event => {
+    if (projectMenuOpen && event.key === 'Escape') { event.preventDefault(); closeProjectMenu(true); }
+  });
+  window.addEventListener('resize', () => { if (projectMenuOpen) closeProjectMenu(); });
   el.showMainWindow.addEventListener('click', () => API.showMainWindow());
   el.importDownloadedFiles.addEventListener('click', importDownloadedFiles);
   el.browserRecoveryImport.addEventListener('click', importDownloadedFiles);
@@ -4614,7 +4749,8 @@ async function boot() {
         renderDownloads();
       }).catch(() => {});
     });
-    productionEvents.addEventListener('creative-assets', () => {
+    productionEvents.addEventListener('creative-assets', event => {
+      try { applyQuickFolderRename(JSON.parse(event.data).folderRename); } catch {}
       loadAssetItems().catch(() => {});
     });
     // 资产面板/HTTP activate 的全局权威通知：广播载荷携带实时激活项目，走既有串行切换链。

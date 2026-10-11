@@ -2,13 +2,21 @@
 
 一个以网页创作为中心的本地视频工作台：集中管理**图片与视频创作网页**、**固定提示词**、**分剧本资产中心**、**音频与 BGM**、**成片**和**项目知识**。
 
-## v1.2.3 · Windows 更新 · 2026-10-08
+## 最新 Windows 开源源码：v1.2.4 · 2026-10-11
 
-- 同步当前已实现的双模式浏览器、提示词、分剧本资产和剪映联动功能。
-- 清空网页前二次确认，默认取消；标签右键菜单独立显示，避免被网页遮挡。
-- 更新紧凑工具栏、界面动效，并修复弹层快速重开后被旧定时器关闭的问题。
-- 修复 Windows 程序拖动视频浮窗、剪映联动小窗后位置未保存的问题。
-- 人物音频提取与截取尚未实现，不包含在本版本。下载及完整功能说明见 [Windows Release](https://github.com/SJT-bright/video-production-os-windows/releases/tag/v1.2.3)。
+[固定版本源码](https://github.com/SJT-bright/video-production-os-windows/tree/source-v1.2.4) · [下载源码 ZIP](https://github.com/SJT-bright/video-production-os-windows/archive/refs/tags/source-v1.2.4.zip) · [Windows 安装与构建指南](WINDOWS-REPRODUCE.md)
+
+本次把 Mac v1.2.4 已实现的完整功能同步到 Windows，并纳入 2026-10-11 的纯数字编号与平台素材目录调整。源码包含界面图标、背景、Windows 构建脚本、锁定依赖和回归测试，以 MIT 许可证开源；第三方账号与个人创作数据不随源码分发。`source-v1.2.4` 为**源码标签**，自动生成的 Source code ZIP 需要安装依赖并构建，不是可双击的 EXE。
+
+- 人物音频：从视频预览提取原音轨、波形选区、循环试听、默认锁定 2.1 秒、命名并保存到本剧音频库，另存为额外副本；不自动分离说话人或背景音乐。
+- 下载视频：先选择“可剪辑”或“待处理”，再按下载开始时的剧本归档；并行同名不覆盖，未分类记录可重启继续处理。
+- 固定提示词：剧本右键主动迁移图片／视频两模式模板，追加而不覆盖，重复内容跳过；剧本各自保留草稿与模板。
+- 浏览器与资产：清空网页需确认，标签右键菜单使用独立原生小窗；普通文件夹可拖动排序，日期与素材最新在前。
+- 浮窗与素材管理：视频从卡片展开到置顶窗口，原文件拖出后自动收起；文件夹删除状态持久化，单个浏览器下载文件仍需明确确认后永久删除。
+- 同步已验证的浮层退出计时器、快速关闭／重开和窗口位置保存修正。
+- 资产分类支持右键后原位改名并保留分类身份，音频、成片和下载记录同步路径；新文件只按 `001.ext`、`002.ext` 编号，分类改名和删除不重置计数。生成视频在平台下的“素材001”目录跨日追加，旧日期目录不移动。
+
+Windows 10/11 x64 的运行、构建、数据路径及验证方式见 [WINDOWS-REPRODUCE.md](WINDOWS-REPRODUCE.md)。源码发布不自动替换既有 v1.2.3 Windows 下载包，也不更新本机 Mac App。Mac v1.2.4 的历史固定源码与指南仍见 [主仓库](https://github.com/SJT-bright/video-production-os/tree/v1.2.4)。
 
 ## v1.2.1 · 2026-10-03
 
@@ -49,16 +57,16 @@
 
 本仓库保存软件源码、界面图标、开发脚本和说明文档；不包含个人剧本、人物素材、生成结果、登录会话、本地数据库或打包后的应用。
 
-创作浏览器会自动记住图片、视频模式各自的标签顺序、名称、网址和最后选中的标签。切换大厅或资产库时不关闭网页；退出后重开可恢复标签与地址（网站未提交的表单由网站自行保存）。顶部“清空网页”先弹出确认，默认取消；确认后只关闭两个模式中的网页，不删除登录、网站入口或素材。清空状态也会保留，不自动补开默认网页。有下载任务时需先完成或取消下载。
+创作浏览器会自动记住图片、视频模式各自的标签顺序、名称、网址和最后选中的标签。切换大厅或资产库时不关闭网页；退出后重开可恢复标签与地址（网站未提交的表单由网站自行保存）。顶部“清空网页”只关闭两个模式中的网页，不删除登录、网站入口或素材；清空状态也会保留，不自动补开默认网页。有下载任务时需先完成或取消下载。
 
 ### 从 GitHub 启动
 
-需要 Node.js 22.12 或更新版本。macOS 打包目前依赖 `视频制作OS` 这个目录名，请按下面的结构克隆到一个单独的工作目录：
+需要 Git 和 Node.js；复现使用 `.nvmrc` 固定的 26.7.0。请克隆到独立工作目录：
 
 ```zsh
 mkdir -p video-production-workspace
 cd video-production-workspace
-git clone https://github.com/SJT-bright/video-production-os.git 视频制作OS
+git clone --branch source-v1.2.4 https://github.com/SJT-bright/video-production-os-windows.git 视频制作OS
 cd 视频制作OS
 npm ci
 npm run desktop
@@ -70,15 +78,15 @@ npm run desktop
 # 仅使用网页兼容版（不含桌面内嵌浏览器）
 npm run browser
 
-# 在 Apple Silicon Mac 上生成本地应用；Intel Mac 改为 --arch x64
-npm run build:mac -- --arch arm64
+# 在 Windows 上生成独立数据的完整应用
+npm run build:windows:release
 ```
 
 个人剧本、素材和既有拆解文件均保留在原目录；应用不会因功能精简而迁移或删除它们。
 
 ## 启动
 
-### macOS 独立 APP（主版本）
+### macOS 源码绑定 APP（开发方式）
 
 以后以 macOS 为主：在 Mac 上保留并维护完整项目目录，直接使用独立的 `视频制作 OS.app` 做图片和视频创作。它不是网页快捷方式，而是 Electron 在 **真实 Mac** 上生成的 `.app`；图片／视频工作台、素材元数据、Agent 经验和文档批注都使用该项目中的唯一 `视频制作OS/data`，`.app` 包内绝不复制这些实时数据。
 
@@ -92,7 +100,7 @@ npm run build:mac -- --arch arm64
    ```
 
 4. Apple Silicon 自动生成 `dist/视频制作 OS-darwin-arm64/视频制作 OS.app`；Intel Mac 自动生成 `dist/视频制作 OS-darwin-x64/视频制作 OS.app`。在**未移动项目的位置**可以直接双击 `.app`；只要移动了整个项目目录、改过源码，或不确定包是否最新，就双击 `启动OS-mac.command`。启动器会先核验 `.app` 的应用主程序、Info.plist、CPU 架构以及当前源码的完整哈希清单；发现旧包、缺文件或清单不完整时会先重建，不会静默打开过时版本。孤立移动 `.app` 时应用会停止并提示使用启动器重建，绝不会在旧路径自动新建空台账。
-5. 如需另一种 CPU 架构，在对应 Mac／CI 上运行 `npm run build:mac -- --arch arm64` 或 `npm run build:mac -- --arch x64`。首版提供两个薄包，不把两个架构伪装成一个 universal 包。
+5. 如需另一种 CPU 架构，运行 `npm run build:mac -- --arch x64`；可移动构建及通用包使用 `--portable`，详见 [Mac 复现指南](MAC-REPRODUCE.md)。薄包与通用包在名称和构建清单中分别标记。
 
 **创作优先启动**：日常双击 `.app` 后直接进入**创作浏览器**（上次模式、当前剧本；首次使用为图片模式），不再先经过制作 OS 主窗口；主窗口在点「返回制作 OS」或切换剧本时按需打开。
 
@@ -106,7 +114,7 @@ npm run build:mac -- --arch arm64  # Apple Silicon
 
 浏览器回归测试只用于开发校验；第一次需要下载 Chromium 时，先运行 `npm run setup:test-browser`，再运行 `npm run test:browser`。这不影响正式 `.app` 的使用。
 
-非 macOS 环境只能完成源码与构建契约检查，不能生成可信可运行的 `.app`。本项目在 Mac 上构建后会执行本机 ad-hoc 签名与严格 Bundle 校验，适合当前开发 Mac 使用；要分发给其他 Mac，仍必须完成 Developer ID 签名、Apple notarization、staple 和隔离下载测试后才可发布。
+非 macOS 环境不能完成本机 `.app` 构建与 Bundle 验证。在 Mac 构建时执行本机 ad-hoc 签名与严格校验，不等于 Apple 公证。本标签只发布源码，不分发内置音频二进制；自行制作公开安装包前请核对 [音频组件与分发边界](MAC-REPRODUCE.md#音频组件与分发边界)。
 
 > 从 Windows 首次迁移到 Mac 时，先完整退出 Windows 版本，再复制整个项目目录。迁移完成后，请把 Mac 本地目录视为唯一工作副本：不要让 Windows 与 Mac 同时写入同一份 `data`，也不要用云盘／NAS 同步 SQLite 的 WAL 文件。旧 Windows 下载记录中带绝对盘符的文件会显示为历史记录；需要打开原文件时重新关联相应素材，新的 Mac 下载会按当前项目重新归档。
 

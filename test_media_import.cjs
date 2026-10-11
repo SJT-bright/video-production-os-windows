@@ -188,12 +188,12 @@ async function main() {
     const creativeImage = await importCreativeAsset(baseUrl, characterPath, '女主正脸.png', imageBytes);
     assert.equal(creativeImage.status, 201, creativeImage.text);
     assert.equal(creativeImage.payload.type, 'image');
-    // 图片导入自动按“分类-序号”重命名（顺序命名功能）
-    assert.equal(creativeImage.payload.name, '人物资产-001.png', creativeImage.text);
-    assert.equal(creativeImage.payload.path, `${characterPath}/人物资产-001.png`);
+    // 图片导入只使用纯数字编号。
+    assert.equal(creativeImage.payload.name, '001.png', creativeImage.text);
+    assert.equal(creativeImage.payload.path, `${characterPath}/001.png`);
     const creativeImageCollision = await importCreativeAsset(baseUrl, characterPath, '女主正脸.png', imageBytes);
     assert.equal(creativeImageCollision.status, 201, creativeImageCollision.text);
-    assert.equal(creativeImageCollision.payload.name, '人物资产-002.png');
+    assert.equal(creativeImageCollision.payload.name, '002.png');
     const creativeAudio = await importCreativeAsset(baseUrl, audioPath, '女主声线.wav', Buffer.from('fake-wav-content'));
     assert.equal(creativeAudio.status, 201, creativeAudio.text);
     assert.equal(creativeAudio.payload.type, 'audio');
@@ -219,12 +219,12 @@ async function main() {
     assert.equal(creativeTree.payload.stats.audio, 1);
     assert.equal(creativeTree.payload.stats.video, 1);
     assert.equal(creativeTree.payload.stats.document, 1);
-    assert.ok(JSON.stringify(creativeTree.payload.tree).includes(`${characterPath}/人物资产-001.png`));
+    assert.ok(JSON.stringify(creativeTree.payload.tree).includes(`${characterPath}/001.png`));
     assert.equal(JSON.stringify(creativeTree.payload.tree).includes(projectRoot), false, '资产树泄露了绝对路径');
     const staleProjectRead = await request(baseUrl, '/api/creative-assets?project=inspiration');
     assert.equal(staleProjectRead.status, 409, '旧工作台仍能读取另一个剧本的资产树');
 
-    const creativePreview = await request(baseUrl, `/api/creative-assets/file?project=${encodeURIComponent(project.id)}&p=${encodeURIComponent(`${characterPath}/人物资产-001.png`)}`, {
+    const creativePreview = await request(baseUrl, `/api/creative-assets/file?project=${encodeURIComponent(project.id)}&p=${encodeURIComponent(`${characterPath}/001.png`)}`, {
       headers: { Range: 'bytes=0-3' },
     });
     assert.equal(creativePreview.status, 206, creativePreview.text);

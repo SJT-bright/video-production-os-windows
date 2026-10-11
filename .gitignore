@@ -8,6 +8,7 @@ dist-*/
 *.zip
 build-manifest.json
 runtime-config.json
+/vendor/media-tools/
 
 # Personal production data, scripts and media stay on this computer
 /data/
@@ -50,3 +51,12 @@ Login Data-journal
 *.swp
 *.tmp
 *.bak
+
+# Internal handoff notes and local validation artifacts
+.backup-*.tgz
+/IMPLEMENT-*.md
+/REVIEW-*.md
+/docs/
+/fixtures/
+__pycache__/
+*.pyc
