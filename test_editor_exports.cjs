@@ -11,6 +11,7 @@ const { createEditorExportMonitor } = require('./editor-exports.cjs');
 
 const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'video-os-editor-exports-'));
 let child;
+let serverOutput = '';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // 合法 PCM WAV；MP4 仅提供容器结构夹具，用于检查未写完的 box，不声称能解码播放。
@@ -95,21 +96,26 @@ async function checkServer() {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const port = await new Promise((resolve, reject) => {
-    let output = '';
-    const timeout = setTimeout(() => reject(new Error(output || '服务器启动超时')), 10000);
+    const timeout = setTimeout(() => reject(new Error(serverOutput || '服务器启动超时')), 10000);
     const collect = data => {
-      output += data;
-      const match = output.match(/TEST_PORT=(\d+)/);
+      serverOutput = (serverOutput + data).slice(-16000);
+      const match = serverOutput.match(/TEST_PORT=(\d+)/);
       if (match) { clearTimeout(timeout); resolve(Number(match[1])); }
     };
     child.stdout.on('data', collect); child.stderr.on('data', collect);
-    child.once('exit', code => { clearTimeout(timeout); reject(new Error(`服务器退出 ${code}: ${output}`)); });
+    child.once('exit', code => { clearTimeout(timeout); reject(new Error(`服务器退出 ${code}: ${serverOutput}`)); });
   });
   const base = `http://127.0.0.1:${port}`;
   async function api(route, body) {
-    const response = await fetch(base + route, { method: body ? 'POST' : 'GET',
-      headers: { Origin: base, ...(body ? { 'Content-Type': 'application/json' } : {}) },
-      body: body ? JSON.stringify(body) : undefined });
+    let response;
+    try {
+      response = await fetch(base + route, { method: body ? 'POST' : 'GET',
+        headers: { Origin: base, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+        body: body ? JSON.stringify(body) : undefined });
+    } catch (error) {
+      await delay(100);
+      throw new Error(`${body ? 'POST' : 'GET'} ${route} failed; server exit=${child.exitCode}, signal=${child.signalCode}\n${serverOutput}`, { cause: error });
+    }
     const payload = await response.json();
     assert.ok(response.ok, JSON.stringify(payload));
     return payload;
