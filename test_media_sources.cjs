@@ -135,8 +135,8 @@ try {
   assert.deepEqual(JSON.parse(fs.readFileSync(configPath, 'utf-8')), {
     version: MEDIA_SOURCE_CONFIG_VERSION,
     sources: [
-      { id: downloads.id, label: 'Downloads', rootPath: fs.realpathSync(downloadsRoot), kind: 'downloads' },
-      { id: custom.id, label: 'AIGC 成片', rootPath: fs.realpathSync(customRoot), kind: 'folder' },
+      { id: downloads.id, label: 'Downloads', rootPath: fs.realpathSync.native(downloadsRoot), kind: 'downloads' },
+      { id: custom.id, label: 'AIGC 成片', rootPath: fs.realpathSync.native(customRoot), kind: 'folder' },
     ],
   });
   if (process.platform !== 'win32') {
@@ -184,7 +184,7 @@ try {
   assert.ok(downloadedVideo);
   assert.match(downloadedVideo.assetKey, /^media-[a-f0-9]{64}$/);
   const resolvedVideo = store.resolveFile(downloads.id, '下载视频.mov');
-  assert.equal(resolvedVideo.absolutePath, fs.realpathSync(path.join(downloadsRoot, '下载视频.mov')));
+  assert.equal(resolvedVideo.absolutePath, fs.realpathSync.native(path.join(downloadsRoot, '下载视频.mov')));
   assert.equal(resolvedVideo.assetKey, downloadedVideo.assetKey);
   assert.ok(store.resolveFile(downloads.id, '下载音频.wav'));
   assert.equal(store.resolveFile(downloads.id, '../下载视频.mov'), null);

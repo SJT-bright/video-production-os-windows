@@ -10,7 +10,7 @@ const { scanProjectDocuments } = require('./project-documents.cjs');
 const { buildCreativeAssetTree, buildCreativeAssetTreeAsync } = require('./creative-assets.cjs');
 const { createAssetWorkflowStore } = require('./asset-workflow.cjs');
 
-const temp = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'video-os-project-documents-'));
+const temp = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'video-os-project-documents-'));
 const root = path.join(temp, 'project');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 let child;

@@ -116,7 +116,7 @@ function identityPath(value) {
   const missingSegments = [];
   while (true) {
     try {
-      return path.resolve(fs.realpathSync(cursor), ...missingSegments);
+      return path.resolve(fs.realpathSync.native(cursor), ...missingSegments);
     } catch (error) {
       const parent = path.dirname(cursor);
       if (!error || error.code !== 'ENOENT' || parent === cursor) return resolved;
@@ -217,7 +217,7 @@ function createMediaSourceStore(options = {}) {
   try {
     const stat = fs.lstatSync(requestedProjectRoot);
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('项目根目录不是安全的普通目录');
-    projectRoot = fs.realpathSync(requestedProjectRoot);
+    projectRoot = fs.realpathSync.native(requestedProjectRoot);
   } catch (error) {
     if (error && error.code === 'ENOENT') throw new Error('项目根目录不存在');
     throw error;
@@ -231,7 +231,7 @@ function createMediaSourceStore(options = {}) {
   try {
     const stat = fs.lstatSync(requestedProjectAssetRoot);
     if (!stat.isSymbolicLink() && stat.isDirectory()) {
-      const real = fs.realpathSync(requestedProjectAssetRoot);
+      const real = fs.realpathSync.native(requestedProjectAssetRoot);
       if (!isWithin(projectRoot, real)) throw new Error('项目素材库真实路径越出了项目根目录');
       projectAssetRoot = real;
     }
@@ -414,7 +414,7 @@ function createMediaSourceStore(options = {}) {
         return { available: false, status: 'offline', realRoot: '' };
       }
       fs.accessSync(source.rootPath, fs.constants.R_OK | fs.constants.X_OK);
-      const realRoot = fs.realpathSync(source.rootPath);
+      const realRoot = fs.realpathSync.native(source.rootPath);
       if (source.builtIn) {
         if (!isWithin(projectRoot, realRoot)) return { available: false, status: 'offline', realRoot: '' };
       } else {
@@ -451,7 +451,7 @@ function createMediaSourceStore(options = {}) {
     try {
       const stat = fs.lstatSync(value);
       if (stat.isSymbolicLink() || !stat.isDirectory()) return '';
-      return fs.realpathSync(value);
+      return fs.realpathSync.native(value);
     } catch {
       return '';
     }
@@ -498,7 +498,7 @@ function createMediaSourceStore(options = {}) {
       const stat = fs.lstatSync(requestedRoot);
       if (stat.isSymbolicLink()) throw new Error('素材来源根目录不能是符号链接');
       if (!stat.isDirectory()) throw new Error('素材来源必须是现有目录');
-      rootPath = fs.realpathSync(requestedRoot);
+      rootPath = fs.realpathSync.native(requestedRoot);
     } catch (error) {
       if (error && error.code === 'ENOENT') throw new Error('素材来源目录不存在');
       throw error;
@@ -547,7 +547,7 @@ function createMediaSourceStore(options = {}) {
     try {
       const stat = fs.lstatSync(candidate);
       if (stat.isSymbolicLink() || !stat.isFile()) return null;
-      const real = fs.realpathSync(candidate);
+      const real = fs.realpathSync.native(candidate);
       if (!isWithin(health.realRoot, real)) return null;
       return {
         sourceId: source.id,

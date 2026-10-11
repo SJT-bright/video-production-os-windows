@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
-const fixture = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'video-os-asset-workflow-')));
+const fixture = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'video-os-asset-workflow-')));
 const projectRoot = path.join(fixture, 'project');
 const dataRoot = path.join(fixture, 'data');
 const assetRoot = path.join(projectRoot, '创作资产库');
@@ -94,7 +94,9 @@ async function start() {
   `;
   child = spawn(process.execPath, ['-e', script], {
     cwd: __dirname,
-    env: { ...process.env, VIDEO_OS_PROJECT_ROOT: projectRoot, VIDEO_OS_TEST_PROJECT_ROOT: projectRoot,
+    // Deliberately pass the OS spelling (/var or Windows TEMP's 8.3 alias),
+    // while assertions use the canonical native path stored in the ledger.
+    env: { ...process.env, VIDEO_OS_PROJECT_ROOT: path.join(os.tmpdir(), path.basename(fixture), 'project'), VIDEO_OS_TEST_PROJECT_ROOT: projectRoot,
       VIDEO_OS_DATA_DIR: dataRoot, OBSIDIAN_VAULT_PATH: path.join(fixture, 'vault') },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
@@ -490,7 +492,7 @@ async function expectRollback(before, relative, target) {
   } finally {
     await stop();
     for (const pending of pendingRpc.values()) clearTimeout(pending.timer);
-    assert.ok(path.basename(fixture).startsWith('video-os-asset-workflow-') && path.dirname(fixture) === fs.realpathSync(os.tmpdir()));
+    assert.ok(path.basename(fixture).startsWith('video-os-asset-workflow-') && path.dirname(fixture) === fs.realpathSync.native(os.tmpdir()));
     fs.rmSync(fixture, { recursive: true, force: true });
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });

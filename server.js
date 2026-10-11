@@ -42,11 +42,11 @@ const { createMediaSourceStore, PROJECT_MEDIA_SOURCE_ID } = require('./electron/
 const { scanProjectDocuments } = require('./project-documents.cjs');
 
 const OS_DIR = __dirname;            // .../视频制作OS
-const ROOT = process.env.VIDEO_OS_PROJECT_ROOT
+const ROOT = fs.realpathSync.native(process.env.VIDEO_OS_PROJECT_ROOT
   ? path.resolve(process.env.VIDEO_OS_PROJECT_ROOT)
-  : path.dirname(OS_DIR);             // 项目根 D:\青春校园短剧
+  : path.dirname(OS_DIR));            // 项目根 D:\青春校园短剧
 const ASSET_DIR = path.join(ROOT, '素材库');
-// Resolve macOS /var aliases once, so disk/API/ledger paths share one root.
+// Resolve macOS /var and Windows 8.3 aliases once for disk/API/ledger identity.
 const CREATIVE_ASSET_DIR = ensureCreativeAssetRoot(path.join(ROOT, '创作资产库'));
 const BUNDLED_DATA_DIR = path.join(OS_DIR, 'data');
 
@@ -59,7 +59,7 @@ function resolveDataDir(configuredPath) {
   const resolved = path.resolve(value);
   if (resolved === path.parse(resolved).root) throw new Error('拒绝把磁盘根目录用作数据目录');
   fs.mkdirSync(resolved, { recursive: true });
-  return resolved;
+  return fs.realpathSync.native(resolved);
 }
 
 const DATA_DIR = resolveDataDir(process.env.VIDEO_OS_DATA_DIR || BUNDLED_DATA_DIR);
@@ -226,7 +226,7 @@ function discoverObsidianVault() {
   for (const candidate of candidates) {
     if (!candidate || typeof candidate.path !== 'string') continue;
     try {
-      const real = fs.realpathSync(candidate.path);
+      const real = fs.realpathSync.native(candidate.path);
       if (fs.statSync(real).isDirectory()) return real;
     } catch {}
   }
@@ -248,7 +248,7 @@ function isWithin(base, target) {
 
 function isRealPathWithin(base, target) {
   try {
-    return isWithin(fs.realpathSync(base), fs.realpathSync(target));
+    return isWithin(fs.realpathSync.native(base), fs.realpathSync.native(target));
   } catch {
     return false;
   }
@@ -265,13 +265,13 @@ function resolveWithin(base, relPath) {
   // Lexical checks stop ../ traversal; realpath checks also stop symlinks
   // from escaping the project root.
   let realBase;
-  try { realBase = fs.realpathSync(baseAbs); } catch { return null; }
+  try { realBase = fs.realpathSync.native(baseAbs); } catch { return null; }
   try {
-    if (!isWithin(realBase, fs.realpathSync(abs))) return null;
+    if (!isWithin(realBase, fs.realpathSync.native(abs))) return null;
   } catch (err) {
     if (err.code !== 'ENOENT') return null;
     try {
-      if (!isWithin(realBase, fs.realpathSync(path.dirname(abs)))) return null;
+      if (!isWithin(realBase, fs.realpathSync.native(path.dirname(abs)))) return null;
     } catch { return null; }
   }
   return abs;
@@ -326,7 +326,7 @@ function mediaKeysForFile(absolutePath) {
     const root = mediaSourceStore.directory(source.id);
     if (root && isWithin(root, absolutePath)) keys.push(indexedMediaPath(source.id, toPosixRelative(root, absolutePath)));
   }
-  const root = fs.realpathSync(CREATIVE_ASSET_DIR);
+  const root = fs.realpathSync.native(CREATIVE_ASSET_DIR);
   if (isWithin(root, absolutePath)) keys.push(indexedMediaPath(WORKBENCH_MEDIA_SOURCE_ID, toPosixRelative(root, absolutePath)));
   return keys;
 }
@@ -578,7 +578,7 @@ async function includeWorkbenchMedia(mediaScan) {
     else if (source.mediaTypes.includes(node.type)) media.push(node);
   };
   collect(snapshot.tree);
-  const workbenchRoot = fs.realpathSync(CREATIVE_ASSET_DIR);
+  const workbenchRoot = fs.realpathSync.native(CREATIVE_ASSET_DIR);
   const byAbsolutePath = new Map(media.map(file => [path.join(workbenchRoot, ...file.path.split('/')), file]));
   const projectFor = file => {
     const project = projects.find(item => file.path.startsWith(`${item.folder}/`));
@@ -955,11 +955,11 @@ const UUID_STYLE_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 const IMPORT_KIND_LABELS = { image: '生成图片', video: '生成视频' };
 
 function renameAssetReferences(oldAbs, newAbs) {
-  oldAbs = path.join(fs.realpathSync(path.dirname(oldAbs)), path.basename(oldAbs));
-  newAbs = path.join(fs.realpathSync(path.dirname(newAbs)), path.basename(newAbs));
+  oldAbs = path.join(fs.realpathSync.native(path.dirname(oldAbs)), path.basename(oldAbs));
+  newAbs = path.join(fs.realpathSync.native(path.dirname(newAbs)), path.basename(newAbs));
   const isFolder = fs.statSync(oldAbs).isDirectory();
   const audioData = readAudioLibrary();
-  const assetRoot = fs.realpathSync(CREATIVE_ASSET_DIR);
+  const assetRoot = fs.realpathSync.native(CREATIVE_ASSET_DIR);
   const oldAudioPath = toPosixRelative(assetRoot, oldAbs);
   const newAudioPath = toPosixRelative(assetRoot, newAbs);
   const remap = value => typeof value === 'string' && (value === oldAudioPath || value.startsWith(`${oldAudioPath}/`))
@@ -1987,7 +1987,7 @@ const server = http.createServer(async (req, res) => {
         : resolveCreativeAsset(CREATIVE_ASSET_DIR, requested, 'folder');
       if (!entry) { sendJson(res, 404, { error: '资产或文件夹不存在' }); return; }
       // 二次规范化：realpathSync 消除符号链接与相对段（与 resolveCreativeAsset 出口约定一致），launcherPathArgs 拒绝选项字符
-      const openEntry = { abs: fs.realpathSync(entry.abs) };
+      const openEntry = { abs: fs.realpathSync.native(entry.abs) };
       if (process.platform === 'win32') {
         if (p === '/api/show-creative-asset') {
           // explorer.exe 不支持 "--"：固定前缀 "/select," + 库内真实绝对路径（launcherPathArgs 校验非 "-" 开头）
@@ -2033,7 +2033,7 @@ const server = http.createServer(async (req, res) => {
       if (req.method !== 'GET') { sendJson(res, 405, { error: '方法不允许' }, { Allow: 'GET' }); return; }
       if (!isTrustedLocalUiRequest(req)) { sendJson(res, 403, { error: '拒绝跨站操作' }); return; }
       fs.mkdirSync(ASSET_DIR, { recursive: true });
-      const entry = { abs: fs.realpathSync(ASSET_DIR) };
+      const entry = { abs: fs.realpathSync.native(ASSET_DIR) };
       if (process.platform === 'win32') {
         execFile('explorer.exe', [...launcherPathArgs([entry.abs])], { windowsHide: true }, () => {});
       } else if (process.platform === 'darwin') {
