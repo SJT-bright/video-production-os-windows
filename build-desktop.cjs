@@ -178,7 +178,16 @@ async function build() {
   }
 }
 
-build().catch(error => {
+// 尚未完成的 Promise 不会保持 Node 活跃，不能把打包器提前退出当作成功。
+let buildSettled = false;
+process.once('beforeExit', () => {
+  if (!buildSettled) {
+    console.error('DESKTOP_BUILD_FAIL 打包任务尚未完成，未生成可验证的 Windows 应用');
+    process.exitCode = 1;
+  }
+});
+build().then(() => { buildSettled = true; }, error => {
+  buildSettled = true;
   console.error(`DESKTOP_BUILD_FAIL ${error.stack || error}`);
   process.exitCode = 1;
 });

@@ -41,6 +41,8 @@ jobs:
           node test_prompt_template_migration_native.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build isolated Windows App
+        env:
+          DEBUG: electron-packager
         run: npm run build:windows:release
       - name: Launch packaged EXE and verify retained data
         run: node test_windows_release.cjs

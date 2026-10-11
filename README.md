@@ -61,7 +61,7 @@ Windows 10/11 x64 的运行、构建、数据路径及验证方式见 [WINDOWS-R
 
 ### 从 GitHub 启动
 
-需要 Git 和 Node.js；复现使用 `.nvmrc` 固定的 26.7.0。请克隆到独立工作目录：
+需要 Git 和 Node.js；Windows 复现使用 `.nvmrc` 固定的 22.23.3 LTS。请克隆到独立工作目录：
 
 ```powershell
 mkdir video-production-workspace

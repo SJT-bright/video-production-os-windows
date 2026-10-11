@@ -4,7 +4,7 @@
 
 ## 下载、运行和构建
 
-安装 Git 和 Node.js 26.7.0，打开 PowerShell，在独立工作目录执行：
+安装 Git 和 Node.js 22.23.3，打开 PowerShell，在独立工作目录执行：
 
 ```powershell
 mkdir video-production-workspace
@@ -15,7 +15,7 @@ npm ci
 npm run desktop
 ```
 
-也可 [下载固定源码 ZIP](https://github.com/SJT-bright/video-production-os-windows/archive/refs/tags/source-v1.2.4.zip)，解压为 `视频制作OS` 后执行最后两条命令。请使用 `npm ci`，保留锁文件，不加 `--omit=dev`。`.nvmrc` 固定 Node 版本，首次安装会下载 Electron 和 FFmpeg。
+也可 [下载固定源码 ZIP](https://github.com/SJT-bright/video-production-os-windows/archive/refs/tags/source-v1.2.4.zip)，解压为 `视频制作OS` 后执行最后两条命令。请使用 `npm ci`，保留锁文件，不加 `--omit=dev`。Windows 构建使用 `.nvmrc` 固定的 Node 22.23.3 LTS，与 Mac 历史源码的构建版本分别验证；首次安装会下载 Electron 和 FFmpeg。
 
 构建独立数据的完整 Windows App：
 
