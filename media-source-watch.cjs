@@ -21,7 +21,7 @@ function createMediaSourceWatcher({ store, onChange, intervalMs = 4000 }) {
       const entry = { watcher: null };
       try {
         // 不修改登记的目录，仅给 Windows 监听器传入展开后的真实路径。
-        entry.watcher = fs.watch(fs.realpathSync(store.directory(source.id)), { recursive: true }, notify);
+        entry.watcher = fs.watch(fs.realpathSync.native(store.directory(source.id)), { recursive: true }, notify);
         entry.watcher.on('error', () => { entry.watcher?.close(); entry.watcher = null; notify(); });
       } catch { /* 不支持递归监听的文件系统使用下方指纹轮询。 */ }
       watchers.set(source.id, entry);
