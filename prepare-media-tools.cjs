@@ -52,10 +52,13 @@ function prepareRedistributableTools(platform, arch, root) {
   if (!readme.includes(PUBLIC_SOURCE_SHA256)) throw new Error('音频组件缺少固定源码来源');
   fs.mkdirSync(directory, { recursive: true });
   for (const name of [executable, executable + '.LICENSE', executable + '.README', 'FFmpeg-LICENSE.md',
-    'config.h', 'config.log', 'configure-output.txt']) {
+    'config.h', 'configure-output.txt']) {
     const source = path.join(input, name), target = path.join(directory, name);
     if (path.resolve(source) !== path.resolve(target)) fs.copyFileSync(source, target);
   }
+  // Compiler diagnostics can contain a builder's PATH and private directories.
+  // Keep logs in the build workspace, not in the distributable application.
+  fs.rmSync(path.join(directory, 'config.log'), { force: true });
   fs.chmodSync(path.join(directory, executable), 0o755);
   const manifest = { package: 'FFmpeg 6.1.1', release: 'ffmpeg-6.1.1-lgpl', platform, arch,
     redistributable: true, license: 'LGPL-2.1-or-later',
