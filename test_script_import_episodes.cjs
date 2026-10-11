@@ -64,7 +64,7 @@ print(json.dumps({'bytes':base64.b64encode(raw).decode(),'text':'\n'.join(paragr
 `;
 
 function docxOracle() {
-  const result = spawnSync(python, ['-c', oracleCode], {
+  const result = spawnSync(python, ['-X', 'utf8', '-c', oracleCode], {
     input: JSON.stringify({ source: sourceFile }), encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
   });
   assert.equal(result.status, 0, result.stderr || String(result.error || 'OOXML oracle failed'));
@@ -94,7 +94,7 @@ function waitForServer(child, port, dataRoot) {
       clearTimeout(timer);
       try {
         assert.equal(Number(match[1]), port, 'Server used an unexpected port');
-        assert.ok(output.includes('OS 数据目录：' + dataRoot), 'Server did not confirm isolated data');
+        assert.ok(output.includes('OS 数据目录：' + fs.realpathSync.native(dataRoot)), 'Server did not confirm isolated data: ' + output);
         resolve();
       } catch (error) { reject(error); }
     };
