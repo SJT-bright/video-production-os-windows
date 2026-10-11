@@ -85,7 +85,7 @@ const scopedImageTarget = resolveDownloadTarget({
 assert.equal(scopedImageTarget.kind, 'image');
 assert.equal(scopedImageTarget.isImage, true);
 assert.equal(scopedImageTarget.projectScoped, true);
-assert.equal(scopedImageTarget.directory, path.join(projectDirectories.image, 'Midjourney', '2026-08-22'));
+assert.equal(scopedImageTarget.directory, path.join(projectDirectories.image, 'Midjourney', '第1集'));
 assert.equal(path.basename(scopedImageTarget.targetPath), 'character.png');
 assertScoped(scopedImageTarget, projectDirectories.image, '图片下载');
 
@@ -104,17 +104,8 @@ const scopedVideoTarget = resolveDownloadTarget({
 assert.equal(scopedVideoTarget.kind, 'video');
 assert.equal(scopedVideoTarget.isImage, false);
 assert.equal(scopedVideoTarget.projectScoped, true);
-assert.equal(scopedVideoTarget.directory, path.join(projectDirectories.video, 'Updream', '素材001'));
+assert.equal(scopedVideoTarget.directory, path.join(projectDirectories.video, 'Updream', '第1集'));
 assertScoped(scopedVideoTarget, projectDirectories.video, '视频下载');
-for (const videoDisposition of ['', 'editable', 'processing']) {
-  const input = { projectRoot, projectDirectories, serviceId: 'hewai', serviceLabel: '核绘', mode: 'video',
-    filename: 'scene.mp4', mimeType: 'video/mp4', videoDisposition, exists: () => false };
-  const first = resolveDownloadTarget({ ...input, now: new Date(2026, 9, 11) });
-  const tomorrow = resolveDownloadTarget({ ...input, now: new Date(2026, 9, 12) });
-  assert.equal(first.directory, tomorrow.directory, '新视频跨日仍在同一个素材文件夹，不再建日期目录');
-  assert.equal(path.basename(first.directory), '素材001');
-  assert.equal(path.basename(path.dirname(first.directory)), '核绘');
-}
 
 const scopedAudioTarget = resolveDownloadTarget({
   projectRoot,
@@ -131,7 +122,7 @@ const scopedAudioTarget = resolveDownloadTarget({
 assert.equal(scopedAudioTarget.kind, 'audio');
 assert.equal(scopedAudioTarget.isImage, false);
 assert.equal(scopedAudioTarget.projectScoped, true);
-assert.equal(scopedAudioTarget.directory, path.join(projectDirectories.audio, 'Updream', '2026-08-22'));
+assert.equal(scopedAudioTarget.directory, path.join(projectDirectories.audio, 'Updream', '第1集'));
 assertScoped(scopedAudioTarget, projectDirectories.audio, '音频下载');
 
 const scopedFileTarget = resolveDownloadTarget({
@@ -149,7 +140,7 @@ const scopedFileTarget = resolveDownloadTarget({
 assert.equal(scopedFileTarget.kind, 'file');
 assert.equal(scopedFileTarget.isImage, false);
 assert.equal(scopedFileTarget.projectScoped, true);
-assert.equal(scopedFileTarget.directory, path.join(projectDirectories.downloads, 'GPT', '2026-08-22'));
+assert.equal(scopedFileTarget.directory, path.join(projectDirectories.downloads, 'GPT'));
 assert.equal(path.basename(scopedFileTarget.targetPath), '剪映安装包.dmg');
 assertScoped(scopedFileTarget, projectDirectories.downloads, '安装包下载');
 
@@ -165,7 +156,7 @@ const legacyFileTarget = resolveDownloadTarget({
   exists: () => false,
 });
 assert.equal(legacyFileTarget.kind, 'file');
-assert.equal(legacyFileTarget.directory, path.join(projectRoot, '素材库', '浏览器下载', 'GPT', '2026-08-22'));
+assert.equal(legacyFileTarget.directory, path.join(projectRoot, '素材库', '浏览器下载', 'GPT'));
 assert.equal(isWithin(fixtureRoot, legacyFileTarget.targetPath), true, '旧安装包目标越出测试临时根');
 
 const legacyImageTarget = resolveDownloadTarget({
@@ -180,7 +171,7 @@ const legacyImageTarget = resolveDownloadTarget({
   exists: () => false,
 });
 assert.equal(legacyImageTarget.projectScoped, false);
-assert.equal(legacyImageTarget.directory, path.join(obsidianVault, 'ai创作短剧', '韩剧制作', '浏览器生成', 'Midjourney', '2026-08-22'));
+assert.equal(legacyImageTarget.directory, path.join(obsidianVault, 'ai创作短剧', '韩剧制作', '浏览器生成', 'Midjourney', '第1集'));
 
 for (const legacy of [
   { filename: 'legacy-scene.mp4', mimeType: 'video/mp4', kind: 'video' },
@@ -199,7 +190,7 @@ for (const legacy of [
   });
   assert.equal(target.kind, legacy.kind);
   assert.equal(target.projectScoped, false);
-  assert.equal(target.directory, path.join(projectRoot, '素材库', '浏览器生成', 'Updream', '2026-08-22'));
+  assert.equal(target.directory, path.join(projectRoot, '素材库', '浏览器生成', 'Updream', '第1集'));
   assert.equal(isWithin(fixtureRoot, target.targetPath), true, '旧调用目标越出测试临时根');
 }
 
@@ -231,7 +222,22 @@ assert.equal(fs.existsSync(archivePath), false, '永久删除后文件不得留�
 assert.equal(buildCreativeAssetTree(libraryRoot, { scopePath: '校园心动/浏览器下载' }).stats.files, countBeforeDelete - 1, '扫描计数应只减掉实际删除的一个文件');
 assert.equal(fs.existsSync(downloadRoot), true, '删除单个文件不得删除下载目录');
 
-console.log('DOWNLOAD_ROUTER PASS: classification, sanitization, project-scoped image/video/audio routing and legacy archive compatibility');
+for (const videoDisposition of ['editable', 'processing']) {
+  const target = resolveDownloadTarget({ projectRoot, projectDirectories, serviceId: 'hehui', serviceLabel: '核绘',
+    filename: '片段.mp4', mimeType: 'video/mp4', videoDisposition, episode: 12, platformFolder: '核绘', exists: () => false });
+  assert.equal(target.directory, path.join(projectDirectories.video, '核绘', '第12集', videoDisposition === 'editable' ? '可剪辑' : '待处理'));
+  assert.equal(target.episode, 12); assert.equal(target.episodeLabel, '第12集');
+  const old = resolveDownloadTarget({ projectRoot, projectDirectories, serviceId: 'hehui', serviceLabel: '核绘',
+    filename: '旧暂存片段.mp4', mimeType: 'video/mp4', videoDisposition, legacyDay: '2026-10-08', exists: () => false });
+  assert.equal(old.directory, path.join(projectDirectories.video, videoDisposition === 'editable' ? '可剪辑' : '待处理', '核绘', '2026-10-08'));
+  assert.equal(old.episode, null, '旧待审下载不能冒充第1集');
+}
+assert.throws(() => resolveDownloadTarget({ projectRoot, projectDirectories, filename: '片段.mp4', episode: 0 }), /集号/);
+assert.throws(() => resolveDownloadTarget({ projectRoot, projectDirectories, filename: '片段.mp4', episode: 1.5 }), /集号/);
+assert.throws(() => resolveDownloadTarget({ projectRoot, projectDirectories, filename: '片段.mp4', platformFolder: '../outside' }), /网站文件夹/);
+assert.throws(() => resolveDownloadTarget({ projectRoot, projectDirectories, filename: '片段.mp4', legacyDay: '../outside' }), /旧下载日期/);
+
+console.log('DOWNLOAD_ROUTER PASS: classification, sanitization, project-scoped media episodes, documents without dates and old pending-review compatibility');
 } finally {
   const relative = path.relative(os.tmpdir(), fixtureRoot);
   assert.ok(relative.startsWith('video-os-download-router-') && !relative.includes(`..${path.sep}`), '拒绝清理非测试临时目录');

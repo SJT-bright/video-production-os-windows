@@ -22,9 +22,10 @@ const path = require('path');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { pipeline } = require('stream/promises');
-const { sanitizeFilename, uniquePath, dateFolder } = require('./electron/download-router.cjs');
+const { sanitizeFilename, uniquePath } = require('./electron/download-router.cjs');
 const {
   buildCreativeAssetTree,
+  buildCreativeAssetTreeAsync,
   classifyCreativeAsset,
   createCreativeAssetFolder,
   ensureCreativeAssetRoot,
@@ -32,18 +33,21 @@ const {
   resolveCreativeAsset,
 } = require('./creative-assets.cjs');
 const { ProductionStore } = require('./production-store.cjs');
+const { createAssetWorkflowStore } = require('./asset-workflow.cjs');
 const { createCreativeProjectStore } = require('./creative-projects.cjs');
 const { createEditorExportMonitor } = require('./editor-exports.cjs');
 const { createVoiceClipService } = require('./voice-clips.cjs');
 const { createMediaSourceWatcher } = require('./media-source-watch.cjs');
 const { createMediaSourceStore, PROJECT_MEDIA_SOURCE_ID } = require('./electron/media-sources.cjs');
+const { scanProjectDocuments } = require('./project-documents.cjs');
 
 const OS_DIR = __dirname;            // .../视频制作OS
 const ROOT = process.env.VIDEO_OS_PROJECT_ROOT
   ? path.resolve(process.env.VIDEO_OS_PROJECT_ROOT)
   : path.dirname(OS_DIR);             // 项目根 D:\青春校园短剧
 const ASSET_DIR = path.join(ROOT, '素材库');
-const CREATIVE_ASSET_DIR = path.join(ROOT, '创作资产库');
+// Resolve macOS /var aliases once, so disk/API/ledger paths share one root.
+const CREATIVE_ASSET_DIR = ensureCreativeAssetRoot(path.join(ROOT, '创作资产库'));
 const BUNDLED_DATA_DIR = path.join(OS_DIR, 'data');
 
 function resolveDataDir(configuredPath) {
@@ -112,7 +116,23 @@ const voiceClips = createVoiceClipService({
 });
 
 function readyCreativeAssetTree(options = {}) {
-  return buildCreativeAssetTree(CREATIVE_ASSET_DIR, { ...options, includeFile: editorExports.includeFile });
+  const tree = buildCreativeAssetTree(CREATIVE_ASSET_DIR, { ...options, includeFile: editorExports.includeFile });
+  const project = creativeProjectStore.list().find(item => item.folder === options.scopePath);
+  return assetWorkflow.enrich(tree, project);
+}
+
+const pendingAssetListings = new Map();
+function readyCreativeAssetTreeAsync(options = {}) {
+  const scope = options.scopePath || '';
+  if (!pendingAssetListings.has(scope)) {
+    const task = (async () => {
+      const tree = await buildCreativeAssetTreeAsync(CREATIVE_ASSET_DIR, { ...options, includeFile: editorExports.includeFile });
+      const project = creativeProjectStore.list().find(item => item.folder === scope);
+      return assetWorkflow.enrichAsync(tree, project);
+    })().finally(() => { pendingAssetListings.delete(scope); });
+    pendingAssetListings.set(scope, task);
+  }
+  return pendingAssetListings.get(scope);
 }
 
 let productionStore = null;
@@ -126,6 +146,29 @@ try {
 } catch (error) {
   productionStoreError = error;
   console.error(`制作台账初始化失败，旧素材与知识功能仍可使用：${error.message}`);
+}
+
+const assetWorkflow = createAssetWorkflowStore({
+  filePath: path.join(DATA_DIR, 'asset-workflow.json'), assetRoot: CREATIVE_ASSET_DIR,
+  registerAsset: input => productionStore?.registerManagedAsset(input),
+});
+const assetRelocationListeners = new Set();
+function assetWorkflowInfo(project, relative) {
+  requireProjectAssetPath(project, relative, { allowProjectRoot: false });
+  const entry = resolveCreativeAsset(CREATIVE_ASSET_DIR, relative, 'file');
+  if (!entry) throw new Error('素材文件已不存在');
+  if (!assetWorkflow.get(entry.rel)) {
+    assetWorkflow.ensure(project, entry.rel, classifyCreativeAsset(entry.rel));
+    assetWorkflow.flush();
+  }
+  return assetWorkflow.get(entry.rel);
+}
+function recordAssetWorkflow(projectId, absolutePath, patch) {
+  const project = creativeProjectStore.get(projectId);
+  const relative = toPosixRelative(CREATIVE_ASSET_DIR, absolutePath);
+  const info = assetWorkflowInfo(project, relative);
+  assetWorkflow.ensure(project, relative, info.type, patch);
+  assetWorkflow.flush();
 }
 
 
@@ -159,9 +202,6 @@ const MEDIA_TYPES = {
   audio: ['.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.opus', '.wma', '.aiff', '.aif', '.amr', '.ape'],
   doc: ['.md', '.txt', '.srt'],
 };
-
-// 扫描时跳过的目录（OS 自身、版本库、依赖）
-const SKIP_DIRS = new Set([OS_DIR, CREATIVE_ASSET_DIR, path.join(ROOT, '.git'), path.join(ROOT, 'node_modules')]);
 
 const OBSIDIAN_PREVIEW_EXTS = new Set([
   '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif',
@@ -480,40 +520,10 @@ function fmtSize(bytes) {
 
 /* ---------- 素材与文档扫描 ---------- */
 
-function walk(dir, out, allowedTypes) {
-  let entries;
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-  for (const ent of entries) {
-    const abs = path.join(dir, ent.name);
-    if (ent.isDirectory()) {
-      if (SKIP_DIRS.has(abs)) continue;
-      walk(abs, out, allowedTypes);
-    } else if (ent.isFile()) {
-      const ext = path.extname(ent.name).toLowerCase();
-      const type = classify(ext);
-      if (!type || (allowedTypes && !allowedTypes.has(type))) continue;
-      let stat;
-      try { stat = fs.statSync(abs); } catch { continue; }
-      const rel = path.relative(ROOT, abs).split(path.sep).join('/');
-      out.push({
-        path: rel,
-        name: ent.name,
-        ext,
-        type,
-        size: stat.size,
-        sizeText: fmtSize(stat.size),
-        mtime: stat.mtime.toISOString(),
-        // 以 . 开头的目录（.analysis 等分析中间产物）默认隐藏，可在界面里开启
-        hidden: rel.split('/').some(seg => seg.startsWith('.')),
-      });
-    }
-  }
-}
-
 // 从蒸馏文档里提取标题与“一句话蒸馏”摘要
-function extractDocMeta(abs) {
+async function extractDocMeta(abs) {
   let text = '';
-  try { text = fs.readFileSync(abs, 'utf-8'); } catch { return null; }
+  try { text = await fs.promises.readFile(abs, 'utf-8'); } catch { return null; }
   // “一句话蒸馏”章节：取该标题后到下一个同级/更高级标题之间的正文
   let summary = '';
   const sumMatch = text.match(/#{2,3}\s*[^\n]*一句话蒸馏[^\n]*\n+([\s\S]*?)(?=\n#{1,3}\s|\n---|$)/);
@@ -529,11 +539,11 @@ function extractDocMeta(abs) {
   };
 }
 
-function parseManifest() {
+async function parseManifest() {
   // 解析 MEMORY-MANIFEST.md 中 TOOL/VIDEO 表格，供蒸馏文库展示“用途与优先章节”
   const table = {};
   let text = '';
-  try { text = fs.readFileSync(path.join(ROOT, 'MEMORY-MANIFEST.md'), 'utf-8'); } catch { return table; }
+  try { text = await fs.promises.readFile(path.join(ROOT, 'MEMORY-MANIFEST.md'), 'utf-8'); } catch { return table; }
   const rowRe = /^\|\s*(VIDEO|TOOL)-(\d+)\s*\|\s*`([^`]+)`\s*\|([^|]+)\|([^|]+)\|/gm;
   let m;
   while ((m = rowRe.exec(text)) !== null) {
@@ -547,7 +557,7 @@ function parseManifest() {
 }
 
 // 工作台与媒体栏目共用原文件；不迁移资产，也不依赖当前选中的剧本。
-function includeWorkbenchMedia(mediaScan) {
+async function includeWorkbenchMedia(mediaScan) {
   const source = {
     id: WORKBENCH_MEDIA_SOURCE_ID, token: WORKBENCH_MEDIA_SOURCE_ID,
     label: '创作工作台', kind: 'workbench', builtIn: true, removable: false,
@@ -555,7 +565,7 @@ function includeWorkbenchMedia(mediaScan) {
     fileCount: 0, counts: { image: 0, video: 0, audio: 0 }, truncated: false,
   };
   let snapshot;
-  try { snapshot = readyCreativeAssetTree(); }
+  try { snapshot = await readyCreativeAssetTreeAsync(); }
   catch { return { ...mediaScan, sources: [...mediaScan.sources, source] }; }
   source.available = true;
   source.status = 'online';
@@ -613,9 +623,18 @@ function includeWorkbenchMedia(mediaScan) {
   };
 }
 
+let pendingProjectScan = null;
 function handleScan() {
+  // Downloads, SSE notifications and page entry can request the same scan at
+  // once. Share only an in-flight scan; the next refresh still reads new files.
+  if (!pendingProjectScan) pendingProjectScan = Promise.resolve().then(buildProjectScan)
+    .finally(() => { pendingProjectScan = null; });
+  return pendingProjectScan;
+}
+
+async function buildProjectScan() {
   editorExports.refresh();
-  const mediaScan = includeWorkbenchMedia(mediaSourceStore.scan());
+  const mediaScan = await includeWorkbenchMedia(mediaSourceStore.scan());
   const projectSource = mediaScan.sources.find(source => source.id === PROJECT_MEDIA_SOURCE_ID);
   const assetAvailable = projectSource?.available === true;
   const savedMeta = readJson(META_FILE, { version: 1, items: {} });
@@ -647,24 +666,18 @@ function handleScan() {
   });
 
   // 蒸馏文库仍从整个项目读取文档，不与素材扫描边界绑定。
-  const projectDocs = [];
-  walk(ROOT, projectDocs, new Set(['doc']));
-  const manifest = parseManifest();
+  const documentScan = await scanProjectDocuments({ root: ROOT,
+    excludedRoots: [OS_DIR, path.join(ROOT, '视频制作OS'), DATA_DIR, CREATIVE_ASSET_DIR] });
+  const manifest = await parseManifest();
   const docs = [];   // 蒸馏文库用：VIDEO-* / TOOL-* / 手册 / 系统文件
-  for (const f of projectDocs) {
+  for (const f of documentScan.files) {
     const base = path.basename(f.path, '.md');
-    let group = null;
-    if (/^VIDEO-\d+_/.test(f.name)) group = 'distill';
-    else if (/^TOOL-\d+_/.test(f.name)) group = 'tool';
-    else if (f.name === 'AGENTS.md' || f.name === 'MEMORY-MANIFEST.md') group = 'system';
-    else if (!f.path.includes('/')) group = 'manual'; // 根目录其他 md（手册/SOP）
-    if (!group) continue;
-    const meta = extractDocMeta(path.join(ROOT, f.path));
+    const meta = await extractDocMeta(path.join(ROOT, f.path));
     const idMatch = f.name.match(/^(VIDEO|TOOL)-(\d+)/);
     const manifestEntry = idMatch ? manifest[`${idMatch[1]}-${idMatch[2]}`] : null;
     docs.push({
       ...f,
-      group,
+      sizeText: fmtSize(f.size),
       id: idMatch ? `${idMatch[1]}-${idMatch[2]}` : base,
       base,
       title: meta ? meta.title : base,
@@ -686,8 +699,9 @@ function handleScan() {
     files,
     sources: mediaScan.sources.map(source => ({ ...source, ...sourceSettings[source.id] })),
     projects: projects.map(({ id, name }) => ({ id, name })),
-    truncated: mediaScan.truncated,
+    truncated: mediaScan.truncated || documentScan.limits.truncated,
     scanLimits: { maxEntries: mediaScan.maxEntries, maxDepth: mediaScan.maxDepth },
+    documentScan: documentScan.limits,
     docs,
   };
 }
@@ -703,8 +717,8 @@ function preserveWorkbenchMetadata(files, meta = readJson(META_FILE, { version: 
   if (changed) writeJson(META_FILE, meta);
 }
 
-function prepareMediaSourceRemoval() {
-  preserveWorkbenchMetadata(includeWorkbenchMedia(mediaSourceStore.scan()).files);
+async function prepareMediaSourceRemoval() {
+  preserveWorkbenchMetadata((await includeWorkbenchMedia(mediaSourceStore.scan())).files);
 }
 
 /* ---------- JSON 存取 ---------- */
@@ -940,7 +954,7 @@ function productionErrorResponse(res, error) {
 const UUID_STYLE_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const IMPORT_KIND_LABELS = { image: '生成图片', video: '生成视频' };
 
-function renameAssetEverywhere(oldAbs, newAbs) {
+function renameAssetReferences(oldAbs, newAbs) {
   oldAbs = path.join(fs.realpathSync(path.dirname(oldAbs)), path.basename(oldAbs));
   newAbs = path.join(fs.realpathSync(path.dirname(newAbs)), path.basename(newAbs));
   const isFolder = fs.statSync(oldAbs).isDirectory();
@@ -998,20 +1012,51 @@ function renameAssetEverywhere(oldAbs, newAbs) {
     }
   }
   if (isFolder) {
-    productionStore?.relocateFolder(oldAbs, newAbs);
     return; // 子文件及 prompt sidecar 已随文件夹移动，不改文件名。
   }
   // sidecar 命名是「去扩展名的文件名.prompt.txt」，与 /api/prompt-sidecar 保持一致。
   const oldParsed = path.parse(oldAbs);
   const newParsed = path.parse(newAbs);
   const oldSidecar = path.join(oldParsed.dir, `${oldParsed.name}.prompt.txt`);
+  if (fs.existsSync(oldSidecar)) fs.renameSync(oldSidecar, path.join(newParsed.dir, `${newParsed.name}.prompt.txt`));
+}
+
+function renameAssetEverywhere(oldAbs, newAbs, capturedProject = null) {
+  const oldPath = toPosixRelative(CREATIVE_ASSET_DIR, oldAbs);
+  const newPath = toPosixRelative(CREATIVE_ASSET_DIR, newAbs);
+  const project = capturedProject || creativeProjectStore.list().find(item => oldPath.startsWith(`${item.folder}/`));
+  const isFolder = fs.statSync(oldAbs).isDirectory();
+  if (project && !isFolder) assetWorkflowInfo(project, oldPath);
+  const workflowSnapshot = assetWorkflow.snapshot();
+  const snapshots = [AUDIO_LIBRARY_FILE, LIBRARY_LINK_FILE, META_FILE].map(file => [file, fs.existsSync(file) ? fs.readFileSync(file) : null]);
+  const sidecar = absolute => path.join(path.dirname(absolute), `${path.parse(absolute).name}.prompt.txt`);
+  const oldSidecar = sidecar(oldAbs), newSidecar = sidecar(newAbs);
+  if (!isFolder && oldSidecar !== newSidecar && fs.existsSync(oldSidecar) && fs.existsSync(newSidecar)) throw httpError('目标同名提示词文件已存在', 409);
+  let moved = false;
   try {
-    if (fs.existsSync(oldSidecar)) fs.renameSync(oldSidecar, path.join(newParsed.dir, `${newParsed.name}.prompt.txt`));
-  } catch {}
-  try {
-    const store = typeof requireProductionStore === 'function' ? productionStore : null;
-    store?.relocateAsset?.(oldAbs, newAbs, path.basename(newAbs));
-  } catch {}
+    // No silent metadata/ledger failures: ordinary exceptions restore both file and references.
+    renameAssetReferences(oldAbs, newAbs);
+    moved = true;
+    const moves = project ? assetWorkflow.relocate(project, oldPath, newPath, isFolder) : [];
+    if (isFolder) productionStore?.relocateFolder(oldAbs, newAbs);
+    else productionStore?.relocateAsset(oldAbs, newAbs, path.basename(newAbs));
+    voiceClips.relocateSources(oldPath, newPath, isFolder);
+    for (const listener of assetRelocationListeners) {
+      try { listener({ oldPath, path: newPath, oldAbsolutePath: oldAbs, absolutePath: newAbs, isFolder, moves }); }
+      catch (error) { console.error(`桌面素材路径通知失败：${error.message}`); }
+    }
+    broadcastCreativeAssets({ moves });
+  } catch (error) {
+    // renameAssetReferences can fail after the disk rename but before returning.
+    if ((moved || !fs.existsSync(oldAbs)) && fs.existsSync(newAbs)) fs.renameSync(newAbs, oldAbs);
+    if (!isFolder && oldSidecar !== newSidecar && !fs.existsSync(oldSidecar) && fs.existsSync(newSidecar)) fs.renameSync(newSidecar, oldSidecar);
+    for (const [file, contents] of snapshots) {
+      if (contents !== null) fs.writeFileSync(file, contents);
+      else if (fs.existsSync(file)) fs.unlinkSync(file);
+    }
+    assetWorkflow.restore(workflowSnapshot);
+    throw error;
+  }
 }
 
 function renameCreativeFolder(projectId, relative, name) {
@@ -1021,9 +1066,12 @@ function renameCreativeFolder(projectId, relative, name) {
   const pending = directory => fs.readdirSync(directory, { withFileTypes: true }).some(item =>
     item.isSymbolicLink() ? false : item.isDirectory() ? pending(path.join(directory, item.name)) : item.name.endsWith('.part'));
   if (pending(entry.abs)) throw new Error('文件夹仍有导入任务，请完成后再改名');
+  // Capture category meaning before the registry changes its physical folder name.
+  const project = creativeProjectStore.get(projectId);
+  readyCreativeAssetTree({ scopePath: project.folder });
   const snapshots = [AUDIO_LIBRARY_FILE, LIBRARY_LINK_FILE, META_FILE].map(file => [file, fs.existsSync(file) ? fs.readFileSync(file) : null]);
   try {
-    return creativeProjectStore.renameFolder(projectId, relative, name, renameAssetEverywhere);
+    return creativeProjectStore.renameFolder(projectId, relative, name, (source, target) => renameAssetEverywhere(source, target, project));
   } catch (error) {
     for (const [file, data] of snapshots) {
       if (data !== null) fs.writeFileSync(file, data);
@@ -1033,7 +1081,7 @@ function renameCreativeFolder(projectId, relative, name) {
   }
 }
 
-// 顺序导入命名：兼容旧编号，新文件只使用 001、002 等数字。
+// 顺序导入命名：扫描目标目录里已有的 `<前缀>-NNN.` 编号，返回下一个编号的文件名。
 const { nextSequentialImportName } = require('./electron/import-names.cjs');
 
 async function commitUniqueImport(tempPath, preferredPath) {
@@ -1065,7 +1113,7 @@ async function receiveMediaImport(req, filename, requestedKind) {
     throw httpError(requestedKind === 'audio' ? '请选择支持的音频文件' : '请选择支持的视频文件', 415);
   }
 
-  const targetDirectory = path.join(ASSET_DIR, '手动导入', dateFolder());
+  const targetDirectory = path.join(ASSET_DIR, '手动导入');
   fs.mkdirSync(targetDirectory, { recursive: true });
   const tempPath = path.join(targetDirectory, `.${process.pid}-${crypto.randomUUID()}.part`);
   let receivedBytes = 0;
@@ -1115,7 +1163,7 @@ async function receiveCreativeAssetImport(req, filename, folderPath, renameSeque
   try {
     await pipeline(req, fs.createWriteStream(tempPath, { flags: 'wx' }));
     if (receivedBytes !== contentLength) throw httpError('文件传输不完整，请重新导入', 400);
-    // 文件夹名仅供识别旧编号；新导入使用纯数字。显式命名的音频截取/首尾帧不进入此分支。
+    // 使用当前文件夹名，兼容已有旧编号；显式命名的音频截取/首尾帧不进入此分支。
     let preferredName = safeName;
     if (renameSequentially) {
       preferredName = nextSequentialImportName(folder.abs, path.basename(folder.rel), safeName);
@@ -1240,21 +1288,19 @@ function broadcastCreativeProjects() {
   });
 }
 
-function creativeProjectsSnapshot() {
+async function creativeProjectsSnapshot() {
   editorExports.refresh();
   const snapshot = creativeProjectStore.snapshot();
+  const projects = [];
+  for (const project of snapshot.projects) {
+    let assetCount = 0;
+    try { assetCount = Number((await readyCreativeAssetTreeAsync({ scopePath: project.folder })).stats.files || 0); }
+    catch {}
+    projects.push({ ...project, assetCount });
+  }
   return {
     ...snapshot,
-    projects: snapshot.projects.map(project => {
-      let assetCount = 0;
-      try {
-        assetCount = Number(readyCreativeAssetTree({ scopePath: project.folder }).stats.files || 0);
-      } catch {}
-      return {
-        ...project,
-        assetCount,
-      };
-    }),
+    projects,
   };
 }
 
@@ -1273,14 +1319,13 @@ function scheduleCreativeAssetBroadcast() {
 function watchAssets() {
   try {
     if (fs.existsSync(ASSET_DIR)) {
-      // Windows 8.3 短路径必须先展开，避免 libuv 收到长路径事件时触发原生断言。
-      fs.watch(fs.realpathSync.native(ASSET_DIR), { recursive: true }, () => scheduleRescanBroadcast());
+      fs.watch(ASSET_DIR, { recursive: true }, () => scheduleRescanBroadcast());
     } else {
       // 素材库目录还没建：先盯住项目根目录，等它出现后转成递归监听
-      const rootWatcher = fs.watch(fs.realpathSync.native(ROOT), () => {
+      const rootWatcher = fs.watch(ROOT, () => {
         if (fs.existsSync(ASSET_DIR)) {
           rootWatcher.close();
-          fs.watch(fs.realpathSync.native(ASSET_DIR), { recursive: true }, () => scheduleRescanBroadcast());
+          fs.watch(ASSET_DIR, { recursive: true }, () => scheduleRescanBroadcast());
           scheduleRescanBroadcast();
         }
       });
@@ -1292,7 +1337,7 @@ watchAssets();
 function watchCreativeAssets() {
   try {
     ensureCreativeAssetRoot(CREATIVE_ASSET_DIR);
-    fs.watch(fs.realpathSync.native(CREATIVE_ASSET_DIR), { recursive: true }, () => scheduleCreativeAssetBroadcast());
+    fs.watch(CREATIVE_ASSET_DIR, { recursive: true }, () => scheduleCreativeAssetBroadcast());
   } catch {}
 }
 watchCreativeAssets();
@@ -1321,7 +1366,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/creative-projects') {
       if (req.method === 'GET') {
         if (!isTrustedLocalUiRequest(req)) { sendJson(res, 403, { error: '拒绝跨站读取' }); return; }
-        sendJson(res, 200, creativeProjectsSnapshot());
+        sendJson(res, 200, await creativeProjectsSnapshot());
         return;
       }
       if (req.method !== 'POST') { sendJson(res, 405, { error: '方法不允许' }, { Allow: 'GET, POST' }); return; }
@@ -1341,7 +1386,7 @@ const server = http.createServer(async (req, res) => {
         broadcastCreativeProjects();
         broadcastCreativeAssets();
         broadcastProduction();
-        sendJson(res, action === 'create' ? 201 : 200, { ok: true, project, ...creativeProjectsSnapshot() });
+        sendJson(res, action === 'create' ? 201 : 200, { ok: true, project, ...await creativeProjectsSnapshot() });
       } catch (error) {
         const conflict = error.code === 'PROJECT_EXISTS' || /同名|已经存在/.test(String(error.message || ''));
         sendJson(res, conflict ? 409 : (error.statusCode || 400), { error: error.message || '剧本操作失败', code: error.code || 'INVALID_PROJECT' });
@@ -1484,7 +1529,7 @@ const server = http.createServer(async (req, res) => {
         const kind = url.searchParams.get('kind');
         if (!['audio', 'video'].includes(kind) || classifyCreativeAsset(url.searchParams.get('name') || '') !== kind) throw httpError('文件类型不匹配', 415);
         const folder = creativeProjectStore.category(project.id, kind === 'audio' ? 'audio' : 'generated-videos').path;
-        const result = await receiveCreativeAssetImport(req, url.searchParams.get('name'), folder);
+        const result = await receiveCreativeAssetImport(req, url.searchParams.get('name'), folder, false);
         sendJson(res, 201, result);
       } catch (error) { sendJson(res, error.statusCode || 400, { error: error.message }); }
       return;
@@ -1509,7 +1554,7 @@ const server = http.createServer(async (req, res) => {
         if (!body || typeof body !== 'object') throw httpError('请求无效', 400);
         const data = readJson(LIBRARY_SOURCE_FILE, { items: {} });
         if (body.action === 'remove') {
-          prepareMediaSourceRemoval();
+          await prepareMediaSourceRemoval();
           mediaSourceStore.remove(String(body.id || ''));
           delete data.items[body.id];
         } else {
@@ -1536,7 +1581,9 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/scan') {
       if (req.method !== 'GET') { sendJson(res, 405, { error: '方法不允许' }, { Allow: 'GET' }); return; }
       if (!isTrustedLocalUiRequest(req)) { sendJson(res, 403, { error: '拒绝跨站读取' }); return; }
-      sendJson(res, 200, handleScan()); return;
+      try { sendJson(res, 200, await handleScan()); }
+      catch (error) { sendJson(res, 500, { error: error.message }); }
+      return;
     }
 
     if (p === '/api/voice-clips/prepare' || p === '/api/voice-clips/save' || p === '/api/voice-clips/preview' || p === '/api/voice-clips/release') {
@@ -1681,7 +1728,7 @@ const server = http.createServer(async (req, res) => {
         const project = creativeProjectForRequest(url);
         editorExports.refresh();
         sendJson(res, 200, {
-          ...readyCreativeAssetTree({ scopePath: project.folder }),
+          ...await readyCreativeAssetTreeAsync({ scopePath: project.folder }),
           project,
         });
       }
@@ -1712,12 +1759,14 @@ const server = http.createServer(async (req, res) => {
       try {
         const project = creativeProjectForRequest(url);
         const folder = requireProjectAssetPath(project, url.searchParams.get('folder') || '', { allowProjectRoot: false });
+        const naming = url.searchParams.get('naming');
+        if (naming !== null && !['original', 'sequential'].includes(naming)) throw httpError('导入命名方式无效', 400);
         const result = await receiveCreativeAssetImport(
           req,
           url.searchParams.get('name') || '',
           folder,
-          // 首帧/尾帧截取的文件名带镜头语义，跳过顺序重命名。
-          !url.searchParams.get('frame'),
+          // 选文件保留原名，拖入才编号；首尾帧继续保留镜头语义。省略参数兼容旧入口。
+          !url.searchParams.get('frame') && naming !== 'original',
         );
         const frameKind = String(url.searchParams.get('frame') || '').trim();
         if (frameKind) {
@@ -1793,7 +1842,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (p === '/api/creative-assets/move') {
+    if (p === '/api/creative-assets/move' || p === '/api/creative-assets/copy') {
       if (req.method !== 'POST') { sendJson(res, 405, { error: '方法不允许' }, { Allow: 'POST' }); return; }
       try {
         requireTrustedJsonWrite(req);
@@ -1806,22 +1855,44 @@ const server = http.createServer(async (req, res) => {
         const folderPath = requireProjectAssetPath(project, String(body.folder || ''), { allowProjectRoot: false });
         const folder = resolveCreativeAsset(CREATIVE_ASSET_DIR, folderPath, 'folder');
         if (!folder) throw httpError('目标文件夹不存在或不在创作资产库内', 404);
-        if (path.dirname(entry.abs) === folder.abs) throw httpError('资产已在该文件夹内', 400);
+        const isCopy = p.endsWith('/copy');
+        if (!isCopy && path.dirname(entry.abs) === folder.abs) throw httpError('资产已在该文件夹内', 400);
         const targetAbs = uniquePath(path.join(folder.abs, path.basename(entry.rel)));
-        try {
-          renameAssetEverywhere(entry.abs, targetAbs);
-        } catch (error) {
-          if (error.code !== 'EXDEV') throw error;
-          // 跨卷回退：复制到目标后再走同一套血缘/台账同步删除原文件。
-          fs.copyFileSync(entry.abs, targetAbs);
+        if (isCopy) {
+          const targetRelative = toPosixRelative(CREATIVE_ASSET_DIR, targetAbs);
+          const sourceInfo = assetWorkflowInfo(project, entry.rel);
+          let snapshot = null;
+          const sourceSidecar = path.join(path.dirname(entry.abs), `${path.parse(entry.abs).name}.prompt.txt`);
+          const targetSidecar = path.join(path.dirname(targetAbs), `${path.parse(targetAbs).name}.prompt.txt`);
+          if (fs.existsSync(sourceSidecar) && fs.existsSync(targetSidecar)) throw httpError('目标同名提示词文件已存在', 409);
+          let copied = false, copiedSidecar = false;
+          try {
+            await fs.promises.copyFile(entry.abs, targetAbs, fs.constants.COPYFILE_EXCL | fs.constants.COPYFILE_FICLONE); copied = true;
+            if (fs.existsSync(sourceSidecar)) { await fs.promises.copyFile(sourceSidecar, targetSidecar, fs.constants.COPYFILE_EXCL); copiedSidecar = true; }
+            if (assetWorkflow.get(entry.rel)?.assetId !== sourceInfo.assetId) throw httpError('原素材在复制期间已移动或替换，请按新位置重试', 409);
+            // No await between this snapshot and metadata/DB commit or rollback.
+            // A disk-copy failure must never restore metadata committed by another request.
+            snapshot = assetWorkflow.snapshot();
+            const registerCopy = () => assetWorkflow.copy(project, entry.rel, targetRelative, classifyCreativeAsset(entry.rel));
+            if (productionStore) productionStore.transaction(registerCopy);
+            else registerCopy();
+          } catch (error) {
+            if (copied) fs.unlinkSync(targetAbs);
+            if (copiedSidecar) fs.unlinkSync(targetSidecar);
+            if (snapshot) assetWorkflow.restore(snapshot);
+            throw error;
+          }
+        } else {
           renameAssetEverywhere(entry.abs, targetAbs);
         }
-        scheduleCreativeAssetBroadcast();
+        if (isCopy) broadcastCreativeAssets({ copies: [{ sourcePath: entry.rel, path: toPosixRelative(CREATIVE_ASSET_DIR, targetAbs), assetId: assetWorkflowInfo(project, toPosixRelative(CREATIVE_ASSET_DIR, targetAbs)).assetId }] });
         sendJson(res, 200, {
           ok: true,
           name: path.basename(targetAbs),
           path: toPosixRelative(CREATIVE_ASSET_DIR, targetAbs),
           folder: folder.rel,
+          oldPath: entry.rel,
+          ...assetWorkflowInfo(project, toPosixRelative(CREATIVE_ASSET_DIR, targetAbs)),
         });
       } catch (error) {
         sendJson(res, error.statusCode || 400, { error: error.message || '移动失败' });
@@ -2190,15 +2261,18 @@ function startServer(port = DEFAULT_PORT, attemptsLeft = 8, options = {}) {
   const shouldOpen = options.open === undefined ? SHOULD_OPEN : !!options.open;
   return new Promise((resolve, reject) => {
     const tryListen = (candidatePort, remaining) => {
-      server.once('error', (err) => {
+      const onError = err => {
+        server.removeListener('listening', onListening);
         if (err.code === 'EADDRINUSE' && remaining > 0) {
           tryListen(candidatePort + 1, remaining - 1);
         } else {
           reject(err);
         }
-      });
-      server.listen(candidatePort, '127.0.0.1', () => {
-        const addr = `http://localhost:${candidatePort}`;
+      };
+      const onListening = () => {
+        server.removeListener('error', onError);
+        const boundPort = server.address().port;
+        const addr = `http://localhost:${boundPort}`;
         console.log('');
         console.log('  ╔══════════════════════════════════════╗');
         console.log('  ║        视频制作 OS  已启动            ║');
@@ -2211,14 +2285,18 @@ function startServer(port = DEFAULT_PORT, attemptsLeft = 8, options = {}) {
         console.log('  关闭本窗口或按 Ctrl+C 即可退出。');
         console.log('');
         // 打开浏览器：不走 cmd shell；地址由固定前缀 + 已绑定的数字端口构成，经 URL 解析校验后交给系统协议处理器
-        const openTarget = { href: new URL(`http://127.0.0.1:${Number(candidatePort)}`).href };
+        const openTarget = { href: new URL(`http://127.0.0.1:${Number(boundPort)}`).href };
         if (shouldOpen && process.platform === 'win32') {
           execFile('rundll32', ['url.dll,FileProtocolHandler', openTarget.href], { windowsHide: true }, () => {});
         } else if (shouldOpen && process.platform === 'darwin') {
           execFile('open', [openTarget.href], () => {});
         }
-        resolve({ server, port: candidatePort, url: addr });
-      });
+        resolve({ server, port: boundPort, url: addr });
+      };
+      server.once('error', onError);
+      server.once('listening', onListening);
+      try { server.listen(candidatePort, '127.0.0.1'); }
+      catch (error) { server.removeListener('error', onError); onError(error); }
     };
     tryListen(port, attemptsLeft);
   });
@@ -2251,4 +2329,7 @@ module.exports = {
   broadcastCreativeAssets,
   broadcastCreativeProjects,
   renameCreativeFolder,
+  assetWorkflowInfo,
+  recordAssetWorkflow,
+  onAssetRelocation(handler) { assetRelocationListeners.add(handler); return () => assetRelocationListeners.delete(handler); },
 };

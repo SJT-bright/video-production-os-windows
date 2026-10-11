@@ -36,7 +36,7 @@ const tests = fs.readdirSync(root)
 
 function weight(name) {
   if (name === 'test_browser.cjs') return 100;
-  if (name === 'test_drag_tray.cjs' || name === 'test_focus_link.cjs') return 95;
+  if (name === 'test_focus_link.cjs') return 95;
   if (name === 'test_creator_ui.cjs') return 80;
   if (name === 'test_creator_assets.cjs') return 70;
   if (name === 'test_mac_contract.cjs' || name === 'test_mode_tabs_packaged.cjs') return 60;

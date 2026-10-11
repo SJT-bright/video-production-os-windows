@@ -13,5 +13,6 @@ contextBridge.exposeInMainWorld('TabMenuAPI', Object.freeze({
   },
   pick: id => ipcRenderer.send('tab-menu:pick', { id }),
   dismiss: () => ipcRenderer.send('tab-menu:dismiss'),
+  setPointerInside: inside => ipcRenderer.send('tab-menu:pointer-state', { inside }),
   reportSize: (width, height) => ipcRenderer.send('tab-menu:report-size', { width, height }),
 }));

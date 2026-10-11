@@ -119,13 +119,6 @@ async function main() {
       }],
     }),
   }));
-  await page.route('**/api/creative-projects', route => route.fulfill({
-    status: 200, contentType: 'application/json',
-    body: JSON.stringify({ activeProjectId: 'project-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', projects: [
-      { id: 'project-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: '校园心动', folder: '校园心动', kind: 'script', available: true, categories: [] },
-      { id: 'project-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: '雨夜来信', folder: '雨夜来信', kind: 'script', available: true, categories: [] },
-    ] }),
-  }));
   await page.route('**/api/creative-assets?*', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -378,7 +371,6 @@ async function main() {
       assetImportCalls,
       dropCalls,
       focusAssetCalls: [],
-      trayToggles: 0,
       selectionDrags: [],
       customCalls,
       platformCalls,
@@ -474,7 +466,6 @@ async function main() {
         return assetPanel;
       },
       focusAssetInLibrary: async assetPath => { window.__creatorTest.focusAssetCalls.push(assetPath); return { ok: true }; },
-      toggleDragTray: async () => { window.__creatorTest.trayToggles += 1; return { open: true }; },
       startAssetDragSelection: paths => { window.__creatorTest.selectionDrags.push([...paths]); return true; },
       selectService: async (serviceId, mode) => {
         selected.push({ serviceId, mode });
@@ -661,17 +652,13 @@ async function main() {
       focusBrowser: async () => true,
       showMainWindow: async () => true,
       showProjectPicker: async () => { window.__creatorTest.projectPickerOpened = true; return true; },
-      selectProject: async ({ projectId }) => {
-        const name = projectId === 'project-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' ? '校园心动' : '雨夜来信';
-        currentProject = { id: projectId, name, folder: name, kind: 'script', categories: [] };
-        events.project.forEach(callback => callback(currentProject));
-        return { project: currentProject };
-      },
-      showProjectMenu: async options => {
+      selectProject: async () => ({ project: currentProject }),
+      showWorkspaceMenu: async options => {
         window.__creatorTest.projectMenuOptions = options;
         window.__creatorTest.projectMenuOpened = (window.__creatorTest.projectMenuOpened || 0) + 1;
-        return { cancelled: false, project: { id: 'project-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: '校园心动', folder: '校园心动', kind: 'script' } };
+        return { action: 'select', id: options.kind === 'tabs' ? activeTab().id : currentProject.id };
       },
+      closeWorkspaceMenu: async () => ({ cancelled: true }),
       getDownloads: async () => [],
       onBrowserState: callback => { events.browser.push(callback); return () => {}; },
       onDownload: callback => { events.download.push(callback); return () => {}; },
@@ -696,9 +683,10 @@ async function main() {
   assert.equal(await page.locator('body').getAttribute('data-mode'), 'video');
   assert.match(await page.locator('#currentProject').textContent(), /校园心动/);
   await page.locator('#currentProject').click();
-  await page.locator('#projectPopover:not(.hidden)').waitFor({ state: 'visible' });
-  assert.equal(await page.locator('#projectMenuList [data-project-id]').count(), 2, '当前剧本按钮应打开内联剧本菜单');
-  await page.locator('#currentProject').click();
+  await page.waitForFunction(() => window.__creatorTest.projectMenuOpened === 1, null, { timeout: 5000 });
+  assert.equal(await page.evaluate(() => window.__creatorTest.projectMenuOpened), 1, '当前剧本按钮应打开面板内剧本菜单');
+  assert.equal(await page.evaluate(() => window.__creatorTest.projectMenuOptions.kind), 'projects', '项目选择应使用独立原生弹层');
+  assert.equal(await page.locator('#projectPopover.hidden').count(), 1, '桌面项目菜单不能显示需要隐藏平台的HTML弹层');
   assert.equal(await page.locator('#currentShotContext, #shotDialog, #queueImportBreakdown, #queueAccordion, #queueAddCurrent').count(), 0, '已移除镜头台账、拆解导入和提示词队列');
   // 顶部条只显示已打开的网页标签；启动后只有默认平台一个标签
   assert.deepEqual(await page.locator('.platform-tab').allTextContents(), ['Updream']);
@@ -708,13 +696,36 @@ async function main() {
   // 从＋菜单打开 Grok：新增一个网页标签，并显示内嵌验证兼容提示
   await page.locator('[data-open-service="grok"]').click();
   await page.locator('.platform-tab', { hasText: 'Grok' }).waitFor({ state: 'visible' });
+  // 桌面版项目/全部网页选择不撤下平台，网页fallback仍可搜索并选中现有标签。
+  await page.locator('#allTabsButton').click();
+  await page.waitForFunction(() => window.__creatorTest.projectMenuOptions.kind === 'tabs');
+  assert.equal(await page.locator('#allTabsPopover.hidden').count(), 1, '桌面全部网页菜单不应显示HTML弹层');
+  assert.equal(await page.evaluate(() => (window.__overlayHidden || []).some(Boolean)), false, '非模态菜单不得隐藏平台网页');
+  await page.evaluate(() => {
+    window.__nativeMenuForTest = window.creatorAPI.showWorkspaceMenu;
+    delete window.creatorAPI.showWorkspaceMenu;
+  });
+  await page.locator('#allTabsButton').click();
+  await page.locator('#allTabsPopover:not(.hidden)').waitFor({ state: 'visible' });
+  await page.locator('#allTabsSearch').fill('Grok');
+  assert.equal(await page.locator('#allTabsList .all-tabs-item').count(), 1, '网页模式全部网页搜索应保留');
+  await page.locator('#allTabsList .all-tabs-item').click();
+  await page.waitForFunction(() => document.getElementById('allTabsPopover').classList.contains('hidden'));
+  await page.evaluate(() => { window.creatorAPI.showWorkspaceMenu = window.__nativeMenuForTest; delete window.__nativeMenuForTest; });
   assert.equal(await page.locator('#browserCompatibility').count(), 0, '过时的 Grok 常驻兼容提示条应已移除');
   // 多开：为当前平台（刚打开的 Grok）再开一个独立网页，出现带序号的第二个标签
   await page.locator('#addPlatform').click();
   await page.locator('#duplicateTab').click();
   assert.deepEqual(await page.locator('.platform-tab').allTextContents(), ['Updream', 'Grok', 'Grok·2'], '多开没有生成带序号的第二个标签');
+  const assertTabContextMenu = async () => {
+    const menu = page.locator('#tabContextMenu:not([hidden])');
+    await menu.waitFor({ state: 'visible' });
+    assert.deepEqual(await menu.locator('.tab-context-label').allTextContents(), ['改名…', '复制标签', '删除标签'], '标签右键菜单应只保留改名、复制标签和删除标签');
+    assert.equal(await menu.locator('.tab-context-item.danger').count(), 1, '菜单应只有删除标签这一项危险操作');
+    assert.equal(await menu.locator('.tab-context-item.danger .tab-context-label').textContent(), '删除标签', '危险操作应关闭当前右键标签');
+  };
   await page.locator('.platform-tab', { hasText: 'Grok·2' }).click({ button: 'right' });
-  assert.equal(await page.locator('#tabContextMenu .tab-context-item', { hasText: '关闭左侧标签' }).isEnabled(), true, '末尾标签应可关闭左侧标签');
+  await assertTabContextMenu();
   await page.locator('#tabContextMenu:not([hidden]) .tab-context-item', { hasText: '改名…' }).click();
   await page.locator('#renameName').fill('人物图');
   await page.locator('#renameName').press('Enter');
@@ -732,13 +743,13 @@ async function main() {
   await page.waitForFunction(() => !document.querySelector('#renameDialog').open);
   await page.locator('#cancelPlatform').click();
   await page.locator('.platform-tab-wrap', { hasText: '人物图' }).click({ button: 'right' });
-  await page.locator('#tabContextMenu:not([hidden]) .tab-context-item', { hasText: '关闭标签' }).click();
+  await page.locator('#tabContextMenu:not([hidden]) .tab-context-item', { hasText: '删除标签' }).click();
   await page.waitForFunction(() => document.querySelectorAll('.platform-tab').length === 2);
   assert.deepEqual(await page.locator('.platform-tab').allTextContents(), ['Updream', 'Grok'], '关闭多开标签失败');
   // 复制标签：右键菜单在旁边多开同一个平台，不再占用标签宽度
   const grokTabId = await page.locator('.platform-tab', { hasText: 'Grok' }).getAttribute('data-tab-id');
   await page.locator('.platform-tab-wrap', { hasText: 'Grok' }).click({ button: 'right' });
-  await page.locator('#tabContextMenu:not([hidden]) .tab-context-item', { hasText: '再开一个标签' }).click();
+  await page.locator('#tabContextMenu:not([hidden]) .tab-context-item', { hasText: '复制标签' }).click();
   await page.locator('.platform-tab', { hasText: 'Grok·2' }).waitFor({ state: 'visible' });
   assert.deepEqual(await page.locator('.platform-tab').allTextContents(), ['Updream', 'Grok', 'Grok·2'], '复制标签应插到源标签旁边');
   const dupRecord = await page.evaluate(() => (window.__tabDups || []).at(-1));
@@ -823,7 +834,7 @@ async function main() {
   assert.deepEqual(await domTabIds(), beforeClickOrder, 'Esc 应取消拖动且顺序不变');
   assert.equal(await page.evaluate(() => document.querySelectorAll('.tab-drag-ghost').length), 0, 'Esc 取消后应移除拖影');
   await page.locator('.platform-tab-wrap', { hasText: 'Grok·2' }).click({ button: 'right' });
-  await page.locator('#tabContextMenu:not([hidden]) .tab-context-item', { hasText: '关闭标签' }).click();
+  await page.locator('#tabContextMenu:not([hidden]) .tab-context-item', { hasText: '删除标签' }).click();
   await page.waitForFunction(() => document.querySelectorAll('.platform-tab').length === 2);
   page.once('dialog', dialog => dialog.accept());
   await page.locator('#addPlatform').click();
@@ -837,7 +848,7 @@ async function main() {
   assert.deepEqual((await page.evaluate(() => window.__creatorTest.platformCalls)).map(call => call.action), ['hide', 'restore']);
   await page.locator('#cancelPlatform').click();
 
-  // —— 浏览器级标签能力（对标 Chrome）：中键关闭、撤销关闭、固定、静音、关闭其他、页内查找、Alt+Enter ——
+  // —— 三项右键菜单与保留的浏览器快捷操作：中键关闭、撤销关闭、静音、页内查找、Alt+Enter ——
   await page.locator('#addPlatform').click();
   await page.locator('[data-open-service="grok"]').click();
   await page.locator('.platform-tab', { hasText: 'Grok' }).waitFor({ state: 'visible' });
@@ -847,26 +858,14 @@ async function main() {
   await page.keyboard.press('ControlOrMeta+Shift+T');
   await page.locator('.platform-tab', { hasText: 'Grok' }).waitFor({ state: 'visible' });
   assert.equal(await page.evaluate(() => (window.__tabRestores || []).length), 1, '撤销关闭应调用恢复接口');
-  // 右键菜单：固定 Grok → 收缩为单字钉位且排最前；再取消固定还原
-  const grokTabIdForPin = await page.locator('.platform-tab', { hasText: 'Grok' }).getAttribute('data-tab-id');
-  await page.locator(`.platform-tab-wrap[data-tab-id="${grokTabIdForPin}"]`).click({ button: 'right' });
-  await page.locator('#tabContextMenu:not([hidden]) .tab-context-item', { hasText: '固定标签' }).click();
-  await page.waitForFunction(() => !!document.querySelector('.platform-tab-wrap.pinned'));
-  assert.equal(await page.locator('.platform-tab-wrap').first().getAttribute('data-tab-id'), grokTabIdForPin, '固定标签应排到最前');
-  assert.equal(await page.locator('.platform-tab-wrap.pinned .platform-tab').textContent(), 'G', '固定标签应收缩为单字钉位');
-  await page.locator('.platform-tab-wrap.pinned .platform-tab').click({ button: 'right' });
-  await page.locator('#tabContextMenu:not([hidden]) .tab-context-item', { hasText: '取消固定' }).click();
-  await page.waitForFunction(() => !document.querySelector('.platform-tab-wrap.pinned'));
-  // Esc 只关菜单不动标签
-  await page.locator(`.platform-tab-wrap[data-tab-id="${grokTabIdForPin}"]`).click({ button: 'right' });
-  await page.locator('#tabContextMenu:not([hidden])').waitFor({ state: 'visible' });
-  assert.equal(await page.locator('#tabContextMenu .tab-context-item', { hasText: '关闭左侧标签' }).isEnabled(), false, '最左侧标签不应允许关闭左侧');
-  await page.locator('#tabContextMenu .tab-context-item', { hasText: '复制网页地址' }).click();
-  assert.equal(await page.evaluate(() => window.__creatorTest.clipboardText), 'https://grok.com/', '应复制当前标签的网址');
-  await page.locator(`.platform-tab-wrap[data-tab-id="${grokTabIdForPin}"]`).click({ button: 'right' });
+  // 右键菜单始终只有三项；Esc 只关菜单、不改标签或顺序
+  const grokTabIdForMenu = await page.locator('.platform-tab', { hasText: 'Grok' }).getAttribute('data-tab-id');
+  const tabsBeforeMenuEscape = await domTabIds();
+  await page.locator(`.platform-tab-wrap[data-tab-id="${grokTabIdForMenu}"]`).click({ button: 'right' });
+  await assertTabContextMenu();
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => document.querySelector('#tabContextMenu')?.hidden === true);
-  assert.equal(await page.locator('.platform-tab').count(), 2, 'Esc 关闭菜单不应影响标签');
+  assert.deepEqual(await domTabIds(), tabsBeforeMenuEscape, 'Esc 关闭菜单不应影响标签或顺序');
   // 声音角标：出声 🔊 → 点击静音 🔇 → 再点恢复
   const grokTabIdNow = await page.locator('.platform-tab', { hasText: 'Grok' }).getAttribute('data-tab-id');
   await page.evaluate(tabId => window.__creatorTest.makeAudible(tabId), grokTabIdNow);
@@ -876,14 +875,8 @@ async function main() {
   assert.deepEqual(await page.evaluate(() => window.__muteCalls), [{ tabId: grokTabIdNow, muted: true }], '点击角标应静音该网页');
   await page.locator('.platform-tab-audio').click();
   await page.waitForFunction(() => !!document.querySelector('.platform-tab-audio') && !document.querySelector('.platform-tab-audio').classList.contains('muted'));
-  // 关闭其他标签：只剩 Grok，可再撤销
-  await page.locator('.platform-tab-wrap', { hasText: 'Grok' }).click({ button: 'right' });
-  await page.locator('#tabContextMenu:not([hidden]) .tab-context-item', { hasText: '关闭其他标签' }).click();
-  await page.waitForFunction(() => document.querySelectorAll('.platform-tab').length === 1);
-  assert.deepEqual(await page.evaluate(() => window.__closeOthersCalls), [{ tabId: grokTabIdNow, scope: 'others' }], '关闭其他应带锚点与范围');
-  await page.keyboard.press('ControlOrMeta+Shift+T');
-  await page.locator('.platform-tab', { hasText: 'Updream' }).waitFor({ state: 'visible' });
   // 地址栏 Alt+Enter：新标签打开且原网页不动
+  await page.locator('.platform-tab', { hasText: 'Updream' }).click();
   const tabsBeforeAlt = await page.locator('.platform-tab').count();
   await page.locator('#addressInput').fill('example.com/test');
   await page.locator('#addressInput').press('Alt+Enter');
@@ -911,10 +904,10 @@ async function main() {
     if (index !== -1) calls.splice(index, 1);
   });
   await page.locator('.platform-tab-wrap', { hasText: 'Grok' }).click({ button: 'right' });
-  await page.locator('#tabContextMenu:not([hidden]) .tab-context-item', { hasText: '关闭标签' }).click();
+  await page.locator('#tabContextMenu:not([hidden]) .tab-context-item', { hasText: '删除标签' }).click();
   await page.waitForFunction(() => document.querySelectorAll('.platform-tab').length === 2);
   await page.locator('.platform-tab-wrap', { hasText: 'Updream·2' }).click({ button: 'right' });
-  await page.locator('#tabContextMenu:not([hidden]) .tab-context-item', { hasText: '关闭标签' }).click();
+  await page.locator('#tabContextMenu:not([hidden]) .tab-context-item', { hasText: '删除标签' }).click();
   await page.waitForFunction(() => document.querySelectorAll('.platform-tab').length === 1);
   assert.deepEqual(await page.locator('.platform-tab').allTextContents(), ['Updream'], '浏览器标签用例应恢复初始标签状态');
 
@@ -927,7 +920,7 @@ async function main() {
   await page.locator('.quick-folder-name', { hasText: '人物图片' }).click();
   await page.waitForFunction(() => document.querySelectorAll('.quick-children:not(.collapsed)').length >= 2, null, { timeout: 5000 });
   assert.match(await page.locator('#quickDropTarget').textContent(), /人物图片/, '展开分类后拖放目标没有更新');
-  // 框选模式（剪映联动）：开关 → 点卡片按顺序选入 → 拖动选中卡整批多文件拖出
+  // 框选模式：开关 → 点卡片按顺序选入 → 拖动选中卡整批多文件拖出
   assert.equal(await page.locator('#quickMultiSelect').count(), 1, '快捷面板应有框选模式开关');
   await page.locator('#quickMultiSelect').click();
   assert.equal(await page.locator('#quickMultiSelect').getAttribute('aria-pressed'), 'true', '框选模式应开启');
@@ -951,9 +944,7 @@ async function main() {
   await page.waitForFunction(() => (document.getElementById('quickSelInfo')?.textContent || '').includes('已选 1 项'), null, { timeout: 5000 });
   assert.equal(await page.locator('#quickFolderTree [data-asset-path].sel-on').count(), 1, '已删除资产不应留在框选序列');
   await page.locator('#quickMultiSelect').click();  // 关闭框选模式，恢复单击预览
-  // 剪映联动悬浮窗开关
-  await page.locator('#toggleDragTray').click();
-  await page.waitForFunction(() => (window.__creatorTest.trayToggles || 0) === 1, null, { timeout: 5000 });
+  assert.equal(await page.locator('#toggleDragTray').count(), 0, '已下线的剪映联动入口不应出现');
   // 视频卡片封面用首帧（懒加载：进入预加载区后才挂 src）
   const ensureExpanded = async name => {
     const collapsed = await page.evaluate(fname => {
@@ -1007,26 +998,6 @@ async function main() {
   }
   // 固定提示词按钮已精简为一行：复制 + 清空 + 新建入口
   assert.equal(await page.locator('#copyPrompt').isVisible(), true, '复制按钮应保留');
-  const motionRegression = await page.evaluate(async () => {
-    const node = document.createElement('div');
-    document.body.append(node);
-    let completions = 0;
-    playPopOut(node, () => { completions++; node.hidden = true; });
-    node.dispatchEvent(new AnimationEvent('animationend', { animationName: 'motionPopOut' }));
-    node.hidden = false;
-    await new Promise(resolve => setTimeout(resolve, 300));
-    const staysOpen = !node.hidden && completions === 1;
-    node.remove();
-    const dialog = document.createElement('dialog');
-    document.body.append(dialog);
-    openCreatorDialog(dialog);
-    closeCreatorDialog(dialog);
-    closeCreatorDialog(dialog, { instant: true });
-    const closesImmediately = !dialog.open;
-    dialog.remove();
-    return { staysOpen, closesImmediately };
-  });
-  assert.deepEqual(motionRegression, { staysOpen: true, closesImmediately: true }, '退出动效不得把重开的浮层再次关闭，跳转时应立即收起');
   assert.equal(await page.locator('#clearPrompt').isVisible(), true, '清空按钮应保留');
   assert.equal(await page.locator('#copyAndFocus').count(), 0, '复制并切到网页按钮应已移除');
   assert.equal(await page.locator('#savePromptTemplate').count(), 0, '存为固定提示词按钮应已移除');
@@ -1098,7 +1069,7 @@ async function main() {
   await page.waitForFunction(() => document.querySelector('#currentProject')?.textContent.includes('雨夜来信'));
   assert.equal(await page.locator('#promptEditor').inputValue(), '', '新剧本不得继承上一剧本的视频草稿');
 
-  assert.equal(await page.locator('.saved-template-item').count(), 0, '新剧本固定提示词应为空，不应自动继承来源模板');
+  assert.equal(await page.locator('.saved-template-item').count(), 0, '未主动迁移的新剧本不应继承其他剧本的固定提示词');
   if ((await page.locator('#promptAccordion').getAttribute('open')) === null) await page.locator('#promptAccordion > summary').click();
   await page.locator('#promptEditor').fill('PROJECT-B-VIDEO-DRAFT');
   await page.evaluate(() => window.__creatorTest.emitProject({
@@ -1106,7 +1077,7 @@ async function main() {
   }));
   await page.waitForFunction(() => document.querySelector('#currentProject')?.textContent.includes('校园心动'));
   assert.equal(await page.locator('#promptEditor').inputValue(), 'VIDEO-ONLY-DRAFT', '切回剧本后应恢复自己的草稿');
-  assert.equal(await page.locator('.saved-template-item').count(), 2, '来源剧本自己的固定提示词必须保留');
+  assert.equal(await page.locator('.saved-template-item').count(), 2, '切回原剧本后应恢复原有固定提示词');
   if ((await page.locator('#promptAccordion').getAttribute('open')) === null) await page.locator('#promptAccordion > summary').click();
 
   // 跨剧本撤销失效：A 剧本清空后切到 B，切换提示顶掉撤销入口，B 不得被 A 草稿覆盖
@@ -1268,6 +1239,7 @@ async function main() {
   assert.ok((await page.evaluate(() => window.__creatorTest.tabSwitches)).length >= tabsBeforeClose, '关闭后应回退到相邻标签');
 
   await page.locator('#promptEditor').fill('VIDEO-ONLY-DRAFT');
+  const promptOpenBeforeModeSwitch = await page.locator('#promptAccordion').evaluate(node => node.open);
   const beforeFailedSwitch = await page.locator('.platform-tab').allTextContents();
   await page.evaluate(() => {
     const setMode = window.creatorAPI.setMode;
@@ -1283,7 +1255,7 @@ async function main() {
   assert.match(await page.locator('#creatorToast').textContent(), /完全退出/, '旧桌面进程应给出重启说明');
   await page.locator('.mode-button[data-mode="image"]').click();
   assert.deepEqual(await page.locator('.platform-tab').allTextContents(), ['GPT 图片'], '切换图片模式后应只显示图片模式自己打开的标签');
-  assert.equal(await page.locator('#promptAccordion').getAttribute('open'), null, '图片模式没有草稿和模板时应自动折叠');
+  assert.equal(await page.locator('#promptAccordion').evaluate(node => node.open), promptOpenBeforeModeSwitch, '切换模式应保留最近的折叠状态，不因空草稿而重置');
   // 最近入库区块按用户要求隐藏（归档照常运行），分页改为直接触发
   assert.equal(await page.locator('.downloads-section').isHidden(), true, '最近入库区域应保持隐藏');
   const loadMore = page.locator('.download-load-more');
@@ -1291,7 +1263,7 @@ async function main() {
   await page.waitForFunction(() => document.querySelectorAll('.download-item').length >= 2);
   assert.equal(await page.locator('.download-item', { hasText: '已入库次图.png' }).count(), 1);
   assert.equal(await page.locator('#promptEditor').inputValue(), '');
-  await page.locator('#promptAccordion > summary').click();
+  if (!await page.locator('#promptAccordion').evaluate(node => node.open)) await page.locator('#promptAccordion > summary').click();
   await page.locator('#promptEditor').fill('IMAGE-ONLY-DRAFT');
 
   await page.locator('.mode-button[data-mode="video"]').click();

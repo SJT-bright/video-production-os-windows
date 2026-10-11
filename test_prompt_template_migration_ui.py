@@ -57,6 +57,7 @@ with sync_playwright() as p:
       const browser = mode => ({mode, serviceId:'gpt', tabs:[], activeTabId:'', loading:false});
       window.__migrationCalls = []; window.__nextTarget = 'project-b'; window.__nativeShield = [];
       const api = {
+        showWorkspaceMenu: undefined,
         getConfig: async () => { if (window.__configDelay) await new Promise(resolve => setTimeout(resolve, window.__configDelay));
           return {project:current(), services:[{id:'gpt',label:'GPT',imageLabel:'GPT 图片',videoLabel:'GPT 提示词',url:'about:blank'}],
           modeServices:{image:['gpt'],video:['gpt']}, defaults:{image:'gpt',video:'gpt'}, paths:{creativeAssetAvailable:true}, browser:browser('image'),testMode:true}; },

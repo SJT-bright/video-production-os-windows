@@ -17,6 +17,11 @@
     return month >= 1 && month <= 12 && day >= 1 && day <= days[month - 1] ? text : '';
   }
 
+  function episodeFolderKey(name) {
+    const match = /^第([1-9]\d{0,5})集$/.exec(String(name || ''));
+    return match ? Number(match[1]) : 0;
+  }
+
   function directoryDate(folderPath) {
     const parts = String(folderPath || '').replace(/\\/g, '/').split('/');
     for (let index = parts.length - 1; index >= 0; index--) {
@@ -56,16 +61,18 @@
       || String(b?.name || '').localeCompare(String(a?.name || ''), 'zh-CN', { numeric: true });
   }
 
-  // 只有普通分类使用手动顺序；日期槽位始终从新到旧，不删除用户保存的分类顺序。
+  // 普通分类仍使用手动顺序；分集按数字 1→2→10，历史日期保持倒序兼容。
   function orderFolders(entries, savedOrder) {
     const node = entry => entry.node || entry;
     const isDate = entry => Boolean(dateFolderKey(node(entry).name));
+    const isEpisode = entry => Boolean(episodeFolderKey(node(entry).name));
     const ranks = new Map((Array.isArray(savedOrder) ? savedOrder : []).map((path, index) => [path, index]));
-    const ordinary = entries.filter(entry => !isDate(entry)).sort((a, b) =>
+    const ordinary = entries.filter(entry => !isDate(entry) && !isEpisode(entry)).sort((a, b) =>
       (ranks.get(node(a).path) ?? Number.MAX_SAFE_INTEGER) - (ranks.get(node(b).path) ?? Number.MAX_SAFE_INTEGER));
     const dates = entries.filter(isDate).sort((a, b) => node(b).name.localeCompare(node(a).name));
-    let ordinaryIndex = 0, dateIndex = 0;
-    return entries.map(entry => isDate(entry) ? dates[dateIndex++] : ordinary[ordinaryIndex++]);
+    const episodes = entries.filter(isEpisode).sort((a, b) => episodeFolderKey(node(a).name) - episodeFolderKey(node(b).name));
+    let ordinaryIndex = 0, dateIndex = 0, episodeIndex = 0;
+    return entries.map(entry => isDate(entry) ? dates[dateIndex++] : isEpisode(entry) ? episodes[episodeIndex++] : ordinary[ordinaryIndex++]);
   }
 
   function compareFolderPaths(a, b) {
@@ -73,6 +80,9 @@
     const right = String(b || '').replace(/\\/g, '/').split('/');
     for (let index = 0; index < Math.min(left.length, right.length); index++) {
       if (left[index] === right[index]) continue;
+      const leftEpisode = episodeFolderKey(left[index]), rightEpisode = episodeFolderKey(right[index]);
+      if (leftEpisode && rightEpisode) return leftEpisode - rightEpisode;
+      if (leftEpisode || rightEpisode) return leftEpisode ? -1 : 1;
       const leftDate = dateFolderKey(left[index]), rightDate = dateFolderKey(right[index]);
       if (leftDate && rightDate) return right[index].localeCompare(left[index]);
       if (leftDate || rightDate) return leftDate ? -1 : 1;
@@ -81,5 +91,5 @@
     return left.length - right.length;
   }
 
-  return Object.freeze({ dateFolderKey, directoryDate, assetDateKey, newestFirst, orderFolders, compareFolderPaths });
+  return Object.freeze({ dateFolderKey, episodeFolderKey, directoryDate, assetDateKey, newestFirst, orderFolders, compareFolderPaths });
 });

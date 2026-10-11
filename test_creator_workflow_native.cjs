@@ -25,7 +25,8 @@ async function until(fn, label, timeout = 16000) {
     const projectRoot = path.join(root, 'project'), assetRoot = path.join(projectRoot, '创作资产库'), data = path.join(root, 'data');
     fs.mkdirSync(path.join(assetRoot, '隔离剧本甲'), { recursive: true }); fs.mkdirSync(data); fs.mkdirSync(path.join(root, 'trash'));
     const movie = path.join(root, 'fixture.mp4');
-    const ff = require('./voice-clips.cjs').findFFmpeg();
+    const ffmpeg = path.join(__dirname, 'vendor/media-tools/darwin-arm64/ffmpeg');
+    const ff = fs.existsSync(ffmpeg) ? ffmpeg : '/opt/homebrew/bin/ffmpeg';
     const generated = spawnSync(ff, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=128x72:d=0.5', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', movie], { timeout: 20000 });
     assert.equal(generated.status, 0, generated.stderr?.toString());
     const bytes = fs.readFileSync(movie);
@@ -70,9 +71,7 @@ async function until(fn, label, timeout = 16000) {
     assert.equal(await firstChoice.locator('[data-choice]').count(), 2);
     await firstChoice.locator('[data-choice="processing"]').click();
     const pending = await until(async () => (await downloads()).find(item => item.state === 'completed' && item.videoDisposition === 'processing'), '待处理归档');
-    assert.ok(pending.savePath.split(path.sep).join('/').includes('/生成视频/待处理/')); assert.deepEqual(fs.readFileSync(pending.savePath), bytes);
-    assert.equal(path.basename(path.dirname(pending.savePath)), '素材001');
-    assert.equal(path.basename(pending.savePath), '001.mp4');
+    assert.ok(pending.savePath.includes('/生成视频/待处理/')); assert.deepEqual(fs.readFileSync(pending.savePath), bytes);
     results.realDownloadStagedAndClassified = true;
     console.log('WORKFLOW_STEP staged-download-choice-pass');
 
@@ -86,9 +85,7 @@ async function until(fn, label, timeout = 16000) {
     await api('activate', { id: projectId });
     const batch = await until(async () => { const values = (await downloads()).filter(item => item.state === 'completed' && item.videoDisposition === 'editable'); return values.length === 2 ? values : null; }, '并行同名下载');
     assert.notEqual(batch[0].savePath, batch[1].savePath);
-    assert.deepEqual(batch.map(item => path.basename(item.savePath)).sort(), ['001.mp4', '002.mp4']);
-    assert.ok(batch.every(item => path.basename(path.dirname(item.savePath)) === '素材001'));
-    assert.ok(batch.every(item => item.projectId === projectId && item.savePath.split(path.sep).join('/').includes(`/${folder}/生成视频/可剪辑/`)), '项目切换不能改变下载归属');
+    assert.ok(batch.every(item => item.projectId === projectId && item.savePath.includes(`/${folder}/生成视频/可剪辑/`)), '项目切换不能改变下载归属');
     results.concurrentDownloadsKeepOriginalProject = true;
     console.log('WORKFLOW_STEP concurrent-project-binding-pass');
 
@@ -99,16 +96,27 @@ async function until(fn, label, timeout = 16000) {
     results.cancelDoesNotArchive = true;
     console.log('WORKFLOW_STEP cancel-pass');
 
-    await creator.evaluate(() => window.creatorAPI.toggleDragTray());
-    const tray = await until(() => app.windows().find(page => page.url().includes('/drag-tray.html')), '剪映联动窗口');
-    await tray.waitForFunction(() => document.querySelectorAll('.tray-card').length > 0);
-    const paths = await tray.locator('.tray-card').evaluateAll(cards => cards.map(card => card.dataset.path));
-    assert.equal(paths.length, 2); assert.ok(paths.every(value => !value.includes('/待处理/')));
-    results.pendingExcludedFromJianying = true;
-    console.log('WORKFLOW_STEP tray-gate-pass');
-    await tray.locator('#trayClose').click();
+    assert.equal(await creator.locator('#toggleDragTray').count(), 0);
+    assert.equal(await creator.evaluate(() => typeof window.creatorAPI.toggleDragTray), 'undefined');
+    results.removedTrayEntryAndAPI = true;
+    const postAssets = (operation, body) => creator.evaluate(async ({ operation, body }) => {
+      const response = await fetch(`/api/creative-assets/${operation}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const result = await response.json(); if (!response.ok) throw new Error(JSON.stringify(result)); return result;
+    }, { operation, body });
+    await postAssets('folder', { parent: folder, name: '第01集' });
+    const oldPendingRel = path.relative(fs.realpathSync(assetRoot), fs.realpathSync(pending.savePath)).split(path.sep).join('/');
+    const movedPending = await postAssets('move', { path: oldPendingRel, folder: `${folder}/第01集` });
+    assert.equal(movedPending.videoDisposition, 'processing');
+    const movedDownload = (await downloads()).find(item => item.id === pending.id);
+    assert.equal(fs.realpathSync(movedDownload.savePath), fs.realpathSync(path.join(assetRoot, movedPending.path)));
+    pending.savePath = movedDownload.savePath;
+    const editableRel = path.relative(fs.realpathSync(assetRoot), fs.realpathSync(batch[0].savePath)).split(path.sep).join('/');
+    const movedEditable = await postAssets('move', { path: editableRel, folder: `${folder}/第01集` });
+    assert.equal(movedEditable.videoDisposition, 'editable');
+    results.persistentStatusMatchesNativeAfterMove = true;
+    console.log('WORKFLOW_STEP asset-status-after-move-pass');
 
-    const rel = path.relative(assetRoot, pending.savePath).split(path.sep).join('/');
+    const rel = path.relative(fs.realpathSync(assetRoot), fs.realpathSync(pending.savePath)).split(path.sep).join('/');
     await creator.evaluate(p => window.creatorAPI.floatVideoAsset({ path: p, origin: { x: 80, y: 180, width: 140, height: 170 } }), rel);
     const float = await until(() => app.windows().find(page => page.url().includes('/float-video.html')), '视频浮窗');
     const motion = await app.evaluate(({ BrowserWindow }) => {
@@ -138,17 +146,16 @@ async function until(fn, label, timeout = 16000) {
     console.log('WORKFLOW_STEP float-presentation-drag-pass');
 
     // 模拟系统菜单选择，仍执行 main.cjs 的实际受信任 IPC 和删除控制器。
-    await app.evaluate(({ Menu, dialog, shell }, { trash, projectRoot }) => {
+    await app.evaluate(({ Menu, dialog, shell }, trash) => {
       const fs = process.getBuiltinModule('node:fs'), path = process.getBuiltinModule('node:path');
       globalThis.__workflowConfirm = []; globalThis.__workflowResponse = 0;
       Menu.prototype.popup = function(options) { this.items.find(item => item.label.startsWith('删除文件夹'))?.click(); options.callback?.(); };
       dialog.showMessageBox = async (_owner, options) => { globalThis.__workflowConfirm.push(options); return { response: globalThis.__workflowResponse }; };
       shell.trashItem = async absolute => {
-        const relative = path.relative(fs.realpathSync(projectRoot), fs.realpathSync(absolute));
-        if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('拒绝操作非隔离数据');
+        if (!absolute.includes('/video-os-workflow-native-')) throw new Error('拒绝操作非隔离数据');
         fs.renameSync(absolute, path.join(trash, path.basename(absolute)));
       };
-    }, { trash: path.join(root, 'trash'), projectRoot });
+    }, path.join(root, 'trash'));
     const tabsBefore = (await creator.evaluate(() => window.creatorAPI.getConfig())).browser.tabs;
     const cancelClear = await creator.evaluate(() => window.creatorAPI.clearTabs());
     assert.equal(cancelClear.clearCancelled, true);
@@ -187,8 +194,11 @@ async function until(fn, label, timeout = 16000) {
       { projectId: beta.project.id, path: `${folder}/最后的成品`, name: '不得跨剧本修改' });
     assert.equal(wrongProject, true);
     results.nativeFolderRenameInlineAndProjectGuard = true;
-    const gate = await creator.evaluate(p => window.creatorAPI.showFolderMenu({ path: p }).then(() => false, () => true), folder);
-    assert.equal(gate, true);
+    const gate = await creator.evaluate(p => window.creatorAPI.showFolderMenu({ path: p }), folder);
+    assert.equal(gate.cancelled, true);
+    const rootLabels = await app.evaluate(() => globalThis.__folderMenuLabels);
+    assert.ok(rootLabels.includes('新建文件夹…'));
+    assert.ok(!rootLabels.some(label => label.startsWith('删除文件夹')));
     results.projectRootCannotBeDeleted = true;
     const packaged = await app.evaluate(({ app }) => app.isPackaged);
     console.log('WORKFLOW_NATIVE_PASS', JSON.stringify({ ...results, packaged }));

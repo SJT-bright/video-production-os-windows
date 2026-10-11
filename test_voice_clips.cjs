@@ -13,12 +13,12 @@ const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).d
 function makeVideo(target, audio = true) {
   execFileSync(findFFmpeg(), ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi',
     '-i', 'color=c=0xadcbe8:s=320x180:r=24', ...(audio ? ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000'] : []),
-    '-t', '6', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', ...(audio ? ['-c:a', 'aac'] : ['-an']),
+    '-t', '6', '-c:v', 'mpeg4', '-pix_fmt', 'yuv420p', ...(audio ? ['-c:a', 'aac'] : ['-an']),
     '-movflags', '+faststart', '-y', target], { timeout: 20000 });
 }
 
 async function fixture(port = 0) {
-  const appRoot = path.resolve(process.env.VOICE_TEST_APP_ROOT || __dirname);
+  const appRoot = process.env.VOICE_TEST_APP_ROOT || __dirname;
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'video-os-voice-test-')));
   const child = spawn(process.execPath, ['-e', `
     const mod = require(${JSON.stringify(path.join(appRoot, 'server.js'))});
@@ -57,8 +57,16 @@ async function fixture(port = 0) {
   await api('/api/creative-projects', { action: 'activate', id: a.id });
   const sourcePath = `${a.folder}/生成视频/对白测试.mp4`;
   const sourceFile = path.join(root, '创作资产库', sourcePath);
-  makeVideo(sourceFile);
-  makeVideo(path.join(root, '创作资产库', a.folder, '生成视频', '无音轨.mp4'), false);
+  try {
+    makeVideo(sourceFile);
+    makeVideo(path.join(root, '创作资产库', a.folder, '生成视频', '无音轨.mp4'), false);
+  } catch (error) {
+    const exited = once(child, 'exit');
+    child.kill('SIGTERM');
+    await exited;
+    fs.rmSync(root, { recursive: true, force: true });
+    throw error;
+  }
   const sourceHash = hash(sourceFile);
   async function stop() {
     if (child.exitCode === null) {

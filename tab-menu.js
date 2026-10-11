@@ -4,6 +4,7 @@
 // 消失时机全部由主进程裁决——Esc/blur 驻留 500ms，点选立即回执不等 120ms 淡出。
 const root = document.getElementById('menuRoot');
 const api = window.TabMenuAPI;
+let pickDismissTimer = 0;
 
 if (!api) throw new Error('TabMenuAPI 未注入：菜单窗 preload 未生效');
 
@@ -38,6 +39,7 @@ function focusSelectable(index) {
   // 与 creator 页 DOM 菜单一致：循环滚动，Home 到顶、End 到底；禁用项跳过
   const next = (index + items.length) % items.length;
   items[next].focus({ preventScroll: true });
+  items[next].scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 function replayEntrance() {
@@ -70,22 +72,31 @@ function renderItems(items) {
     fragment.appendChild(button);
   }
   root.replaceChildren(fragment);
+  root.scrollTop = 0;
 }
 
 function reportSize() {
-  // 内容尺寸回报主进程：主进程 setContentSize 后按显示器 workArea 钳制定位，保证菜单完整可见
-  api.reportSize(root.offsetWidth, root.offsetHeight);
+  // 回报完整内容高度，不能回报被初始 64px 窗口限制的可见高度。
+  // scrollHeight 含内边距，再补上边框；主进程按屏幕可用区限高，超出部分由菜单滚动。
+  const contentHeight = root.scrollHeight + root.offsetHeight - root.clientHeight;
+  api.reportSize(root.offsetWidth, contentHeight);
 }
 
 api.onShow(payload => {
+  clearTimeout(pickDismissTimer);
+  pickDismissTimer = 0;
   const items = Array.isArray(payload && payload.items) ? payload.items : [];
   renderItems(items);
   replayEntrance();
   requestAnimationFrame(() => {
     reportSize();
-    selectableItems()[0]?.focus({ preventScroll: true });
+    focusSelectable(0);
   });
 });
+
+// 监听窗口边界，而不是单个条目；菜单项之间移动或进入动画都不会触发误收起。
+document.documentElement.addEventListener('pointerleave', () => api.setPointerInside(false));
+document.documentElement.addEventListener('pointerenter', () => api.setPointerInside(true));
 
 // 键盘导航与 creator 页 DOM 菜单（creator.js tabContextMenu keydown）对齐
 root.addEventListener('keydown', event => {
@@ -97,7 +108,7 @@ root.addEventListener('keydown', event => {
     const next = event.key === 'Home' ? 0
       : event.key === 'End' ? items.length - 1
         : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
-    items[next].focus({ preventScroll: true });
+    focusSelectable(next);
     return;
   }
   if (event.key === 'Enter' || event.key === ' ') {
@@ -123,5 +134,6 @@ root.addEventListener('click', event => {
   event.preventDefault();
   root.classList.add('closing');
   api.pick(item.dataset.action || '');
-  setTimeout(() => api.dismiss(), 120);
+  clearTimeout(pickDismissTimer);
+  pickDismissTimer = setTimeout(() => { pickDismissTimer = 0; api.dismiss(); }, 120);
 });

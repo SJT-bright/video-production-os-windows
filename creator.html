@@ -122,9 +122,9 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
             <textarea id="promptEditor" spellcheck="false" aria-label="当前模式提示词" placeholder="粘贴或输入提示词…"></textarea>
             <div class="prompt-actions">
               <button class="text-action" id="clearPrompt" type="button">清空</button>
-              <button class="text-action template-create-toggle" id="templateCreate" type="button">＋ 新建固定提示词</button>
+              <button class="text-action template-create-toggle" id="templateCreate" type="button" aria-expanded="false" aria-controls="templateCreateForm">＋ 新建固定提示词</button>
             </div>
-            <form class="template-create-form hidden" id="templateCreateForm" novalidate>
+            <form class="template-create-form hidden" id="templateCreateForm" hidden novalidate>
               <input id="templateCreateName" type="text" maxlength="40" autocomplete="off" placeholder="名称，例如：人物四视图" aria-label="固定提示词名称">
               <textarea id="templateCreateBody" rows="5" spellcheck="false" placeholder="填写提示词，保存后可直接修改标题和内容…" aria-label="固定提示词内容"></textarea>
               <div class="template-create-actions">
@@ -161,7 +161,6 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
             <div class="asset-quick-actions">
               <button class="primary-action" id="importLocalAssets" type="button" title="添加本地素材">＋ 素材</button>
               <button class="secondary-action" id="openAssetLibrary" type="button" title="打开完整资产库">资产库</button>
-              <button class="secondary-action" id="toggleDragTray" type="button" title="置顶迷你拖拽窗：拖资产进剪映；Alt+Shift+D 随时开关">剪映联动</button>
               <button class="secondary-action multi-toggle" id="quickMultiSelect" type="button" aria-pressed="false" title="框选模式：点卡片选入，或按住拖动画框">框选：关</button>
             </div>
             <div class="asset-quick-tools" id="quickTools" hidden>
@@ -169,9 +168,15 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
               <button class="text-action" id="quickSelClear" type="button" hidden>清空选择</button>
             </div>
             <div class="asset-drop-zone" id="assetDropZone" tabindex="0" role="button" aria-label="拖入网页图片或本地图片、视频、音频">
-              <span class="asset-drop-icon" data-ui-icon="import" aria-hidden="true"></span>
-              <strong>拖入图片、视频或音频</strong>
-              <small id="quickDropTarget">当前存入：全部资产（按类别自动归档）</small>
+              <span class="asset-drop-copy">
+                <span class="asset-drop-icon" data-ui-icon="import" aria-hidden="true"></span>
+                <strong>拖入图片、视频或音频</strong>
+              </span>
+              <span class="asset-drop-target" aria-live="polite">
+                <small class="asset-drop-target-label">当前存入</small>
+                <strong id="quickDropTarget">全部资产</strong>
+                <small class="asset-drop-target-hint" id="quickDropTargetHint">按类别自动归档</small>
+              </span>
             </div>
             <nav class="quick-folder-tree" id="quickFolderTree" aria-label="资产分类文件夹"></nav>
             <section class="browser-download-dock" id="browserDownloadDock" aria-label="浏览器下载">
@@ -263,6 +268,7 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
             <p>网页没有出现时，可重新挂载当前平台。</p>
             <button class="secondary-action" id="reconnectBrowser" type="button">重新显示网页</button>
           </div>
+          <img class="platform-backdrop" id="platformBackdrop" alt="" aria-hidden="true" hidden>
         </div>
       </section>
     </main>
@@ -323,6 +329,17 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
   <!-- 标签右键菜单挂在 body 末尾：header 的 backdrop-filter 会把 fixed 后代困在自己的
        stacking context 里，被后绘制的工作区盖住；根层级下 fixed + z-index 才能浮在全部内容之上 -->
   <div class="tab-context-menu" id="tabContextMenu" role="menu" aria-label="网页标签操作" hidden></div>
+
+  <dialog class="creator-dialog asset-transfer-dialog" id="quickMoveDialog" aria-labelledby="quickMoveDialogTitle">
+    <div class="creator-dialog-card">
+      <header class="creator-dialog-head">
+        <div><strong id="quickMoveDialogTitle">移动到…</strong><p id="quickMoveDialogHint">选择完整目标位置</p></div>
+        <button class="icon-button" id="quickCancelMoveTop" type="button" aria-label="取消">×</button>
+      </header>
+      <div class="move-folder-list" id="quickMoveFolderList" role="list" aria-label="目标文件夹"></div>
+      <footer class="creator-dialog-foot"><button class="secondary-action" id="quickCancelMove" type="button">取消</button></footer>
+    </div>
+  </dialog>
 
   <script src="assets/ui/creator/ui-icons.js"></script>
   <script src="assets/ui/asset-order.js"></script>

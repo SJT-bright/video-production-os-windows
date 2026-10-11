@@ -9,10 +9,8 @@ const { once } = require('node:events');
 const { assertMacBundle } = require('./verify-mac-bundle.cjs');
 
 async function run() {
-  const archIndex = process.argv.indexOf('--arch');
-  const arch = archIndex >= 0 ? process.argv[archIndex + 1] : 'universal';
-  const appBundle = path.join(__dirname, `dist/public-release/视频制作 OS-darwin-${arch}/视频制作 OS.app`);
-  assertMacBundle({ appBundle, sourceRoot: __dirname, arch, portable: true });
+  const appBundle = path.join(__dirname, 'dist/public-release/视频制作 OS-darwin-universal/视频制作 OS.app');
+  assertMacBundle({ appBundle, sourceRoot: __dirname, arch: 'universal', portable: true });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vos-mac-release-'));
   let child;
   try {
@@ -45,7 +43,7 @@ async function run() {
     }
     assert.ok(ready, 'Standalone app must start with a fresh user workspace');
     assert.equal(fs.existsSync(path.join(appBundle, 'Contents/Resources/app/data')), false);
-    console.log(`MAC_STANDALONE_LAUNCH_PASS arch=${arch} freshUserWorkspace=true bundledPrivateData=false`);
+    console.log('MAC_STANDALONE_LAUNCH_PASS universal=true freshUserWorkspace=true bundledPrivateData=false');
   } finally {
     if (child && child.exitCode === null) { const exited = once(child, 'exit'); child.kill('SIGTERM'); await exited; }
     fs.rmSync(root, { recursive: true, force: true });

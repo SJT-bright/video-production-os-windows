@@ -291,6 +291,27 @@ class ProductionStore {
   }
 
   // 资产文件在磁盘上被重命名/移动后，同步修正台账里的路径与文件名。
+  registerManagedAsset(input = {}) {
+    const projectId = cleanText(input.projectId, 100);
+    const assetPath = path.resolve(String(input.assetPath || ''));
+    const existing = this.db.prepare('SELECT * FROM asset_refs WHERE path = ?').get(assetPath);
+    if (existing && !input.forceNew) {
+      if (existing.project_id !== projectId) throw productionError('素材已属于另一个剧本', 409, 'CROSS_PROJECT_ASSET');
+      return existing;
+    }
+    if (existing) {
+      if (existing.project_id !== projectId) throw productionError('素材已属于另一个剧本', 409, 'CROSS_PROJECT_ASSET');
+      // Keep the old identity and its references, but never attach them to a new copy.
+      const retiredPath = path.join(path.dirname(assetPath), '.asset-history', existing.id, path.basename(assetPath));
+      this.db.prepare('UPDATE asset_refs SET path = ? WHERE id = ?').run(retiredPath, existing.id);
+      this.db.prepare('UPDATE inbox_items SET asset_path = ?, updated_at = ? WHERE asset_path = ?').run(retiredPath, nowIso(), assetPath);
+    }
+    const id = `asset-${crypto.randomUUID()}`;
+    this.db.prepare(`INSERT INTO asset_refs (id, project_id, path, kind, internal_source, origin_type, created_at)
+      VALUES (?, ?, ?, ?, 'managed', 'imported_asset', ?)`).run(id, projectId, assetPath, String(input.kind || 'document'), nowIso());
+    return this.db.prepare('SELECT * FROM asset_refs WHERE id = ?').get(id);
+  }
+
   relocateAsset(oldPath, newPath, newFilename) {
     const oldClean = String(oldPath || '');
     const newClean = String(newPath || '');
@@ -298,12 +319,12 @@ class ProductionStore {
     return this.transaction(() => {
       // 目录迁移过的项目里，旧记录可能带旧盘符/旧根目录；用“创作资产库”起的尾部路径兜底匹配。
       const tail = oldClean.includes('创作资产库') ? oldClean.slice(oldClean.indexOf('创作资产库')) : oldClean;
-      const legacyLike = `%${tail}`;
-      const assets = this.db.prepare('UPDATE asset_refs SET path = ? WHERE path = ? OR path LIKE ?')
-        .run(newClean, oldClean, legacyLike).changes;
+      // Exact suffix, not LIKE: underscores/percent signs in filenames are literal.
+      const assets = this.db.prepare('UPDATE asset_refs SET path = ? WHERE path = ? OR substr(path, length(path) - length(?) + 1) = ?')
+        .run(newClean, oldClean, tail, tail).changes;
       const inbox = this.db.prepare(
-        'UPDATE inbox_items SET asset_path = ?, filename = ?, updated_at = ? WHERE asset_path = ? OR asset_path LIKE ?',
-      ).run(newClean, String(newFilename || path.basename(newClean)), nowIso(), oldClean, legacyLike).changes;
+        'UPDATE inbox_items SET asset_path = ?, filename = ?, updated_at = ? WHERE asset_path = ? OR substr(asset_path, length(asset_path) - length(?) + 1) = ?',
+      ).run(newClean, String(newFilename || path.basename(newClean)), nowIso(), oldClean, tail, tail).changes;
       return { assets, inbox };
     });
   }

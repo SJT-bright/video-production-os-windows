@@ -118,8 +118,8 @@ async function postJson(baseUrl, route, value, origin = baseUrl) {
   });
 }
 
-async function importCreativeAsset(baseUrl, folder, name, bytes, origin = baseUrl) {
-  return request(baseUrl, `/api/creative-assets/import?folder=${encodeURIComponent(folder)}&name=${encodeURIComponent(name)}`, {
+async function importCreativeAsset(baseUrl, folder, name, bytes, origin = baseUrl, naming = '') {
+  return request(baseUrl, `/api/creative-assets/import?folder=${encodeURIComponent(folder)}&name=${encodeURIComponent(name)}${naming ? `&naming=${encodeURIComponent(naming)}` : ''}`, {
     method: 'POST',
     body: bytes,
     headers: {
@@ -188,12 +188,12 @@ async function main() {
     const creativeImage = await importCreativeAsset(baseUrl, characterPath, '女主正脸.png', imageBytes);
     assert.equal(creativeImage.status, 201, creativeImage.text);
     assert.equal(creativeImage.payload.type, 'image');
-    // 图片导入只使用纯数字编号。
-    assert.equal(creativeImage.payload.name, '001.png', creativeImage.text);
-    assert.equal(creativeImage.payload.path, `${characterPath}/001.png`);
+    // 图片导入自动按“当前分类名+序号”重命名。
+    assert.equal(creativeImage.payload.name, '人物资产001.png', creativeImage.text);
+    assert.equal(creativeImage.payload.path, `${characterPath}/人物资产001.png`);
     const creativeImageCollision = await importCreativeAsset(baseUrl, characterPath, '女主正脸.png', imageBytes);
     assert.equal(creativeImageCollision.status, 201, creativeImageCollision.text);
-    assert.equal(creativeImageCollision.payload.name, '002.png');
+    assert.equal(creativeImageCollision.payload.name, '人物资产002.png');
     const creativeAudio = await importCreativeAsset(baseUrl, audioPath, '女主声线.wav', Buffer.from('fake-wav-content'));
     assert.equal(creativeAudio.status, 201, creativeAudio.text);
     assert.equal(creativeAudio.payload.type, 'audio');
@@ -219,12 +219,45 @@ async function main() {
     assert.equal(creativeTree.payload.stats.audio, 1);
     assert.equal(creativeTree.payload.stats.video, 1);
     assert.equal(creativeTree.payload.stats.document, 1);
-    assert.ok(JSON.stringify(creativeTree.payload.tree).includes(`${characterPath}/001.png`));
+    assert.ok(JSON.stringify(creativeTree.payload.tree).includes(`${characterPath}/人物资产001.png`));
     assert.equal(JSON.stringify(creativeTree.payload.tree).includes(projectRoot), false, '资产树泄露了绝对路径');
+    // 手动选择保留原文件名；同名仅追加后缀，不消耗拖入编号，也不覆盖字节。
+    const manualImage = await importCreativeAsset(baseUrl, characterPath, '女主正脸.PNG', imageBytes, baseUrl, 'original');
+    assert.equal(manualImage.status, 201, manualImage.text);
+    assert.equal(manualImage.payload.name, '女主正脸.PNG');
+    const duplicateBytes = Buffer.from('another-png-content');
+    const manualDuplicate = await importCreativeAsset(baseUrl, characterPath, '女主正脸.PNG', duplicateBytes, baseUrl, 'original');
+    assert.equal(manualDuplicate.status, 201, manualDuplicate.text);
+    assert.equal(manualDuplicate.payload.name, '女主正脸 (2).PNG');
+    const assetBytes = result => fs.readFileSync(path.join(projectRoot, '创作资产库', result.payload.path));
+    assert.deepEqual(assetBytes(manualImage), imageBytes);
+    assert.deepEqual(assetBytes(manualDuplicate), duplicateBytes);
+    const manualVideo = await importCreativeAsset(baseUrl, videoPath, '第01集-走廊镜头.mp4', Buffer.from('manual-video'), baseUrl, 'original');
+    assert.equal(manualVideo.status, 201, manualVideo.text);
+    assert.equal(manualVideo.payload.name, '第01集-走廊镜头.mp4');
+    const parallelBytes = [Buffer.from('parallel-one'), Buffer.from('parallel-two')];
+    const parallelImports = await Promise.all(parallelBytes.map(bytes =>
+      importCreativeAsset(baseUrl, characterPath, '并行导入.png', bytes, baseUrl, 'original')));
+    parallelImports.forEach((result, index) => {
+      assert.equal(result.status, 201, result.text);
+      assert.deepEqual(assetBytes(result), parallelBytes[index]);
+    });
+    assert.deepEqual(parallelImports.map(result => result.payload.name).sort(), ['并行导入 (2).png', '并行导入.png'].sort());
+    const nextDrop = await importCreativeAsset(baseUrl, characterPath, '拖入的新图.png', imageBytes, baseUrl, 'sequential');
+    assert.equal(nextDrop.status, 201, nextDrop.text);
+    assert.equal(nextDrop.payload.name, '人物资产003.png', '手动导入不能消耗拖入编号');
+    const badNaming = await importCreativeAsset(baseUrl, characterPath, '无效规则.png', imageBytes, baseUrl, 'invalid');
+    assert.equal(badNaming.status, 400, badNaming.text);
+    const libraryVideo = await request(baseUrl, `/api/library-import?project=${encodeURIComponent(project.id)}&kind=video&name=${encodeURIComponent('本地视频原名.MP4')}`, {
+      method: 'POST', body: Buffer.from('library-manual-video'),
+      headers: { 'Content-Type': 'application/octet-stream', Origin: baseUrl, 'Sec-Fetch-Site': 'same-origin' },
+    });
+    assert.equal(libraryVideo.status, 201, libraryVideo.text);
+    assert.equal(libraryVideo.payload.name, '本地视频原名.MP4', '主界面选文件也应保留原名');
     const staleProjectRead = await request(baseUrl, '/api/creative-assets?project=inspiration');
     assert.equal(staleProjectRead.status, 409, '旧工作台仍能读取另一个剧本的资产树');
 
-    const creativePreview = await request(baseUrl, `/api/creative-assets/file?project=${encodeURIComponent(project.id)}&p=${encodeURIComponent(`${characterPath}/001.png`)}`, {
+    const creativePreview = await request(baseUrl, `/api/creative-assets/file?project=${encodeURIComponent(project.id)}&p=${encodeURIComponent(`${characterPath}/人物资产001.png`)}`, {
       headers: { Range: 'bytes=0-3' },
     });
     assert.equal(creativePreview.status, 206, creativePreview.text);
@@ -316,7 +349,7 @@ async function main() {
     const remainingParts = fs.readdirSync(importedRoot, { recursive: true })
       .filter(entry => String(entry).endsWith('.part'));
     assert.deepEqual(remainingParts, [], '导入结束后遗留了临时文件');
-    console.log('MEDIA_IMPORT PASS: creative asset hierarchy/media preview plus video/audio import, validation and cleanup');
+    console.log('MEDIA_IMPORT PASS: picker originals, drop sequences, concurrent collisions, hierarchy/media preview, validation and cleanup');
   } finally {
     if (child.exitCode === null) child.kill();
     await new Promise(resolve => child.exitCode === null ? child.once('exit', resolve) : resolve());

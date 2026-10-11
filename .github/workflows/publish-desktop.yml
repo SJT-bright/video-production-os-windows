@@ -1,0 +1,146 @@
+name: Build and publish desktop App
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Verified release tag'
+        required: true
+        default: 'v1.3.4'
+
+permissions:
+  contents: write
+
+jobs:
+  mac:
+    if: github.repository == 'SJT-bright/video-production-os'
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: 视频制作OS
+    env:
+      VIDEO_OS_FFMPEG_BUILD_ROOT: ${{ github.workspace }}/视频制作OS/media-builds
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: 视频制作OS
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: 视频制作OS/.nvmrc
+          cache: npm
+          cache-dependency-path: 视频制作OS/package-lock.json
+      - name: Assert tag matches the packaged version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node -e "require('node:assert/strict').equal(process.env.RELEASE_TAG, 'v'+require('./package.json').version)"
+      - run: npm ci --no-audit --no-fund
+      - name: Build redistributable audio component for both Mac architectures
+        run: |
+          curl --fail --location --retry 3 --output FFmpeg-6.1.1-source.tar.xz https://ffmpeg.org/releases/ffmpeg-6.1.1.tar.xz
+          bash scripts/build-ffmpeg.sh "$PWD/FFmpeg-6.1.1-source.tar.xz" darwin arm64 "$VIDEO_OS_FFMPEG_BUILD_ROOT"
+          bash scripts/build-ffmpeg.sh "$PWD/FFmpeg-6.1.1-source.tar.xz" darwin x64 "$VIDEO_OS_FFMPEG_BUILD_ROOT"
+          node prepare-media-tools.cjs darwin universal --redistributable
+      - name: Verify shared functional source
+        run: npm run test:source
+      - name: Verify episode parser and native tab menus
+        run: |
+          npx playwright install chromium
+          npm run test:script-import-episodes
+          npm run test:tab-menu-native
+          npm run test:creator-file-access-native
+      - name: Build universal standalone App
+        run: npm run build:mac -- --arch universal --portable
+      - name: Launch packaged App with independent user data
+        run: node test_mac_release.cjs --arch universal
+      - name: Verify packaged audio extraction
+        env:
+          VOICE_TEST_APP_ROOT: dist/public-release/视频制作 OS-darwin-universal/视频制作 OS.app/Contents/Resources/app
+        run: node test_voice_clips.cjs
+      - name: Archive complete application and exact component source
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          mkdir -p release
+          cp FFmpeg-6.1.1-source.tar.xz release/
+          cp THIRD-PARTY-NOTICES.md release/
+          ditto -c -k --sequesterRsrc --keepParent "dist/public-release/视频制作 OS-darwin-universal/视频制作 OS.app" "release/VideoProductionOS-Mac-${RELEASE_TAG}-Universal.zip"
+          cd release
+          shasum -a 256 *.zip *.tar.xz THIRD-PARTY-NOTICES.md > SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: '视频制作 OS ${{ inputs.tag }} · Mac 通用版'
+          body_path: 视频制作OS/RELEASE-NOTES.md
+          make_latest: true
+          fail_on_unmatched_files: true
+          files: 视频制作OS/release/*
+
+  windows:
+    if: github.repository == 'SJT-bright/video-production-os-windows'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      VIDEO_OS_FFMPEG_BUILD_ROOT: ${{ github.workspace }}/media-builds
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Assert tag matches the packaged version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node -e "require('node:assert/strict').equal(process.env.RELEASE_TAG, 'v'+require('./package.json').version)"
+      - run: npm ci --no-audit --no-fund
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: make mingw-w64-x86_64-gcc
+      - name: Build redistributable Windows audio component
+        shell: msys2 {0}
+        run: |
+          curl --fail --location --retry 3 --output FFmpeg-6.1.1-source.tar.xz https://ffmpeg.org/releases/ffmpeg-6.1.1.tar.xz
+          bash scripts/build-ffmpeg.sh "$PWD/FFmpeg-6.1.1-source.tar.xz" win32 x64 "$PWD/media-builds"
+      - name: Prepare verified audio component
+        run: node prepare-media-tools.cjs win32 x64 --redistributable
+      - name: Verify shared functional source
+        run: npm run test:source
+      - name: Verify episode parser
+        run: |
+          npx playwright install chromium
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:script-import-episodes
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build complete Windows package
+        run: npm run build:windows:release
+      - name: Launch real packaged EXE and verify retained tabs and confirmation
+        run: node test_windows_release.cjs
+      - name: Verify bundled audio extraction
+        env:
+          VOICE_TEST_APP_ROOT: dist/视频制作OS-win32-x64/resources/app
+        run: node test_voice_clips.cjs
+      - name: Verify native workflow against the packaged executable
+        env:
+          WORKFLOW_TEST_EXECUTABLE: dist/视频制作OS-win32-x64/视频制作OS.exe
+        run: node test_creator_workflow_native.cjs
+      - name: Archive complete application and exact component source
+        run: |
+          New-Item -ItemType Directory -Path release -Force | Out-Null
+          Copy-Item FFmpeg-6.1.1-source.tar.xz, THIRD-PARTY-NOTICES.md release/
+          Compress-Archive -Path "dist/视频制作OS-win32-x64" -DestinationPath "release/VideoProductionOS-Windows-x64.zip" -CompressionLevel Optimal
+          Get-ChildItem release -File | ForEach-Object {
+            $digest = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$digest  $($_.Name)"
+          } | Set-Content release/SHA256SUMS.txt -Encoding ascii
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: '视频制作 OS ${{ inputs.tag }} · Windows x64'
+          body_path: RELEASE-NOTES.md
+          make_latest: true
+          fail_on_unmatched_files: true
+          files: release/*

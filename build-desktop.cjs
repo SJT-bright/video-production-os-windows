@@ -85,7 +85,7 @@ function backupLegacyDataBeforeReplace() {
 }
 
 async function build() {
-  await prepareMediaTools('win32', 'x64');
+  await prepareMediaTools('win32', 'x64', { redistributable: PORTABLE_RELEASE });
   assertGeneratedTarget(TARGET_DIR);
   const legacyBackup = backupLegacyDataBeforeReplace();
 
@@ -111,6 +111,7 @@ async function build() {
     fs.writeFileSync(path.join(stageDir, 'build-manifest.json'), `${JSON.stringify({
       buildSchemaVersion: BUILD_SCHEMA_VERSION,
       product: '视频制作 OS',
+      appVersion: require('./package.json').version,
       platform: 'win32',
       arch: 'x64',
       builtAt: new Date().toISOString(),
@@ -142,6 +143,8 @@ async function build() {
       electronZipDir: path.dirname(electronZip),
       overwrite: true,
       prune: false,
+      // The public package is already sanitized; preserve the exact source hash.
+      sanitizePackageJson: [value => value],
       asar: false,
     });
     if (!Array.isArray(apps) || apps.length !== 1) {
@@ -150,9 +153,6 @@ async function build() {
     if (path.resolve(apps[0]) !== path.resolve(TARGET_DIR)) {
       throw new Error(`Packager 输出路径异常：${apps[0]}`);
     }
-
-    // Packager 20 会清理开发字段并重写换行；发行合同要求保留原始字节。
-    fs.copyFileSync(path.join(APP_DIR, 'package.json'), path.join(TARGET_DIR, 'resources', 'app', 'package.json'));
 
     const productExe = path.join(TARGET_DIR, `${PRODUCT_NAME}.exe`);
     if (!fs.existsSync(productExe)) {
@@ -181,16 +181,7 @@ async function build() {
   }
 }
 
-// 尚未完成的 Promise 不会保持 Node 活跃，不能把打包器提前退出当作成功。
-let buildSettled = false;
-process.once('beforeExit', () => {
-  if (!buildSettled) {
-    console.error('DESKTOP_BUILD_FAIL 打包任务尚未完成，未生成可验证的 Windows 应用');
-    process.exitCode = 1;
-  }
-});
-build().then(() => { buildSettled = true; }, error => {
-  buildSettled = true;
+build().catch(error => {
   console.error(`DESKTOP_BUILD_FAIL ${error.stack || error}`);
   process.exitCode = 1;
 });

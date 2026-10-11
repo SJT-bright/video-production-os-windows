@@ -37,7 +37,7 @@ with sync_playwright() as p:
     page.add_init_script(float_mock)
     page.goto(args.base + '/float-video.html')
     page.wait_for_load_state('networkidle')
-    page.wait_for_function('() => typeof window.__releaseReady === "function"')
+    page.wait_for_function('typeof window.__releaseReady === "function"')
     before = page.locator('#fvShell').bounding_box()
     for key, expected in {'x':100,'y':170,'width':140,'height':170}.items():
         assert abs(before[key] - expected) < .1, (key, before)
@@ -58,7 +58,7 @@ with sync_playwright() as p:
 
     # 重新浮出时点击卡片可立即中断，拖出无需等 300ms。
     page.evaluate("window.__floatHandlers.prepare({id:'interrupt',left:600,top:120,width:384,height:336,dx:-500,dy:50,scaleX:140/384,scaleY:170/336,anchored:true})")
-    page.wait_for_function("() => window.__floatCalls.at(-1)?.[0] === 'ready'")
+    page.wait_for_function("window.__floatCalls.at(-1)?.[0] === 'ready'")
     page.evaluate("window.__releaseReady(); document.querySelector('#fvCard').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true})); document.querySelector('#fvCard').dispatchEvent(new DragEvent('dragstart',{bubbles:true,cancelable:true}));")
     calls = page.evaluate('window.__floatCalls')
     assert ['settle', 'interrupt'] in calls
@@ -69,7 +69,7 @@ with sync_playwright() as p:
     reduced_page = reduced.new_page()
     reduced_page.add_init_script(float_mock)
     reduced_page.goto(args.base + '/float-video.html')
-    reduced_page.wait_for_function('() => typeof window.__releaseReady === "function"')
+    reduced_page.wait_for_function('typeof window.__releaseReady === "function"')
     assert reduced_page.locator('#fvShell').evaluate("el=>getComputedStyle(el).transform") == 'none'
     reduced_page.evaluate('window.__releaseReady()')
     expect(reduced_page.locator('body')).to_have_attribute('data-presenting', 'false')

@@ -36,14 +36,48 @@ async function fetchFile(url, target, compressed = false) {
   else await pipeline(source, output);
 }
 
-async function prepareMediaTools(platform, arch) {
+const PUBLIC_SOURCE_SHA256 = '8684f4b00f94b85461884c3719382f1261f0d9eb3d59640a1f4ac0873616f968';
+
+function prepareRedistributableTools(platform, arch, root) {
+  const executable = platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+  const directory = path.join(__dirname, 'vendor', 'media-tools', `${platform}-${arch}`);
+  const input = root ? path.join(path.resolve(root), `${platform}-${arch}`) : directory;
+  const binary = path.join(input, executable);
+  const config = fs.readFileSync(path.join(input, 'config.h'), 'utf8');
+  if (!/^#define CONFIG_NONFREE 0$/m.test(config) || !/^#define CONFIG_GPL 0$/m.test(config)
+    || !/^#define CONFIG_VERSION3 0$/m.test(config) || !binaryMatches(binary, platform, arch)) {
+    throw new Error('拒绝发布非 LGPL 或架构不匹配的音频组件');
+  }
+  const readme = fs.readFileSync(binary + '.README', 'utf8');
+  if (!readme.includes(PUBLIC_SOURCE_SHA256)) throw new Error('音频组件缺少固定源码来源');
+  fs.mkdirSync(directory, { recursive: true });
+  for (const name of [executable, executable + '.LICENSE', executable + '.README', 'FFmpeg-LICENSE.md',
+    'config.h', 'config.log', 'configure-output.txt']) {
+    const source = path.join(input, name), target = path.join(directory, name);
+    if (path.resolve(source) !== path.resolve(target)) fs.copyFileSync(source, target);
+  }
+  fs.chmodSync(path.join(directory, executable), 0o755);
+  const manifest = { package: 'FFmpeg 6.1.1', release: 'ffmpeg-6.1.1-lgpl', platform, arch,
+    redistributable: true, license: 'LGPL-2.1-or-later',
+    source: 'https://ffmpeg.org/releases/ffmpeg-6.1.1.tar.xz', sourceSha256: PUBLIC_SOURCE_SHA256,
+    recipe: 'scripts/build-ffmpeg.sh',
+    sha256: crypto.createHash('sha256').update(fs.readFileSync(binary)).digest('hex') };
+  fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+  console.log(`MEDIA_TOOLS_REDISTRIBUTABLE_PASS ${platform}-${arch} ${manifest.sha256}`);
+}
+
+async function prepareMediaTools(platform, arch, options = {}) {
   if (arch === 'universal') {
-    await prepareMediaTools(platform, 'arm64');
-    await prepareMediaTools(platform, 'x64');
+    await prepareMediaTools(platform, 'arm64', options);
+    await prepareMediaTools(platform, 'x64', options);
     return;
   }
   if (!(platform === 'darwin' && ['x64', 'arm64'].includes(arch)) && !(platform === 'win32' && arch === 'x64')) {
     throw new Error(`音频处理组件暂不支持 ${platform}-${arch}`);
+  }
+  if (process.env.VIDEO_OS_FFMPEG_BUILD_ROOT || options.redistributable || process.argv.includes('--redistributable')) {
+    try { return prepareRedistributableTools(platform, arch, process.env.VIDEO_OS_FFMPEG_BUILD_ROOT); }
+    catch (error) { throw new Error('公开构建需先运行 scripts/build-ffmpeg.sh 并设置 VIDEO_OS_FFMPEG_BUILD_ROOT：' + error.message); }
   }
   const pkg = require('ffmpeg-static/package.json');
   const release = pkg['ffmpeg-static']['binary-release-tag'];

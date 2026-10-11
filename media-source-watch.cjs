@@ -20,7 +20,8 @@ function createMediaSourceWatcher({ store, onChange, intervalMs = 4000 }) {
       if (watchers.has(source.id)) continue;
       const entry = { watcher: null };
       try {
-        // 不修改登记的目录，仅给 Windows 监听器传入展开后的真实路径。
+        // Windows short paths must be expanded before entering the native watcher.
+        // The registered asset path is not changed.
         entry.watcher = fs.watch(fs.realpathSync.native(store.directory(source.id)), { recursive: true }, notify);
         entry.watcher.on('error', () => { entry.watcher?.close(); entry.watcher = null; notify(); });
       } catch { /* 不支持递归监听的文件系统使用下方指纹轮询。 */ }

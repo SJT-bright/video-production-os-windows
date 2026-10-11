@@ -157,11 +157,14 @@ async function checkRendererTransitions() {
   const uploads = [];
   Object.assign(context, { Array, encodeURIComponent, activeProjectId: () => context.state.config.project.id,
     libraryPaneEl: { classList: { contains: () => false } }, folderLabel: () => '甲',
+    rejectHistoryWrite: () => false, updateFolderActions() {},
     fetch: async url => { uploads.push(new URL(url, 'http://localhost')); context.state.selectedFolder = '乙/人物资产'; return { ok: true, json: async () => ({}) }; } });
   Object.assign(context.el, { importAssets: {}, assetStatus: {}, assetFileInput: {} });
   context.state.selectedFolder = '乙/生成图片';
   context.showToast = () => {};
-  vm.runInContext(source.slice(source.indexOf('async function importFiles(files)'), source.indexOf('function bindEvents()', source.indexOf('async function importFiles(files)'))), context);
+  const importStart = source.indexOf('async function importFiles(');
+  assert.ok(importStart >= 0, '批量导入函数必须存在');
+  vm.runInContext(source.slice(importStart, source.indexOf('function bindEvents()', importStart)), context);
   await context.importFiles([{ name: '一.png' }, { name: '二.png' }]);
   assert.ok(uploads.every(url => url.searchParams.get('folder') === '乙/生成图片'), '批量导入固定开始时的目录');
   uploads.length = 0; context.state.config.project = a; context.state.selectedFolder = '甲/生成图片';

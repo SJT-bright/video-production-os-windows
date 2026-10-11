@@ -1,7 +1,6 @@
 """分类改名 UI 回归；隔离接口和存储，不读取正式素材。"""
 import argparse
 import json
-import os
 from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright, expect
 
@@ -11,8 +10,7 @@ args = parser.parse_args()
 project = {'id': 'project-folder-ui', 'name': '测试剧本', 'folder': '测试剧本', 'categories': []}
 
 with sync_playwright() as p:
-    chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
-    browser = p.chromium.launch(headless=True, executable_path=chrome if os.path.isfile(chrome) else None)
+    browser = p.chromium.launch(headless=True, executable_path='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')
     errors = []
     for surface in ['image', 'video', 'library']:
         context = browser.new_context(viewport={'width': 1320, 'height': 860})

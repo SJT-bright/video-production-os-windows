@@ -4,7 +4,31 @@
 // Google 登录等页面会通过 navigator.plugins、window.chrome、navigator.webdriver
 // 指纹判断“浏览器可能不安全”并拒绝登录。此 preload 在页面脚本执行前，
 // 通过 webFrame.executeJavaScript 把环境补丁注入主世界，使其与标准 Chrome 一致。
-const { webFrame } = require('electron');
+const { webFrame, webUtils, ipcRenderer } = require('electron');
+
+// Keep the page's File/Fetch APIs untouched. A trusted native drop or file-input
+// choice authorizes only those selected files for GPT's later file-handle reads.
+// No bridge, path, file bytes or permission controls are exposed to page scripts.
+if (window === window.top && location.origin === 'https://chatgpt.com') {
+  const authorizeFiles = (event, files) => {
+    if (!event.isTrusted || !files?.length) return;
+    const paths = [];
+    for (const file of Array.from(files).slice(0, 100)) {
+      try {
+        const selectedPath = webUtils.getPathForFile(file);
+        if (selectedPath) paths.push(selectedPath);
+      } catch {}
+    }
+    // One bounded memory-only IPC precedes the page's first getFile() call.
+    // Async fire-and-forget could race Chromium's separate permission channel.
+    if (paths.length) ipcRenderer.sendSync('creator:selected-file-read', paths);
+  };
+  window.addEventListener('drop', event => authorizeFiles(event, event.dataTransfer?.files), true);
+  window.addEventListener('change', event => {
+    const input = event.target;
+    if (input instanceof HTMLInputElement && input.type === 'file') authorizeFiles(event, input.files);
+  }, true);
+}
 
 // 主世界没有 Node：版本号在 preload 侧算好，再插值进补丁脚本。
 const CHROME_FULL = String(process.versions.chrome || '');

@@ -9,6 +9,9 @@ dist-*/
 build-manifest.json
 runtime-config.json
 /vendor/media-tools/
+/media-builds/
+/release/
+FFmpeg-*-source.tar.xz
 
 # Personal production data, scripts and media stay on this computer
 /data/

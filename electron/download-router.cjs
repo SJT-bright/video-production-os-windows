@@ -75,14 +75,19 @@ function resolveDownloadTarget({
   mimeType,
   projectDirectories,
   videoDisposition = '',
+  episode = 1,
+  platformFolder: savedPlatformFolder = '',
+  legacyDay = '',
   now = new Date(),
   exists,
 }) {
   if (!projectRoot) throw new Error('项目下载目录尚未连接');
   const kind = classifyDownload({ filename, mimeType, mode, serviceId });
   if (kind === 'video' && videoDisposition && !['editable', 'processing'].includes(videoDisposition)) throw new Error('视频下载分类无效');
-  const platformFolder = sanitizeFilename(serviceLabel || serviceId || '其他平台', now);
-  const day = dateFolder(now);
+  const platformFolder = savedPlatformFolder || sanitizeFilename(serviceLabel || serviceId || '其他平台', now);
+  if (platformFolder !== sanitizeFilename(platformFolder, now) || platformFolder.startsWith('.')) throw new Error('下载网站文件夹名称无效');
+  if (kind !== 'file' && (!Number.isSafeInteger(episode) || episode < 1 || episode > 999999)) throw new Error('下载集号无效');
+  if (legacyDay && !/^\d{4}-\d{2}-\d{2}$/.test(legacyDay)) throw new Error('旧下载日期目录无效');
   const isImage = kind === 'image';
   const scopedDirectories = projectDirectories && typeof projectDirectories === 'object' ? projectDirectories : null;
   const directoryKey = kind === 'file' ? 'downloads' : kind;
@@ -96,15 +101,21 @@ function resolveDownloadTarget({
       : kind === 'audio'
         ? (scopedDirectories?.audio || path.join(projectRoot, '素材库', '浏览器生成'))
         : (scopedDirectories?.video || path.join(projectRoot, '素材库', '浏览器生成'));
-  // New project video imports share a material folder across dates. Old dated
-  // directories and recovery journal paths remain valid and are not migrated.
-  const group = kind === 'video' && scopedDirectories ? '素材001' : day;
-  const directory = kind === 'video' && videoDisposition
-    ? path.join(base, videoDisposition === 'editable' ? '可剪辑' : '待处理', platformFolder, group)
-    : path.join(base, platformFolder, group);
+  const episodeFolder = kind === 'file' ? '' : `第${episode}集`;
+  const dispositionFolder = videoDisposition === 'editable' ? '可剪辑' : '待处理';
+  // Only unfinished downloads from an older journal retain a dated target.
+  // New media is website / episode; documents stay directly under website.
+  const directory = legacyDay
+    ? (kind === 'video' && videoDisposition
+      ? path.join(base, dispositionFolder, platformFolder, legacyDay)
+      : path.join(base, platformFolder, legacyDay))
+    : (kind === 'video' && videoDisposition
+      ? path.join(base, platformFolder, episodeFolder, dispositionFolder)
+      : path.join(base, platformFolder, episodeFolder));
   const safeName = sanitizeFilename(filename, now);
   const targetPath = uniquePath(path.join(directory, safeName), exists);
-  return { kind, directory, targetPath, isImage, projectScoped: !!scopedDirectories };
+  return { kind, directory, targetPath, isImage, projectScoped: !!scopedDirectories,
+    platformFolder, episode: kind === 'file' || legacyDay ? null : episode, episodeLabel: legacyDay ? '' : episodeFolder };
 }
 
 async function deleteBrowserDownloadFile({ libraryRoot, downloadsRoot, relativePath }) {

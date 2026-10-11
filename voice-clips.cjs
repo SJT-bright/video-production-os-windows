@@ -249,6 +249,13 @@ function createVoiceClipService({ assetRoot, projectStore, onSaved = () => {} })
         if (session.releaseRequested || closed) expire(token);
       }
     },
+    relocateSources(oldPath, newPath, isFolder) {
+      for (const session of sessions.values()) {
+        if (session.sourcePath === oldPath || (isFolder && session.sourcePath.startsWith(`${oldPath}/`))) {
+          session.sourcePath = newPath + session.sourcePath.slice(oldPath.length);
+        }
+      }
+    },
     release(token, projectId) {
       const session = sessions.get(String(token || ''));
       if (session?.projectId === projectId) expire(token);

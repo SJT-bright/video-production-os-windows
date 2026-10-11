@@ -19,6 +19,12 @@ assert.deepEqual(Order.orderFolders(ascending, ['已删除', '核绘/2026-09-18'
 const mixed = [folder('场景资产'), folder('2026-09-10'), folder('人物资产'), folder('2026-10-08')];
 assert.deepEqual(Order.orderFolders(mixed, ['核绘/人物资产', '核绘/2026-09-10', '核绘/场景资产']).map(item => item.node.name),
   ['人物资产', '2026-10-08', '场景资产', '2026-09-10'], '普通分类保留手动顺序，日期槽位保持倒序');
+const episodes = ['第10集', '第2集', '第1集', '第99集'];
+assert.deepEqual(Order.orderFolders(episodes.map(folder), episodes.map(name => `核绘/${name}`)).map(item => item.node.name),
+  ['第1集', '第2集', '第10集', '第99集'], '分集按数字排列，不沿用旧手动顺序');
+assert.deepEqual(episodes.map(name => `核绘/${name}/可剪辑`).sort(Order.compareFolderPaths),
+  ['第1集', '第2集', '第10集', '第99集'].map(name => `核绘/${name}/可剪辑`));
+for (const invalid of ['第0集', '第01集', '第1000000集', '第一集', '第2集参考']) assert.equal(Order.episodeFolderKey(invalid), 0);
 assert.equal(Order.dateFolderKey('2024-02-29'), '2024-02-29');
 for (const invalid of ['2026-02-29', '2026-13-01', '2026-09-00', '2026-9-1', '视频2026-10-08', '2026-10-08.mp4']) {
   assert.equal(Order.dateFolderKey(invalid), '', invalid);

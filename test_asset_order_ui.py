@@ -157,15 +157,6 @@ with sync_playwright() as p:
     assert newest_row.locator('xpath=following-sibling::*[1]').locator('.folder-file').all_text_contents() == ['生成-002.mp4', '生成-001.mp4']
     assert newest_row.locator('xpath=following-sibling::*[1]').locator('.folder-file[draggable="true"]').count() == 2
 
-    tray = context.new_page()
-    tray.on('pageerror', lambda error: errors.append(str(error)))
-    tray.goto(args.base + '/drag-tray.html')
-    tray.wait_for_load_state('networkidle')
-    tray_paths = tray.locator('.tray-card').evaluate_all('(cards) => cards.map(card => card.dataset.path)')
-    assert [name.split('/')[-2] for name in tray_paths] == [date for date in newest for _ in range(2)]
-    assert tray.locator('.tray-card[draggable="true"]').count() == 12
-    assert tray.locator('.tray-badge').first.inner_text().endswith('10/8')
-
     main = context.new_page()
     main.on('pageerror', lambda error: errors.append(str(error)))
     main.goto(args.base + '/')
@@ -191,12 +182,9 @@ with sync_playwright() as p:
     assert quick_dates(parent) == [new_date] + newest
     expect(library.locator('#assetGrid .asset-card')).to_have_count(37)
     assert library.locator('#assetGrid .asset-card').first.get_attribute('data-path') == new_path
-    tray.locator('#trayRefresh').click()
-    expect(tray.locator('.tray-card')).to_have_count(13)
-    assert tray.locator('.tray-card').first.get_attribute('data-path') == new_path
     assert not errors, errors
     report = {'passed': True, 'dateOrder': newest,
-              'checks': ['旧缓存不覆盖日期排序', '未保存的新日期自动置顶', '图片与视频模式', '普通分类键盘换位保留', '完整资产树和网格', '按文件夹日期倒序', '同日新文件置顶', '卡片拖动属性保留', '浏览器下载文件夹与文件', '剪映联动', '媒体列表', '运行中新下载自动刷新置顶'],
+              'checks': ['旧缓存不覆盖日期排序', '未保存的新日期自动置顶', '图片与视频模式', '普通分类键盘换位保留', '完整资产树和网格', '按文件夹日期倒序', '同日新文件置顶', '卡片拖动属性保留', '浏览器下载文件夹与文件', '媒体列表', '运行中新下载自动刷新置顶'],
               'scope': '隔离源代码页面，creatorAPI 测试适配器；不代表已安装 App 已更新'}
     (out / 'ui-report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     browser.close()

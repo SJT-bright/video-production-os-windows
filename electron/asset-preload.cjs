@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('assetAPI', Object.freeze({
   showProjectPicker: () => ipcRenderer.invoke('asset:show-project-picker'),
   pickSourceFolder: () => ipcRenderer.invoke('asset:pick-source-folder'),
   onPanelState: callback => subscribe('asset:panel-state', callback),
+  onDownloadEpisodesChanged: callback => subscribe('asset:download-episodes-changed', callback),
   onDragResult: callback => subscribe('asset:drag-result', callback),
   onFocusAsset: callback => subscribe('asset:focus-asset', callback),
   consumePendingFocus: () => ipcRenderer.invoke('asset:consume-pending-focus'),

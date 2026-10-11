@@ -5,6 +5,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { verifyPackagedApp } = require('./verify-build-manifest.cjs');
 const { MAC_PROJECT_ROOT_FROM_APP } = require('./electron/runtime-project-path.cjs');
+const { formalDeploymentTarget, assertFormalRuntimeConfig } = require('./formal-deployment-contract.cjs');
 
 const EXECUTABLE_NAME = 'VideoProductionOS';
 
@@ -33,6 +34,8 @@ function assertMacBundle(options = {}) {
   const dataDir = path.resolve(options.dataDir || '');
   const arch = options.arch;
   if (!['arm64', 'x64', 'universal'].includes(arch)) throw new Error('macOS Bundle 架构无效');
+  const formalTarget = options.installAppBundle ? formalDeploymentTarget({ projectRoot, dataDir,
+    installAppBundle: options.installAppBundle, arch, portable: options.portable }) : null;
   const contents = path.join(appBundle, 'Contents');
   const executable = path.join(contents, 'MacOS', EXECUTABLE_NAME);
   const plist = path.join(contents, 'Info.plist');
@@ -67,7 +70,16 @@ function assertMacBundle(options = {}) {
     throw new Error('macOS Bundle 缺少可重定位项目根目录契约');
   }
   const relocatedProjectRoot = path.resolve(appRoot, verified.runtimeConfig.projectRootFromBundle);
-  if (!options.portable && relocatedProjectRoot !== projectRoot) {
+  assertFormalRuntimeConfig(verified.runtimeConfig, formalTarget);
+  if (formalTarget) {
+    const bundleId = runMacTool('plutil', ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', plist], '正式 Bundle ID 读取');
+    const version = runMacTool('plutil', ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', plist], '正式版本读取');
+    if (bundleId !== 'local.video-production-os') throw new Error('正式部署包的 Bundle ID 不匹配');
+    if (version !== verified.manifest.appVersion || version !== require(path.join(sourceRoot, 'package.json')).version) {
+      throw new Error('正式部署包的版本与源码/manifest 不一致');
+    }
+  }
+  if (!options.portable && !formalTarget && relocatedProjectRoot !== projectRoot) {
     throw new Error(`macOS Bundle 项目根目录回溯错误：期望 ${projectRoot}，实际 ${relocatedProjectRoot}`);
   }
   return {
@@ -75,6 +87,7 @@ function assertMacBundle(options = {}) {
     executable,
     plist,
     executableArchs,
+    ...(formalTarget ? { formalDeploymentTarget: formalTarget, stagedBundle: appBundle !== formalTarget.installAppBundle } : {}),
     ...verified,
   };
 }

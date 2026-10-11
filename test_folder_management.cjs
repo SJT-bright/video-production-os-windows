@@ -51,10 +51,9 @@ const write = (name, data) => fs.writeFileSync(path.join(fixture, 'data', name),
     assert.equal(reopened.category(project.id, 'finals').label, '最后的成品');
     assert.ok(!fs.existsSync(path.join(assetRoot, old)), '扫描和重启不能补回旧分类');
     const uploads = await Promise.all(Array.from({ length: 5 }, () => api(`/api/creative-assets/import?project=${project.id}&folder=${encodeURIComponent(renamed)}&name=original.mp4`, movie, true)));
-    assert.deepEqual(uploads.map(item => item.name).sort(), [1, 2, 3, 4, 5].map(n => `00${n}.mp4`));
-    fs.unlinkSync(path.join(assetRoot, renamed, '005.mp4'));
-    assert.equal(nextSequentialImportName(path.join(assetRoot, renamed), '最后的成品', 'input.mov'), '006.mov');
-    assert.equal(nextSequentialImportName(path.join(assetRoot, renamed), '改名不重置编号', 'input.png'), '007.png');
+    assert.deepEqual(uploads.map(item => item.name).sort(), [1, 2, 3, 4, 5].map(n => `最后的成品00${n}.mp4`));
+    fs.unlinkSync(path.join(assetRoot, renamed, '最后的成品005.mp4'));
+    assert.equal(nextSequentialImportName(path.join(assetRoot, renamed), '最后的成品', 'input.mov'), '最后的成品006.mov');
     const scan = await api('/api/scan');
     assert.ok(scan.files.filter(item => item.relativePath?.startsWith(renamed)).every(item => item.meta.isFinal));
     const exports = server.editorExports.snapshot(project.id);
@@ -64,7 +63,7 @@ const write = (name, data) => fs.writeFileSync(path.join(fixture, 'data', name),
     assert.equal(read('audio-library.json').ignoredPaths[0], `${project.folder}/角色声音/忽略.wav`);
     const wav = Buffer.alloc(100); wav.write('RIFF'); wav.writeUInt32LE(92, 4); wav.write('WAVE', 8);
     const importedVoice = await api(`/api/library-import?project=${project.id}&kind=audio&name=old.wav`, wav, true);
-    assert.equal(importedVoice.name, '001.wav');
+    assert.equal(importedVoice.name, 'old.wav', '文件选择器音频导入保留原名称');
     await api('/api/scan');
     assert.ok(read('audio-library.json').items.some(item => item.path === importedVoice.path && item.kind === 'voice'));
     assert.throws(() => server.renameCreativeFolder(project.id, renamed, '人物资产'), /已经存在/);

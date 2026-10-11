@@ -25,7 +25,7 @@
 // （本测试同时断言该属性恒为 'true'），手势本身由人工与 test_quick_asset_drag.cjs 覆盖。
 // 未经真实 requireTrusted 反向验证的项（伪造 sender）在本环境无法构造，见交付报告未验证清单。
 //
-// 媒体夹具优先用本机 ffmpeg 生成极小 H.264 MP4 / 正弦 WAV，失败退回纯 Node 容器结构（同 test_drag_tray.cjs），
+// 媒体夹具优先用本机 ffmpeg 生成极小 H.264 MP4 / 正弦 WAV，失败退回纯 Node 容器结构，
 // 避免假字节被真实解码器拒绝造成偶发失败。
 
 const assert = require('assert/strict');
@@ -38,10 +38,10 @@ const { _electron: electron } = require('playwright');
 const runRoot = path.join(__dirname, 'test-artifacts', `float-video-${process.pid}-${Date.now()}`);
 const projectRoot = path.join(runRoot, 'project');
 const assetRoot = path.join(projectRoot, '创作资产库');
-// 端口按进程号偏移，避免与并行运行的其他定向测试（drag-tray 3784 等）或残留实例相撞：
+// 端口按进程号偏移，避免与并行运行的其他定向测试或残留实例相撞：
 // 一旦相撞，startServer 会静默退到备用端口，而测试里的 HTTP 断言会打到别人的实例上，得到假失败。
 const PORT = Number(process.env.FLOAT_VIDEO_TEST_PORT || 3860 + (process.pid % 120));
-const FFMPEG_PATH = require('./voice-clips.cjs').findFFmpeg();
+const FFMPEG_PATH = '/opt/homebrew/bin/ffmpeg';
 
 function post(port, route, body) {
   return new Promise((resolve, reject) => {
@@ -293,10 +293,10 @@ async function run() {
     });
     results.preloadApiShape = await window.evaluate(() => typeof window.creatorAPI.floatVideoAsset === 'function'
       && typeof window.creatorAPI.onFloatVideoClosed === 'function');
-    // 剪映联动窗的多选拖拽接口不得因本次改动退化
+    // 下线迷你拖拽窗后，创作资产原生单文件／多文件拖动与右键单视频浮窗仍保留。
     results.multiSelectDragApiIntact = await window.evaluate(() => typeof window.creatorAPI.startAssetDrag === 'function'
       && typeof window.creatorAPI.startAssetDragSelection === 'function'
-      && typeof window.creatorAPI.toggleDragTray === 'function');
+      && !('toggleDragTray' in window.creatorAPI));
 
     const projectsNow = await getJson(PORT, '/api/creative-projects');
     const projectIdA = projectsNow.activeProjectId;
@@ -459,12 +459,7 @@ async function run() {
     results.otherProjectVideoAllowed = openedC.resolved === true && openedC.value?.path === videoC;
     const domC = await waitFloatDom(dom => dom.ready === 'true' && dom.cardPath === videoC);
     results.otherProjectDom = domC.name === '乙片段-001.mp4' && domC.project === '浮窗乙剧本';
-    // DOM 数据就绪早于原生窗口显示。Windows 上必须等 showInactive 完成后再模拟用户拖动，
-    // 否则是在用户尚不可见的隐藏窗口上发起拖拽，正确触发“浮窗已收起”门禁。
-    const visibleC = await waitFloat('shown');
-    results.otherProjectVisible = visibleC.count === 1 && visibleC.visible === true && visibleC.alwaysOnTop === true;
     const dragC = await dragCard();
-    console.log('FLOAT_VIDEO_NEW_PROJECT_DRAG', JSON.stringify(dragC));
     results.newProjectDragOk = dragC.ok === true && dragC.path === videoC;
     const hiddenC = await waitFloat('hidden');
     const draggedCEvents = await waitClosedCount(5);

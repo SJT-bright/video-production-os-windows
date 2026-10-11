@@ -18,7 +18,7 @@ const VideoDisposition = require('./assets/ui/video-disposition.js');
     const a = store.create({ name: '下载剧本甲' }), b = store.create({ name: '下载剧本乙' });
     const targetFor = entry => resolveDownloadTarget({ projectRoot: root, filename: entry.filename, mimeType: 'video/mp4',
       serviceId: entry.serviceId, serviceLabel: entry.serviceLabel, videoDisposition: entry.choice,
-      projectDirectories: { video: store.category(entry.projectId, 'generated-videos').absolutePath }, now: new Date(`${entry.day}T12:00:00`) }).targetPath;
+      projectDirectories: { video: store.category(entry.projectId, 'generated-videos').absolutePath }, legacyDay: entry.day }).targetPath;
     const validateTarget = (entry, destination) => {
       const base = path.join(store.category(entry.projectId, 'generated-videos').absolutePath, entry.choice === 'processing' ? '待处理' : '可剪辑');
       const relative = path.relative(base, destination);
@@ -36,7 +36,7 @@ const VideoDisposition = require('./assets/ui/video-disposition.js');
     review.choose(first.id, 'processing');
     store.activate(b.id);
     const pending = await review.finalize(first.id);
-    assert.ok(pending.path.split(path.sep).join('/').includes('下载剧本甲/生成视频/待处理/核绘/素材001/'));
+    assert.ok(pending.path.includes('下载剧本甲/生成视频/待处理/核绘/2026-10-08/'));
     assert.equal(fs.readFileSync(pending.path, 'utf8'), 'complete video');
     assert.equal(VideoDisposition.of({ path: path.relative(assets, pending.path) }), 'processing');
     assert.equal(review.list().length, 0);

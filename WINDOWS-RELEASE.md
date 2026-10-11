@@ -1,36 +1,9 @@
-# Windows 下载与发布
+# Windows 发布
 
-2026-10-11：最新开源源码为 [source-v1.2.4](https://github.com/SJT-bright/video-production-os-windows/tree/source-v1.2.4)，同步人物音频截取、下载分类、模板迁移、分类改名及纯数字编号。运行与构建见 [WINDOWS-REPRODUCE.md](WINDOWS-REPRODUCE.md)。本次为源码发布，下面的旧版安装包不自动更新。
+[最新版 v1.3.4](https://github.com/SJT-bright/video-production-os-windows/releases/tag/v1.3.4) · [源码及构建说明](WINDOWS-REPRODUCE.md)。
 
-[下载最新版](https://github.com/SJT-bright/video-production-os-windows/releases/latest)
+完整解压 `VideoProductionOS-Windows-x64.zip`，双击里面的 `视频制作OS.exe`。不要只提取或移动 EXE；软件运行需要同目录的 DLL、resources、locales 和音频组件。
 
-当前公开 Windows 安装包为 v1.2.3。Mac 源码 v1.2.4 同步的新增人物音频截取、视频下载待处理分类和固定模板迁移，不代表 Windows 安装包也已更新；两条发布渠道分别验证。
+升级时只替换软件文件夹，不删除 `%APPDATA%\视频制作 OS`，素材和登录不放在发布包内。源码运行与下载版工作区独立，不会自动导入作者的数据或源码开发数据。
 
-下载 `VideoProductionOS-Windows-x64.zip`，完整解压后双击 `视频制作OS.exe`。无需安装 Node.js。EXE 必须与旁边的 DLL、resources、locales 等文件保持在一起；旧版只提供单个主 EXE，不能作为完整安装包使用。
-
-Windows x64 下载版与主项目同步创作浏览器、分剧本资产、音频／成片索引与固定提示词代码。第三方平台仍可能限制内嵌登录。
-
-## 数据留存
-
-- 素材、剧本注册表及数据库：`%APPDATA%\视频制作 OS\workspace`
-- 浏览器登录、标签记忆和网站入口：`%APPDATA%\视频制作 OS`
-- 更新时退出应用，解压新版到新的软件文件夹并启动；原用户目录继续复用。
-- 不包含开发者的剧本、素材、数据库或登录信息。源码绑定构建的数据仍留在原项目目录，不会自动迁入下载版。
-
-## 构建
-
-需要 Node.js 22.12+，在源码目录执行：
-
-```powershell
-npm ci
-npm run build:windows:release
-node test_windows_release.cjs
-```
-
-输出目录：`dist/视频制作OS-win32-x64`。`--portable` 不记录构建机绝对路径。`npm run build:desktop` 仍用于绑定本机源码项目的开发包。
-
-## GitHub Release
-
-仅 Windows 独立仓库运行 `Release Windows EXE` 工作流。推送 `v*` 标签，或从 Actions 手动输入新版本标签，即执行构建、资源哈希核验、Windows EXE 启动与数据路径检查，发布完整 ZIP 和 `SHA256SUMS.txt`。
-
-不要把 GitHub 自动生成的 Source code ZIP 当作可运行软件包。
+构建必须在实际 Windows runner 完成启动验收；仅在 Mac 生成 EXE 文件不算 Windows 运行通过。每次 Release 附有 SHA256SUMS、FFmpeg 对应源码与第三方说明。

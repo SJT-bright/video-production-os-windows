@@ -7,26 +7,31 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const { packager } = require('@electron/packager');
-const packagerUnzip = require('./node_modules/@electron/packager/dist/unzip.js');
 const { SOURCE_FILES, SOURCE_DIRS, BUILD_SCHEMA_VERSION } = require('./build-contract.cjs');
 const { assertMacBundle, EXECUTABLE_NAME } = require('./verify-mac-bundle.cjs');
 const { MAC_PROJECT_ROOT_FROM_APP } = require('./electron/runtime-project-path.cjs');
 const { prepareMediaTools } = require('./prepare-media-tools.cjs');
+const { candidateBuildOptions } = require('./candidate-contract.cjs');
+const { formalBuildOptions } = require('./formal-deployment-contract.cjs');
 
 const APP_DIR = __dirname;
 const PROJECT_ROOT = path.dirname(APP_DIR);
+const CANDIDATE = candidateBuildOptions(process.argv.slice(2), APP_DIR);
 const DIST_ROOT = path.resolve(readArg('--out') || path.join(APP_DIR, 'dist'));
 const PRODUCT_NAME = '视频制作 OS';
-const BUNDLE_ID = 'local.video-production-os';
+const BUNDLE_ID = CANDIDATE?.bundleId || 'local.video-production-os';
 const packageInfo = require('./package.json');
-const PORTABLE_RELEASE = process.argv.includes('--portable');
+const PORTABLE_RELEASE = !!CANDIDATE || process.argv.includes('--portable');
 const execFileAsync = promisify(execFile);
 
 // Packager 18's legacy ZIP reader can stall under Node 26. macOS ditto is the
 // system-native extractor and preserves Electron framework links and modes.
-packagerUnzip.extractElectronZip = async (zipPath, targetDir) => {
-  await execFileAsync('/usr/bin/ditto', ['-x', '-k', zipPath, targetDir]);
-};
+if (Number(require('./node_modules/@electron/packager/package.json').version.split('.')[0]) < 20) {
+  const packagerUnzip = require('./node_modules/@electron/packager/dist/unzip.js');
+  packagerUnzip.extractElectronZip = async (zipPath, targetDir) => {
+    await execFileAsync('/usr/bin/ditto', ['-x', '-k', zipPath, targetDir]);
+  };
+}
 
 function readArg(name) {
   const index = process.argv.indexOf(name);
@@ -70,7 +75,8 @@ async function build() {
   if (process.platform !== 'darwin') throw new Error('macOS .app 必须在真实 macOS 主机上构建；Windows 只维护构建脚本和静态契约。');
   const arch = readArg('--arch') || process.env.VIDEO_OS_MAC_ARCH || process.arch;
   if (!['arm64', 'x64', 'universal'].includes(arch)) throw new Error('未知 macOS 架构');
-  await prepareMediaTools('darwin', arch);
+  const formalTarget = formalBuildOptions(process.argv.slice(2), { arch, appDir: APP_DIR });
+  await prepareMediaTools('darwin', arch, { redistributable: PORTABLE_RELEASE });
   const electronVersion = require('./node_modules/electron/package.json').version;
   const { downloadArtifact } = await import('@electron/get');
   const electronZip = await downloadArtifact({
@@ -96,19 +102,27 @@ async function build() {
     }
     const runtimeConfig = {
       ...(PORTABLE_RELEASE ? { dataLocation: 'userData' } : {
-        projectRoot: PROJECT_ROOT,
-        dataDir: path.join(APP_DIR, 'data'),
+        projectRoot: formalTarget?.projectRoot || PROJECT_ROOT,
+        dataDir: formalTarget?.dataDir || path.join(APP_DIR, 'data'),
       }),
       compatibilityMode: false,
       buildSchemaVersion: BUILD_SCHEMA_VERSION,
       platform: 'darwin',
       arch,
       projectRootFromBundle: MAC_PROJECT_ROOT_FROM_APP,
+      ...(formalTarget ? { formalInstallApp: formalTarget.installAppBundle } : {}),
+      ...(CANDIDATE ? {
+        candidate: true,
+        candidateId: CANDIDATE.id,
+        candidateUserData: CANDIDATE.userData,
+        candidateVersion: CANDIDATE.version,
+      } : {}),
     };
     fs.writeFileSync(path.join(stageDir, 'runtime-config.json'), `${JSON.stringify(runtimeConfig, null, 2)}\n`, 'utf-8');
     fs.writeFileSync(path.join(stageDir, 'build-manifest.json'), `${JSON.stringify({
       buildSchemaVersion: BUILD_SCHEMA_VERSION,
       product: PRODUCT_NAME,
+      appVersion: CANDIDATE?.version || packageInfo.version,
       platform: 'darwin', arch, builtAt: new Date().toISOString(),
       sourceHashes: collectSourceHashes(), runtimeConfig,
     }, null, 2)}\n`, 'utf-8');
@@ -124,17 +138,22 @@ async function build() {
       appCategoryType: 'public.app-category.productivity',
       icon: path.join(APP_DIR, 'assets', 'app-icon.icns'),
       extendInfo: { CFBundleDisplayName: PRODUCT_NAME },
-      appVersion: packageInfo.version,
+      appVersion: CANDIDATE?.version || packageInfo.version,
       buildVersion: String(Date.now()),
       darwinDarkModeSupport: true,
       overwrite: true,
       prune: false,
+      // The public package is already sanitized; preserve the exact source hash.
+      sanitizePackageJson: [value => value],
       asar: false,
+      ...(arch === 'universal' ? { osxUniversal: {
+        // Both architecture-specific standalone tools are deliberately included
+        // in both Electron slices; they are not Electron files to lipo together.
+        x64ArchFiles: 'Contents/Resources/app/vendor/media-tools/darwin-*/ffmpeg',
+      } } : {}),
     });
     if (!Array.isArray(apps) || apps.length !== 1) throw new Error('Packager 没有返回唯一 macOS 应用路径');
     const appBundle = path.join(apps[0], `${PRODUCT_NAME}.app`);
-    // 在本机签名前恢复源码清单所校验的原始 package.json。
-    fs.copyFileSync(path.join(APP_DIR, 'package.json'), path.join(appBundle, 'Contents', 'Resources', 'app', 'package.json'));
     await execFileAsync('/usr/bin/plutil', [
       '-replace', 'CFBundleDisplayName', '-string', PRODUCT_NAME,
       path.join(appBundle, 'Contents', 'Info.plist'),
@@ -148,8 +167,9 @@ async function build() {
     assertMacBundle({
       appBundle,
       sourceRoot: APP_DIR,
-      projectRoot: PROJECT_ROOT,
-      dataDir: path.join(APP_DIR, 'data'),
+      projectRoot: formalTarget?.projectRoot || PROJECT_ROOT,
+      dataDir: formalTarget?.dataDir || path.join(APP_DIR, 'data'),
+      installAppBundle: formalTarget?.installAppBundle,
       arch,
       portable: PORTABLE_RELEASE,
     });

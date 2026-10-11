@@ -287,6 +287,11 @@ body[data-audio-mode="true"] #normalizeNames, body[data-audio-mode="true"] #newS
   font-size: 11px; cursor: pointer; text-align: left;
 }
 .move-folder-row:hover { border-color: rgba(0,122,255,.42); background: var(--accent-soft); }
+.move-folder-name { overflow-wrap: anywhere; }
+.folder-create-row { min-height: 34px; margin: 3px 0; }
+.asset-context-menu { position: fixed; z-index: 10000; min-width: 150px; padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface, #fff); box-shadow: 0 10px 30px rgba(0,0,0,.18); }
+.asset-context-menu button { display: block; width: 100%; min-height: 32px; padding: 5px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.asset-context-menu button:hover, .asset-context-menu button:focus-visible { background: var(--accent-soft); outline: none; }
 .move-folder-empty { margin: 2px 15px 8px; color: var(--faint); font-size: 10px; }
 .media-placeholder { width: 100%; height: 100%; display: grid; place-items: center; background: radial-gradient(ellipse at 45% 20%, #fff 0%, #edf2fa 70%, #e2e9f3 100%); }
 .media-placeholder.audio { background: radial-gradient(ellipse at 45% 20%, #fff 0%, #edf5f0 70%, #dfeae7 100%); }

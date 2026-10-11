@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const AssetOrder = require('./assets/ui/asset-order.js');
+const { setImmediate: yieldToMainLoop } = require('node:timers/promises');
 
 const TYPE_EXTENSIONS = Object.freeze({
   image: new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif']),
@@ -171,6 +172,67 @@ function buildCreativeAssetTree(root, { maxEntries = 20000, scopePath = '', incl
   };
 }
 
+// Read-only listing for the HTTP/UI path. Keep the synchronous helper for short
+// mutation checks, but never let a large listing monopolize Electron's UI loop.
+async function buildCreativeAssetTreeAsync(root, { maxEntries = 20000, maxDepth = 32, scopePath = '', includeFile = null } = {}) {
+  const realRoot = ensureCreativeAssetRoot(root);
+  const normalizedScope = normalizeRelativePath(String(scopePath || ''), { allowRoot: true });
+  if (normalizedScope === null) throw new Error('创作资产范围无效');
+  const scope = normalizedScope ? resolveCreativeAsset(realRoot, normalizedScope, 'folder') : { abs: realRoot, rel: '' };
+  if (!scope) throw new Error('创作资产范围不存在');
+  const stats = { folders: 0, files: 0, image: 0, audio: 0, video: 0, document: 0, other: 0, bytes: 0 };
+  let remaining = Math.max(1, Number(maxEntries) || 20000), truncated = false, visited = 0;
+  const walk = async (absolute, relative, depth) => {
+    const children = [], entries = [];
+    let handle;
+    try {
+      const stat = await fs.promises.lstat(absolute);
+      const real = await fs.promises.realpath(absolute);
+      if (stat.isSymbolicLink() || !stat.isDirectory() || !isWithin(realRoot, real)) return { children, fileCount: 0 };
+      handle = await fs.promises.opendir(absolute);
+      for await (const entry of handle) {
+        if (remaining <= 0) { truncated = true; break; }
+        remaining--; visited++;
+        if (visited % 128 === 0) await yieldToMainLoop();
+        if (entry.name.startsWith('.') || entry.isSymbolicLink() || entry.name.toLowerCase().endsWith('.prompt.txt')) continue;
+        entries.push(entry);
+      }
+    } catch { return { children, fileCount: 0 }; }
+    entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name, 'zh-CN'));
+    const ordered = [...AssetOrder.orderFolders(entries.filter(entry => entry.isDirectory())), ...entries.filter(entry => !entry.isDirectory())];
+    let fileCount = 0;
+    for (const entry of ordered) {
+      const childRelative = relative ? `${relative}/${entry.name}` : entry.name;
+      const childAbsolute = path.join(absolute, entry.name);
+      if (entry.isDirectory()) {
+        stats.folders++;
+        let nested = { children: [], fileCount: 0 };
+        if (depth < maxDepth && remaining > 0) nested = await walk(childAbsolute, childRelative, depth + 1);
+        else truncated = true;
+        fileCount += nested.fileCount;
+        children.push({ kind: 'folder', name: entry.name, path: childRelative, fileCount: nested.fileCount, children: nested.children });
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      let stat;
+      try {
+        stat = await fs.promises.lstat(childAbsolute);
+        if (stat.isSymbolicLink() || !stat.isFile()) continue;
+      } catch { continue; }
+      const type = classifyCreativeAsset(entry.name) || 'other';
+      if (includeFile && !includeFile(childRelative, stat, type)) continue;
+      fileCount++; stats.files++; stats[type]++; stats.bytes += stat.size;
+      children.push({ kind: 'file', name: entry.name, path: childRelative, ext: path.extname(entry.name).toLowerCase(), type,
+        size: stat.size, sizeText: formatBytes(stat.size), mtime: stat.mtime.toISOString() });
+    }
+    return { children: [...children.filter(child => child.kind === 'folder'), ...children.filter(child => child.kind === 'file').sort(AssetOrder.newestFirst)], fileCount };
+  };
+  const rootNode = await walk(scope.abs, scope.rel, 0);
+  const rootName = scope.rel ? path.basename(scope.rel) : path.basename(realRoot);
+  return { available: true, rootName, scopePath: scope.rel, stats: { ...stats, sizeText: formatBytes(stats.bytes) }, truncated,
+    tree: { kind: 'folder', name: rootName, path: scope.rel, fileCount: rootNode.fileCount, children: rootNode.children } };
+}
+
 function validateFolderName(value) {
   const name = String(value || '').trim();
   if (!name || name.length > 80) throw new Error('文件夹名称应为 1—80 个字符');
@@ -201,6 +263,7 @@ function createCreativeAssetFolder(root, parentPath, requestedName) {
 module.exports = {
   TYPE_EXTENSIONS,
   buildCreativeAssetTree,
+  buildCreativeAssetTreeAsync,
   classifyCreativeAsset,
   createCreativeAssetFolder,
   ensureCreativeAssetRoot,

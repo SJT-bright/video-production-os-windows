@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { sanitizeFilename } = require('./download-router.cjs');
+const { normalizeSnapshot } = require('./download-episodes.cjs');
 
 // 下载过程不暴露半成品到资产树。日志只记本地路径和分类，不存网址、Cookie 或登录信息。
 function createDownloadReview({ dataDir, targetFor, validateTarget }) {
@@ -62,9 +63,14 @@ function createDownloadReview({ dataDir, targetFor, validateTarget }) {
   return Object.freeze({
     begin(info) {
       if (!/^dl-[a-zA-Z0-9-]+$/.test(info.id || '') || Object.hasOwn(entries, info.id)) throw new Error('视频下载记录重复或无效');
+      const episodeSnapshot = info.episodeSnapshot ? normalizeSnapshot(info.episodeSnapshot) : null;
+      if (episodeSnapshot && (episodeSnapshot.projectId !== info.projectId || episodeSnapshot.serviceId !== info.serviceId || episodeSnapshot.kind !== 'video')) {
+        throw new Error('视频下载分集快照与所属剧本或网站不一致');
+      }
       const entry = { id: info.id, projectId: info.projectId, serviceId: info.serviceId, serviceLabel: info.serviceLabel,
         filename: sanitizeFilename(info.filename), stageId: crypto.randomUUID(), startedAt: info.startedAt,
-        day: info.day, productionSnapshot: info.productionSnapshot || {}, choice: '', completed: false };
+        ...(episodeSnapshot ? { episodeSnapshot } : { day: info.day }),
+        productionSnapshot: info.productionSnapshot || {}, choice: '', completed: false };
       const directory = path.join(root, entry.stageId);
       fs.mkdirSync(directory);
       try { persist({ ...entries, [entry.id]: entry }); }

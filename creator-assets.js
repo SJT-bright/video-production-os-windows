@@ -68,39 +68,33 @@ function playMotionClass(node, cls, fallbackMs, animationNames, onDone) {
   if (!node || node.classList.contains(cls)) return;
   const names = new Set(animationNames);
   let settled = false;
-  const settle = (cancelled = false) => {
+  const settle = () => {
     if (settled) return;
     settled = true;
     node.removeEventListener('animationend', onEnd);
     clearTimeout(timer);
     node.classList.remove(cls);
-    if (!cancelled && onDone) onDone();
+    if (onDone) onDone();
   };
   const onEnd = event => {
     if (event.target !== node || !names.has(event.animationName)) return;
     settle();
   };
-  const timer = setTimeout(() => settle(), fallbackMs);
+  const timer = setTimeout(settle, fallbackMs);
   node.classList.add(cls);
   node.addEventListener('animationend', onEnd);
-  return () => settle(true);
 }
 
 // 带退出动画的关闭：只延迟 close 本体，不改变调用方控制流；正在关闭或已关闭时直接返回（幂等）。
 function closeCreatorDialog(dialog) {
   if (!dialog || !dialog.open || dialog.classList.contains('motion-close')) return;
-  dialog.__motionCloseCancel = playMotionClass(dialog, 'motion-close', 260, MOTION_CLOSE_SHEET_NAMES, () => {
-    dialog.__motionCloseCancel = null;
-    dialog.close();
-  });
+  playMotionClass(dialog, 'motion-close', 260, MOTION_CLOSE_SHEET_NAMES, () => dialog.close());
 }
 
 // 打开包装：showModal 前清掉可能残留的退出动画 class，避免刚打开就播关闭动画；
 // 上一次关闭动画未播完就再次打开时 dialog 仍处于 open，取消关闭原地恢复即可
 //（此时再 showModal 会抛 InvalidStateError）。
 function openCreatorDialog(dialog) {
-  dialog.__motionCloseCancel?.();
-  dialog.__motionCloseCancel = null;
   dialog.classList.remove('motion-close');
   if (!dialog.open) dialog.showModal();
 }
@@ -112,6 +106,8 @@ const state = {
   tree: null,
   folders: [],
   assets: [],
+  historyFolders: new Map(),
+  historyRoots: new Map(),
   selectedFolder: '',
   query: '',
   filter: 'all',
@@ -140,7 +136,7 @@ const el = Object.fromEntries([
   'folderDialog', 'folderForm', 'folderDialogTitle', 'folderDialogParent', 'folderName',
   'cancelFolderTop', 'cancelFolder', 'assetToast',
   'renameDialog', 'renameForm', 'renameDialogFrom', 'renameInput', 'cancelRenameTop', 'cancelRename',
-  'moveDialog', 'moveDialogHint', 'moveFolderList', 'cancelMoveTop', 'cancelMove',
+  'moveDialog', 'moveDialogTitle', 'moveDialogHint', 'moveFolderList', 'cancelMoveTop', 'cancelMove',
   'selectionBar', 'selectionCount', 'selectVisible', 'batchMove', 'batchDelete', 'clearSelection',
 ].map(id => [id, document.getElementById(id)]));
 
@@ -179,6 +175,9 @@ let resizeFrame = null;
 let reloadTimer = null;
 let libraryRequestId = 0;
 let projectRefreshNeeded = false;
+let libraryMutationDepth = 0;
+const libraryRecentMoves = new Map();
+const libraryRecentCopies = new Map();
 let pendingView = null;
 let viewSaveTimer = null;
 function viewKey() { return `videoOS.assetView.v1.${SURFACE_MODE}.${activeProjectId()}`; }
@@ -245,12 +244,14 @@ function adoptProject(project) {
 function scheduleLibraryReload(projectChanged = false) {
   projectRefreshNeeded ||= projectChanged;
   clearTimeout(reloadTimer);
+  if ((libraryMutationDepth || state.importBusy) && !projectChanged) return;
   reloadTimer = setTimeout(async () => {
     try {
       if (projectRefreshNeeded) {
         projectRefreshNeeded = false;
         const config = await API.getConfig();
         adoptProject(config.project);
+        state.config.downloadEpisodes = config.downloadEpisodes;
       }
       await loadLibrary({ select: state.selectedFolder });
     } catch (error) { showToast(`资产刷新失败：${error.message}`); }
@@ -273,8 +274,87 @@ function activeProjectId() {
 }
 
 function folderLabel(folderPath) {
+  if (isHistoryFolderPath(folderPath)) return '未分集历史素材';
   if (!folderPath) return '创作资产库';
   return folderPath.split('/').filter(Boolean).at(-1) || '创作资产库';
+}
+
+// 这只是展示入口，不是磁盘目录。使用后端相对路径规则不接受的 URI 标识，且所有写入口显式拦截。
+const HISTORY_FOLDER_PREFIX = 'videoOS-history://';
+function isHistoryFolderPath(folderPath) { return String(folderPath || '').startsWith(HISTORY_FOLDER_PREFIX); }
+function historyFolderForPath(folderPath) {
+  let current = String(folderPath || '');
+  while (current) {
+    const history = state.historyRoots.get(current);
+    if (history) return history;
+    const separator = current.lastIndexOf('/');
+    if (separator < 0) break;
+    current = current.slice(0, separator);
+  }
+  return '';
+}
+function rejectHistoryWrite(folderPath) {
+  if (!isHistoryFolderPath(folderPath)) return false;
+  showToast('历史素材入口只用于查看；请先选择真实的分集文件夹');
+  return true;
+}
+function updateFolderActions() {
+  const history = isHistoryFolderPath(state.selectedFolder) && !state.audioKind;
+  el.newSubfolder.disabled = !state.selectedFolder || history;
+  el.importAssets.disabled = state.importBusy || history;
+  el.normalizeNames.disabled = history;
+}
+function collectHistoryFolders(folders, assets) {
+  state.historyFolders.clear(); state.historyRoots.clear();
+  const batch = state.config?.downloadEpisodes;
+  const project = state.config?.project;
+  if (!project || batch?.projectId !== project.id || !Array.isArray(batch.states)) return folders;
+  const categoryIds = { image: 'generated-images', video: 'generated-videos', audio: 'audio' };
+  const sitePaths = new Set();
+  for (const entry of batch.states) {
+    if (!entry || entry.available !== true || entry.projectId !== project.id || !Object.hasOwn(categoryIds, entry.kind)) continue;
+    const category = project.categories?.find(item => item.id === categoryIds[entry.kind]);
+    const platform = entry.platformFolder;
+    if (!category?.path || typeof platform !== 'string' || !platform || /[\\/]/.test(platform) || platform === '.' || platform === '..'
+      || entry.platformPath !== `${category.path}/${platform}`) continue;
+    sitePaths.add(entry.platformPath);
+    if (entry.kind === 'video') {
+      for (const disposition of ['可剪辑', '待处理']) sitePaths.add(`${category.path}/${disposition}/${platform}`);
+    }
+  }
+  const childrenByParent = new Map();
+  for (const folder of folders) {
+    const children = childrenByParent.get(folder.parentPath) || [];
+    children.push(folder); childrenByParent.set(folder.parentPath, children);
+  }
+  for (const folder of folders) {
+    if (!sitePaths.has(folder.node.path)) continue;
+    const dates = (childrenByParent.get(folder.node.path) || []).filter(child => AssetOrder.dateFolderKey(child.node.name));
+    if (!dates.length) continue;
+    const key = HISTORY_FOLDER_PREFIX + encodeURIComponent(folder.node.path);
+    const history = { node: { kind: 'folder', name: '未分集历史素材', path: key, fileCount: 0, children: [] },
+      depth: folder.depth + 1, parentPath: folder.node.path, hasChildren: true, virtualHistory: true, assetPaths: new Set() };
+    if (!state.knownFolders.has(key)) {
+      state.knownFolders.add(key); state.collapsedFolders.add(key);
+    }
+    state.historyFolders.set(key, history);
+    dates.forEach(date => state.historyRoots.set(date.node.path, key));
+  }
+  for (const asset of assets) {
+    const history = state.historyFolders.get(historyFolderForPath(asset.folderPath));
+    if (history) history.assetPaths.add(asset.path);
+  }
+  const renderedHistory = new Set();
+  const display = [];
+  for (const folder of folders) {
+    const historyPath = historyFolderForPath(folder.node.path);
+    if (!historyPath) { display.push(folder); continue; }
+    if (renderedHistory.has(historyPath)) continue;
+    const history = state.historyFolders.get(historyPath);
+    history.node.fileCount = history.assetPaths.size;
+    renderedHistory.add(historyPath); display.push(history);
+  }
+  return display;
 }
 
 // 与创作浏览器左侧分类树共用顺序；这里只改变展示，不移动磁盘文件。
@@ -295,7 +375,7 @@ function orderFolderSiblings(folders, parentPath) {
 function reorderableSiblings(folder) {
   return orderFolderSiblings(state.folders.filter(item =>
     item.depth > 0 && item.parentPath === folder.parentPath && item.node.name !== '浏览器下载'
-      && !AssetOrder.dateFolderKey(item.node.name)), folder.parentPath);
+      && !item.virtualHistory && !AssetOrder.dateFolderKey(item.node.name) && !AssetOrder.episodeFolderKey(item.node.name)), folder.parentPath);
 }
 function saveFolderSiblingOrder(parentPath, siblings) {
   const order = readFolderOrder();
@@ -426,14 +506,15 @@ function collectTree(root) {
     }
   };
   walk(root);
-  state.folders = folders;
+  state.folders = collectHistoryFolders(folders, assets);
   state.assets = assets.sort(AssetOrder.newestFirst);
-  if (!knownPaths.has(state.selectedFolder)) state.selectedFolder = root?.path || '';
+  state.selectedFolder = historyFolderForPath(state.selectedFolder) || state.selectedFolder;
+  if (!knownPaths.has(state.selectedFolder) && !state.historyFolders.has(state.selectedFolder)) state.selectedFolder = root?.path || '';
 }
 
 function selectFolder(folderPath) {
   setAudioMode('');
-  state.selectedFolder = folderPath || '';
+  state.selectedFolder = historyFolderForPath(folderPath) || folderPath || '';
   state.query = '';
   state.renderLimit = RENDER_BATCH;
   el.assetSearch.value = '';
@@ -444,7 +525,7 @@ function selectFolder(folderPath) {
     button.classList.toggle('active', active);
     button.setAttribute('aria-pressed', String(active));
   });
-  el.newSubfolder.disabled = !state.selectedFolder;
+  updateFolderActions();
   renderAssets();
 }
 
@@ -472,6 +553,79 @@ function applyLibraryFolderRename(change) {
   state.collapsedFolders = new Set([...state.collapsedFolders].map(remap));
   state.selectedPaths = new Set([...state.selectedPaths].map(remap));
   try { FolderEditor.rememberOrder(change); } catch {}
+  applyLibraryAssetMoves(state.assets.filter(item => item.path?.startsWith(`${change.oldPath}/`))
+    .map(item => ({ oldPath: item.path, path: remap(item.path), assetId: item.assetId })), change.projectId);
+}
+
+function applyLibraryAssetMoves(moves, projectId = activeProjectId()) {
+  if (projectId && projectId !== activeProjectId()) return;
+  for (const move of moves || []) {
+    if (!move?.oldPath || !move.path || move.oldPath === move.path) continue;
+    const remap = value => FolderEditor.remap(value, move);
+    libraryRecentMoves.set(`${move.oldPath}\n${move.path}`, Date.now());
+    state.selectedPaths = new Set([...state.selectedPaths].map(remap));
+    state.lastCheckedPath = remap(state.lastCheckedPath);
+    const previewMoved = state.preview && (state.preview.path === move.oldPath || (move.assetId && state.preview.assetId === move.assetId && state.preview.path !== move.path));
+    for (const item of state.assets) {
+      if (item.path !== move.oldPath && (!move.assetId || item.assetId !== move.assetId)) continue;
+      Object.assign(item, { path: move.path, name: move.name || move.path.split('/').at(-1), folderPath: FolderEditor.parentPath(move.path) });
+      if (move.videoDisposition) item.videoDisposition = move.videoDisposition;
+    }
+    if (previewMoved) {
+      Object.assign(state.preview, { path: move.path, name: move.name || move.path.split('/').at(-1), folderPath: FolderEditor.parentPath(move.path) });
+      el.previewName.textContent = state.preview.name;
+      el.previewPath.textContent = `${state.preview.folderPath} · ${state.preview.sizeText || ''}`;
+      FolderEditor.updateMediaPath(el.previewMedia, assetUrl(move.path));
+    }
+  }
+}
+function startLibraryFolderCreate(parentPath) {
+  const parent = parentPath || state.config?.project?.folder;
+  if (rejectHistoryWrite(parent)) return;
+  if (!parent || el.folderTree.querySelector('.folder-rename-input')) return;
+  for (const folder of state.folders) {
+    if (parent === folder.node.path || parent.startsWith(`${folder.node.path}/`)) state.collapsedFolders.delete(folder.node.path);
+  }
+  renderFolders();
+  const parentRow = el.folderTree.querySelector(`.folder-row[data-folder-path="${CSS.escape(parent)}"]`);
+  const host = parentRow?.nextElementSibling?.querySelector(':scope > .folder-children-inner');
+  if (!host) return;
+  const row = document.createElement('div'); row.className = 'folder-row folder-create-row';
+  const anchor = document.createElement('span'); anchor.className = 'folder-button'; anchor.textContent = '新建文件夹';
+  row.append(anchor); host.prepend(row); row.scrollIntoView({ block: 'nearest' });
+  const projectId = activeProjectId();
+  libraryMutationDepth++; clearTimeout(reloadTimer);
+  let finished = false;
+  const finish = () => { if (finished) return; finished = true; libraryMutationDepth--; row.remove(); };
+  FolderEditor.create(anchor, { parent, projectId }, { createFolder: async request => {
+    if (activeProjectId() !== projectId) throw new Error('剧本已切换，未创建文件夹');
+    return postAssetAction('folder', { parent: request.parent, name: request.name });
+  } }, async data => {
+    finish();
+    if (activeProjectId() !== projectId) return;
+    const path = data.folder?.path || parent;
+    state.knownFolders.add(path); state.collapsedFolders.delete(path);
+    await loadLibrary({ select: path });
+    el.folderTree.querySelector(`.folder-row[data-folder-path="${CSS.escape(path)}"]`)?.scrollIntoView({ block: 'nearest' });
+    showToast(`已创建：${path}`);
+  }, showToast, () => { finish(); scheduleLibraryReload(); });
+}
+async function showLibraryFolderMenu(folder, event) {
+  event.preventDefault(); event.stopPropagation();
+  const parent = folder?.node.path || state.config?.project?.folder;
+  if (rejectHistoryWrite(parent)) return;
+  if (typeof API.showFolderMenu !== 'function') {
+    FolderEditor.menu(event, [{ label: folder?.depth ? '新建子文件夹' : '新建文件夹', run: () => startLibraryFolderCreate(parent) }]);
+    return;
+  }
+  try {
+    const result = await API.showFolderMenu({ path: parent, projectId: activeProjectId(), x: event.clientX, y: event.clientY });
+    if (result?.create) startLibraryFolderCreate(result.parent || parent);
+    if (result?.rename) FolderEditor.edit(el.folderTree.querySelector(`.folder-row[data-folder-path="${CSS.escape(parent)}"] .folder-button`), result, API, async change => {
+      applyLibraryFolderRename(change); await loadLibrary({ select: change.path }); showToast('已改名；新导入将使用新名称加序号');
+    }, showToast);
+    if (result?.deleted) { showToast('文件夹已移入废纸篓'); await loadLibrary(); }
+  } catch (error) { showToast(error.message || '文件夹操作失败'); }
 }
 
 function buildFolderRow(folder) {
@@ -504,23 +658,13 @@ function buildFolderRow(folder) {
   button.dataset.folderPath = key;
   button.className = `folder-button${state.selectedFolder === key ? ' active' : ''}`;
   button.setAttribute('aria-pressed', String(state.selectedFolder === key));
-  button.title = key || state.config?.rootPath || '创作资产库';
+  button.title = folder.virtualHistory ? `${folder.parentPath} · 未分集历史素材（展示汇总，原文件未搬动）`
+    : key || state.config?.rootPath || '创作资产库';
   const name = document.createElement('span');
   name.className = 'folder-name';
   name.textContent = folder.depth ? folder.node.name : '全部资产';
   button.append(name);
-  if (folder.depth > 0) row.addEventListener('contextmenu', event => {
-    event.preventDefault(); event.stopPropagation();
-    if (typeof API.showFolderMenu !== 'function') { showToast('文件夹右键删除需要最新版桌面程序'); return; }
-    API.showFolderMenu({ path: key, x: event.clientX, y: event.clientY })
-      .then(result => {
-        if (result?.rename) FolderEditor.edit(button, result, API, async change => {
-          applyLibraryFolderRename(change); await loadLibrary({ select: change.path }); showToast('文件夹已改名；新导入仍按 001、002 编号');
-        }, showToast);
-        if (result?.deleted) { showToast('文件夹已移入废纸篓'); loadLibrary(); }
-      })
-      .catch(error => showToast(error.message || '文件夹操作失败'));
-  });
+  row.addEventListener('contextmenu', event => showLibraryFolderMenu(folder, event));
   button.addEventListener('click', () => {
     selectFolder(key);
     // Obsidian 习惯：选中收起中的文件夹时自动展开；收起只由箭头控制，避免误收。
@@ -531,7 +675,8 @@ function buildFolderRow(folder) {
   count.className = 'folder-count';
   count.textContent = String(folder.node.fileCount || 0);
   row.append(disclosure, button, count);
-  if (folder.depth > 0 && folder.node.name !== '浏览器下载' && !AssetOrder.dateFolderKey(folder.node.name)) {
+  if (!folder.virtualHistory && folder.depth > 0 && folder.node.name !== '浏览器下载'
+    && !AssetOrder.dateFolderKey(folder.node.name) && !AssetOrder.episodeFolderKey(folder.node.name)) {
     const grip = document.createElement('button');
     grip.type = 'button';
     grip.className = 'folder-order-grip';
@@ -575,7 +720,8 @@ function appendFolderRows(parent, folders, parentPath, rendered) {
     inner.className = 'folder-children-inner';
     wrapper.appendChild(inner);
     appendFolderRows(inner, folders, key, done);
-    const files = state.assets.filter(item => item.folderPath === key);
+    const files = folder.virtualHistory ? state.assets.filter(item => folder.assetPaths.has(item.path))
+      : state.assets.filter(item => item.folderPath === key);
     const addFiles = () => {
       const start = inner.querySelectorAll(':scope > .folder-file').length;
       files.slice(start, start + 60).forEach(item => inner.appendChild(buildFolderFile(item)));
@@ -602,6 +748,7 @@ function buildFolderFile(item) {
   const file = document.createElement('button');
   file.type = 'button';
   file.className = 'folder-file';
+  file.dataset.path = item.path;
   file.title = item.name;
   file.draggable = true;
   let icon;
@@ -618,6 +765,7 @@ function buildFolderFile(item) {
   name.textContent = item.name;
   file.append(icon, name);
   file.addEventListener('click', () => openPreview(item));
+  file.addEventListener('contextmenu', event => showLibraryFileMenu(item, event));
   file.addEventListener('dragstart', event => {
     if (NATIVE_API) { event.preventDefault(); API.startDrag(item.path); }
     else if (event.dataTransfer) {
@@ -637,13 +785,16 @@ function renderFolders() {
   appendFolderRows(fragment, state.folders, '');
   el.folderTree.appendChild(fragment);
   el.folderTree.scrollTop = scrollTop;
-  el.newSubfolder.disabled = !state.selectedFolder;
+  updateFolderActions();
 }
 
 function visibleAssets() {
   const query = state.query.trim().toLocaleLowerCase('zh-CN');
+  const history = state.historyFolders.get(state.selectedFolder);
   const filtered = state.assets.filter(item => {
     if (state.filter !== 'all' && item.type !== state.filter) return false;
+    if (isHistoryFolderPath(state.selectedFolder)) return !!history?.assetPaths.has(item.path)
+      && (!query || `${item.name}\n${item.path}`.toLocaleLowerCase('zh-CN').includes(query));
     if (query) return `${item.name}\n${item.path}`.toLocaleLowerCase('zh-CN').includes(query);
     if (!state.selectedFolder) return true;
     return item.folderPath === state.selectedFolder || item.folderPath.startsWith(`${state.selectedFolder}/`);
@@ -784,6 +935,7 @@ async function deleteItem(item) {
 }
 
 async function postAssetAction(action, body) {
+  if ([body.path, body.folder, body.parent].some(isHistoryFolderPath)) throw new Error('历史素材入口不是磁盘目录，未执行写入');
   const response = await fetch(`/api/creative-assets/${action}?project=${encodeURIComponent(activeProjectId())}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -818,23 +970,27 @@ async function submitRename() {
   }
 }
 
-let moveTargets = null; // null = 单个资产；数组 = 批量移动
+let moveTargets = null;
+let moveAction = 'move';
+let moveProjectId = null;
 
-function openMoveDialog(paths) {
-  moveTargets = paths;
+function openMoveDialog(paths, action = 'move') {
+  moveTargets = [...paths]; moveAction = action; moveProjectId = activeProjectId();
   const label = paths.length > 1 ? `${paths.length} 项资产` : paths[0].split('/').at(-1);
-  el.moveDialogHint.textContent = `将「${label}」移动到：`;
+  el.moveDialogTitle.textContent = action === 'copy' ? '复制到…' : '移动到…';
+  el.moveDialogHint.textContent = `将「${label}」${action === 'copy' ? '复制' : '移动'}到：`;
   el.moveFolderList.replaceChildren();
-  const currentFolders = new Set(paths.map(path => path.split('/').slice(0, -1).join('/')));
   for (const folder of state.folders) {
-    if (currentFolders.has(folder.node.path || '')) continue;
+    if (folder.virtualHistory) continue;
+    if (action === 'move' && paths.every(path => FolderEditor.parentPath(path) === FolderEditor.normalizePath(folder.node.path))) continue;
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'move-folder-row';
     row.dataset.folderPath = folder.node.path || '';
     const name = document.createElement('span');
     name.className = 'move-folder-name';
-    name.textContent = folder.depth ? folder.node.name : '全部资产';
+    name.textContent = folder.node.path || '全部资产';
+    row.title = folder.node.path || '全部资产';
     row.appendChild(name);
     row.addEventListener('click', () => submitMove(folder.node.path || ''));
     el.moveFolderList.appendChild(row);
@@ -842,32 +998,55 @@ function openMoveDialog(paths) {
   if (!el.moveFolderList.childElementCount) {
     const empty = document.createElement('p');
     empty.className = 'move-folder-empty';
-    empty.textContent = '没有可移动到的其他文件夹。';
+    empty.textContent = '没有其他目标文件夹，可以先新建文件夹。';
     el.moveFolderList.appendChild(empty);
   }
   openCreatorDialog(el.moveDialog);
 }
 
 async function submitMove(folderPath) {
+  if (rejectHistoryWrite(folderPath)) return;
   const paths = [...moveTargets];
+  const action = moveAction, projectId = moveProjectId;
   if (!paths.length) { closeCreatorDialog(el.moveDialog); return; }
   closeCreatorDialog(el.moveDialog);
-  let moved = 0;
+  if (projectId !== activeProjectId()) { showToast('剧本已切换，请重新选择素材'); return; }
+  let moved = 0, skipped = 0;
   const failed = [];
-  for (const path of paths) {
-    try {
-      await postAssetAction('move', { path, folder: folderPath });
-      moved += 1;
-    } catch (error) {
-      failed.push(`${path.split('/').at(-1)}：${error.message}`);
+  const dispositions = new Set();
+  libraryMutationDepth++; clearTimeout(reloadTimer);
+  try {
+    for (const path of [...new Set(paths)]) {
+      if (action === 'move' && FolderEditor.parentPath(path) === FolderEditor.normalizePath(folderPath)) { skipped++; continue; }
+      try {
+        if (projectId !== activeProjectId()) throw new Error('剧本已切换，未执行此项');
+        const previousDisposition = state.assets.find(item => item.path === path)?.videoDisposition;
+        const result = await postAssetAction(action, { path, folder: folderPath });
+        if (action === 'move') applyLibraryAssetMoves([{ ...result, oldPath: result.oldPath || path }], projectId);
+        else libraryRecentCopies.set(`${path}\n${result.path}`, Date.now());
+        if (result.videoDisposition && previousDisposition !== result.videoDisposition) dispositions.add(result.videoDisposition);
+        moved += 1;
+      } catch (error) {
+        failed.push(`${path.split('/').at(-1)}：${error.message}`);
+      }
     }
+  } finally {
+    libraryMutationDepth--; clearTimeout(reloadTimer);
+    if (projectId === activeProjectId()) await loadLibrary({ select: folderPath });
   }
-  state.selectedPaths.clear();
   updateSelectionBar();
-  await loadLibrary({ select: folderPath });
-  showToast(failed.length
-    ? `已移动 ${moved} 项；${failed[0]}`
-    : `已移动 ${moved} 项到「${folderLabel(folderPath)}」`);
+  const disposition = dispositions.size === 1 ? `；已归为${dispositions.has('processing') ? '待处理' : '可剪辑'}` : '';
+  showToast(`${action === 'copy' ? '复制' : '移动'}到「${folderPath}」：成功 ${moved}，跳过 ${skipped}，失败 ${failed.length}${disposition}${failed.length ? `；${failed[0]}` : ''}`);
+}
+function showLibraryFileMenu(item, event) {
+  event.preventDefault(); event.stopPropagation();
+  const paths = state.selectedPaths.has(item.path) ? [...state.selectedPaths] : [item.path];
+  FolderEditor.menu(event, [
+    { label: `移动到…${paths.length > 1 ? `（${paths.length} 项）` : ''}`, run: () => openMoveDialog(paths) },
+    { label: `复制到…${paths.length > 1 ? `（${paths.length} 项）` : ''}`, run: () => openMoveDialog(paths, 'copy') },
+    { label: '预览', run: () => openPreview(item) },
+    { label: '在文件夹中显示', run: () => showItem(item) },
+  ]);
 }
 
 /* ---------- 多选批量操作 ---------- */
@@ -899,6 +1078,7 @@ function clearSelection() {
 }
 
 async function normalizeNames() {
+  if (rejectHistoryWrite(state.selectedFolder)) return;
   if (!state.selectedFolder) {
     showToast('请先在左侧选择一个分类文件夹');
     return;
@@ -920,7 +1100,7 @@ async function normalizeNames() {
   } catch (error) {
     showToast(`整理失败：${error.message}`);
   } finally {
-    el.normalizeNames.disabled = false;
+    updateFolderActions();
   }
 }
 
@@ -930,6 +1110,7 @@ async function batchDeleteSelected() {
   if (!confirm(`删除选中的 ${paths.length} 项？文件会移到废纸篓，可随时恢复。`)) return;
   let deleted = 0;
   const failed = [];
+  libraryMutationDepth++; clearTimeout(reloadTimer);
   for (const path of paths) {
     try {
       await API.deleteItem(path);
@@ -939,6 +1120,7 @@ async function batchDeleteSelected() {
     }
   }
   state.selectedPaths.clear();
+  libraryMutationDepth--; clearTimeout(reloadTimer);
   updateSelectionBar();
   if (state.preview && state.selectedPaths && paths.includes(state.preview.path)) closePreviewNow();
   await loadLibrary({ select: state.selectedFolder });
@@ -1095,6 +1277,7 @@ function createAssetCard(item) {
   card.className = `asset-card${item.type === 'image' ? ' image-card' : ''}`;
   card.dataset.kind = item.type;
   card.dataset.path = item.path;
+  card.addEventListener('contextmenu', event => showLibraryFileMenu(item, event));
   card.draggable = true;
   card.title = NATIVE_API ? '拖到右侧创作平台上传；点击可预览' : '点击预览资产';
 
@@ -1195,7 +1378,7 @@ function createAssetCard(item) {
 
   card.addEventListener('dragstart', event => {
     card.classList.add('dragging');
-    // 多选后拖动任一选中卡 = 整个选中序列一起拖出（Set 迭代序即点选顺序，沿用悬浮窗 drag-tray 已验证语义）；
+    // 多选后拖动任一选中卡 = 整个选中序列一起拖出（Set 迭代序即点选顺序）；
     // 拖未选中的卡仍只拖该卡本身，避免误发整批。
     const dragSelection = NATIVE_API && state.selectedPaths.size && state.selectedPaths.has(item.path)
       ? [...state.selectedPaths]
@@ -1229,13 +1412,16 @@ function renderAssets({ preserveScroll = false } = {}) {
   el.currentPath.textContent = state.query ? `搜索“${state.query}”` : folderLabel(state.selectedFolder);
   el.assetHeading.textContent = state.filter === 'all' ? '常用资产' : `${TYPE_COPY[state.filter]}资产`;
   applyGridCollapse();
+  updateFolderActions();
 
   if (!allItems.length) {
     const empty = document.createElement('div');
     empty.className = 'asset-state';
     empty.innerHTML = state.query
       ? '没有找到匹配资产。<br>可以换一个文件名或文件夹关键词。'
-      : state.selectedFolder
+      : isHistoryFolderPath(state.selectedFolder)
+        ? '暂无未分集历史素材。<br>这个入口只汇总旧素材，不接收新导入。'
+        : state.selectedFolder
         ? '这个文件夹还是空的。<br>点击“导入资产”，把常用图片、音频或视频放进来。'
         : '还没有预存资产。<br>选择左侧分类后导入图片、音频和视频。';
     el.assetGrid.appendChild(empty);
@@ -1328,6 +1514,7 @@ function bindResize() {
 }
 
 function openFolderDialog({ parent = '' } = {}) {
+  if (rejectHistoryWrite(parent)) return;
   if (!parent) {
     showToast('请先选择一个资产文件夹');
     return;
@@ -1341,6 +1528,7 @@ function openFolderDialog({ parent = '' } = {}) {
 }
 
 async function createFolder() {
+  if (rejectHistoryWrite(state.folderParent)) return;
   const name = el.folderName.value.trim();
   if (!name) { el.folderName.focus(); return; }
   const response = await fetch(`/api/creative-assets/folder?project=${encodeURIComponent(activeProjectId())}`, {
@@ -1360,6 +1548,7 @@ function setAudioMode(kind) {
     document.querySelectorAll('#audioLibrary audio').forEach(audio => audio.pause());
   }
   state.audioKind = kind;
+  updateFolderActions();
   applyGridCollapse();
   document.body.dataset.audioMode = String(!!kind);
   document.getElementById('audioLibrary').hidden = !kind;
@@ -1642,7 +1831,8 @@ async function openScriptSwitch() {
   }
 }
 
-async function importFiles(files) {  if (state.audioKind) return importAudioFiles(files);
+async function importFiles(files, { renameSequentially = false } = {}) {  if (state.audioKind) return importAudioFiles(files);
+  if (rejectHistoryWrite(state.selectedFolder)) return;
   if (state.importBusy) { showToast('正在导入，请稍候'); return; }
   const list = Array.from(files || []);
   if (!list.length) return;
@@ -1661,7 +1851,7 @@ async function importFiles(files) {  if (state.audioKind) return importAudioFile
     el.assetStatus.textContent = `正在导入 ${imported + failed.length + 1}/${list.length}：${file.name}`;
     try {
       if (activeProjectId() !== projectId) throw new Error('剧本已切换，该文件未导入');
-      const url = `/api/creative-assets/import?project=${encodeURIComponent(projectId)}&folder=${encodeURIComponent(folder)}&name=${encodeURIComponent(file.name)}`;
+      const url = `/api/creative-assets/import?project=${encodeURIComponent(projectId)}&folder=${encodeURIComponent(folder)}&name=${encodeURIComponent(file.name)}&naming=${renameSequentially ? 'sequential' : 'original'}`;
       const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
@@ -1670,8 +1860,8 @@ async function importFiles(files) {  if (state.audioKind) return importAudioFile
       failed.push(`${file.name}：${error.message}`);
     }
   }
-  el.importAssets.disabled = false;
   state.importBusy = false;
+  updateFolderActions();
   el.assetFileInput.value = '';
   await loadLibrary({ select: activeProjectId() === projectId ? folder : state.selectedFolder }).catch(error => showToast(error.message));
   el.assetStatus.textContent = failed.length ? `已导入 ${imported} 项，${failed.length} 项失败` : `已导入 ${imported} 项到 ${folderLabel(folder)}`;
@@ -1679,6 +1869,10 @@ async function importFiles(files) {  if (state.audioKind) return importAudioFile
 }
 
 function bindEvents() {
+  el.folderTree.addEventListener('contextmenu', event => {
+    if (event.target.closest('.folder-row, .folder-file, input, button')) return;
+    showLibraryFolderMenu(null, event);
+  });
   bindAudioLibrary();
   // body 也有 data-layout，只绑定真正的按钮，避免冒泡把刚选的布局改回去。
   document.querySelectorAll('.layout-switch button[data-layout]').forEach(button => {
@@ -1713,6 +1907,7 @@ function bindEvents() {
   });
   el.importAssets.addEventListener('click', () => {
     if (state.audioKind) { pickAudioFile(); return; }
+    if (rejectHistoryWrite(state.selectedFolder)) return;
     if (!state.selectedFolder) { showToast('请先选择或新建一个剧本文件夹'); return; }
     el.assetFileInput.click();
   });
@@ -1725,6 +1920,7 @@ function bindEvents() {
   dropTarget.addEventListener('dragenter', event => {
     if (!hasExternalFiles(event)) return;
     event.preventDefault();
+    if (isHistoryFolderPath(state.selectedFolder)) { event.dataTransfer.dropEffect = 'none'; return; }
     assetDragDepth += 1;
     dropTarget.classList.add('is-drop-import');
     // 折叠状态下拖入文件：自动展开列表，让用户看到落点与导入结果。
@@ -1733,6 +1929,7 @@ function bindEvents() {
   dropTarget.addEventListener('dragover', event => {
     if (!hasExternalFiles(event)) return;
     event.preventDefault();
+    if (isHistoryFolderPath(state.selectedFolder)) { event.dataTransfer.dropEffect = 'none'; return; }
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
   });
   dropTarget.addEventListener('dragleave', () => {
@@ -1744,7 +1941,8 @@ function bindEvents() {
     event.preventDefault();
     assetDragDepth = 0;
     dropTarget.classList.remove('is-drop-import');
-    importFiles(event.dataTransfer.files);
+    if (rejectHistoryWrite(state.selectedFolder)) return;
+    importFiles(event.dataTransfer.files, { renameSequentially: true });
   });
   el.newSubfolder.addEventListener('click', () => openFolderDialog({ parent: state.selectedFolder }));
   el.folderForm.addEventListener('submit', event => {
@@ -1847,12 +2045,23 @@ function bindEvents() {
       showToast(result?.error || '资产拖拽失败');
     }
   });
+  if (typeof API.onDownloadEpisodesChanged === 'function') API.onDownloadEpisodesChanged(batch => {
+    if (!state.config || batch?.projectId !== activeProjectId()) return;
+    state.config.downloadEpisodes = batch;
+    if (!state.tree) return;
+    collectTree(state.tree); renderFolders(); renderAssets({ preserveScroll: true });
+  });
   bindResize();
 }
 
 async function loadLibrary({ select } = {}) {
   const requestId = ++libraryRequestId;
   const projectId = activeProjectId();
+  if (NATIVE_API && typeof API.getConfig === 'function') {
+    const config = await API.getConfig();
+    if (requestId !== libraryRequestId || projectId !== activeProjectId()) return;
+    if (config.project?.id === projectId) state.config.downloadEpisodes = config.downloadEpisodes;
+  }
   // 后台刷新（SSE creative-assets → scheduleLibraryReload）不再无条件清空多选：
   // 先留存本次刷新前的选择，新树就绪后做交集，只移除已不存在的路径，
   // 避免用户正在攒整批拖出时被“生成完成/其他窗口导入”的刷新打断。
@@ -1869,7 +2078,7 @@ async function loadLibrary({ select } = {}) {
   state.config.rootName = data.rootName || state.config.rootName;
   if (typeof select === 'string') state.selectedFolder = select;
   collectTree(data.tree);
-  // 交集守卫（镜像悬浮窗 drag-tray 的失效收缩逻辑）：只保留当前树中仍存在的选中路径。
+  // 交集守卫：只保留当前树中仍存在的选中路径。
   // 跨项目切换时新树不含旧项目路径 → 交集自然为空，等效于旧的“整单清空”，无需特殊分支；
   // 资产被删除导致的失效收缩走同一交集，被收缩数量 >0 时给出提示。
   const existing = new Set(state.assets.map(item => item.path));
@@ -1939,6 +2148,10 @@ async function focusExternalAsset(request) {
 async function boot() {  bindEvents();
   try {
     state.config = await API.getConfig();
+    if (state.config.candidate) {
+      document.querySelector('.asset-title strong').textContent = '创作资产库 · 候选版';
+      document.title = `创作资产库 · 候选版 ${state.config.candidate.version || ''}｜视频制作 OS`;
+    }
     restoreAssetView();
     applyPanelState(state.config.panel);
     el.capabilityNote.textContent = SURFACE_MODE === 'library'
@@ -1952,8 +2165,16 @@ async function boot() {  bindEvents();
       }
     });
     events.addEventListener('creative-assets', event => {
-      try { applyLibraryFolderRename(JSON.parse(event.data).folderRename); } catch {}
-      scheduleLibraryReload();
+      let duplicate = false;
+      try {
+        const data = JSON.parse(event.data);
+        const mutations = [...(data.moves || []).map(move => Date.now() - (libraryRecentMoves.get(`${move.oldPath}\n${move.path}`) || 0) < 3000),
+          ...(data.copies || []).map(copy => Date.now() - (libraryRecentCopies.get(`${copy.sourcePath}\n${copy.path}`) || 0) < 3000)];
+        duplicate = mutations.length && mutations.every(Boolean);
+        applyLibraryFolderRename(data.folderRename);
+        applyLibraryAssetMoves(data.moves, data.projectId);
+      } catch {}
+      if (!duplicate) scheduleLibraryReload();
     });
     // 剧本被其他入口（创作浏览器/主窗口）切换时，面板原地跟随新剧本。
     events.addEventListener('creative-projects', event => {
