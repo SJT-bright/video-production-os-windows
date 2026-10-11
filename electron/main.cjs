@@ -94,6 +94,9 @@ const configuredDataDir = (CANDIDATE_MODE && macProjectDataDir(PROJECT_ROOT))
   || (typeof RUNTIME_CONFIG.dataDir === 'string' && RUNTIME_CONFIG.dataDir.trim() ? RUNTIME_CONFIG.dataDir : '')
   || path.join(OS_DIR, 'data');
 if (!path.isAbsolute(configuredDataDir)) throw new Error('OS 数据目录必须是绝对路径');
+// Portable releases start without a project directory on another computer.
+// Create only their user-owned workspace before the asset store validates it.
+if (macPortable || windowsRelease) fs.mkdirSync(PROJECT_ROOT, { recursive: true });
 // server.js 在 require 阶段解析项目根和数据目录，桌面发行版必须先注入真实路径。
 process.env.VIDEO_OS_PROJECT_ROOT = PROJECT_ROOT;
 process.env.VIDEO_OS_DATA_DIR = path.resolve(configuredDataDir);

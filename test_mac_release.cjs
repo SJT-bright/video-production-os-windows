@@ -25,11 +25,15 @@ async function run() {
     await new Promise(resolve => server.close(resolve));
     const env = { ...process.env, VIDEO_OS_USER_DATA: profile, VIDEO_OS_PORT: String(port) };
     for (const key of ['ELECTRON_RUN_AS_NODE', 'CREATOR_BROWSER_TEST', 'VIDEO_OS_SMOKE_TEST', 'VIDEO_OS_DATA_DIR', 'VIDEO_OS_PROJECT_ROOT', 'VIDEO_OS_TEST_PROJECT_ROOT']) delete env[key];
-    child = spawn(path.join(appBundle, 'Contents/MacOS/VideoProductionOS'), [], { cwd: root, env, stdio: 'ignore' });
+    let output = '';
+    child = spawn(path.join(appBundle, 'Contents/MacOS/VideoProductionOS'), [], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.stderr.on('data', chunk => { output += chunk; });
     const connectionFile = path.join(profile, 'workspace/视频制作OS/data/creator-automation-connection.json');
     let ready = false;
-    for (let i = 0; i < 100; i++) {
-      if (child.exitCode !== null) throw new Error(`App exited: ${child.exitCode}`);
+    let lastReply = null, lastError = '';
+    for (let i = 0; i < 300; i++) {
+      if (child.exitCode !== null) throw new Error(`App exited: ${child.exitCode}: ${output.slice(-8000)}`);
       try {
         const connection = JSON.parse(fs.readFileSync(connectionFile, 'utf8'));
         const response = await fetch(`http://127.0.0.1:${connection.port}/call`, {
@@ -37,11 +41,18 @@ async function run() {
           body: JSON.stringify({ name: 'browser_state', arguments: {} }), signal: AbortSignal.timeout(1000),
         });
         const body = await response.json();
+        lastReply = body;
         if (response.ok && body.result?.project) { ready = true; break; }
-      } catch {}
+      } catch (error) { lastError = error.message; }
       await new Promise(resolve => setTimeout(resolve, 200));
     }
-    assert.ok(ready, 'Standalone app must start with a fresh user workspace');
+    if (!ready) {
+      const log = path.join(profile, 'logs', 'video-os.log');
+      console.error(JSON.stringify({ connectionExists: fs.existsSync(connectionFile),
+        profileEntries: fs.readdirSync(profile), lastReply, lastError,
+        diagnostic: fs.existsSync(log) ? fs.readFileSync(log, 'utf8').slice(-8000) : null }));
+    }
+    assert.ok(ready, 'Standalone app must start with a fresh user workspace: ' + output.slice(-8000));
     assert.equal(fs.existsSync(path.join(appBundle, 'Contents/Resources/app/data')), false);
     console.log('MAC_STANDALONE_LAUNCH_PASS universal=true freshUserWorkspace=true bundledPrivateData=false');
   } finally {

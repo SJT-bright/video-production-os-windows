@@ -18,7 +18,7 @@ function makeVideo(target, audio = true) {
 }
 
 async function fixture(port = 0) {
-  const appRoot = process.env.VOICE_TEST_APP_ROOT || __dirname;
+  const appRoot = path.resolve(process.env.VOICE_TEST_APP_ROOT || __dirname);
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'video-os-voice-test-')));
   const child = spawn(process.execPath, ['-e', `
     const mod = require(${JSON.stringify(path.join(appRoot, 'server.js'))});
