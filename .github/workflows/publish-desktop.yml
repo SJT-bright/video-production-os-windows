@@ -76,6 +76,13 @@ jobs:
           make_latest: true
           fail_on_unmatched_files: true
           files: 视频制作OS/release/*
+      - name: Preserve isolated test diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-test-diagnostics
+          path: 视频制作OS/test-artifacts/
+          if-no-files-found: ignore
 
   windows:
     if: github.repository == 'SJT-bright/video-production-os-windows'
@@ -144,3 +151,10 @@ jobs:
           make_latest: true
           fail_on_unmatched_files: true
           files: release/*
+      - name: Preserve isolated test diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-diagnostics
+          path: test-artifacts/
+          if-no-files-found: ignore

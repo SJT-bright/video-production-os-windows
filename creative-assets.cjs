@@ -33,14 +33,16 @@ function ensureCreativeAssetRoot(root) {
   const resolved = path.resolve(String(root || ''));
   if (!root || resolved === path.parse(resolved).root) throw new Error('创作资产库目录无效');
   const parent = path.dirname(resolved);
-  const realParent = fs.realpathSync(parent);
+  // Windows TEMP may use an 8.3 alias, while async realpath returns the long
+  // spelling. Use one native canonical root for both sync and async listings.
+  const realParent = fs.realpathSync.native(parent);
   if (fs.existsSync(resolved)) {
     const rootStat = fs.lstatSync(resolved);
     if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw new Error('创作资产库根目录不能是符号链接或普通文件');
   } else {
     fs.mkdirSync(resolved);
   }
-  const realRoot = fs.realpathSync(resolved);
+  const realRoot = fs.realpathSync.native(resolved);
   if (path.resolve(path.dirname(realRoot)) !== path.resolve(realParent)) {
     throw new Error('创作资产库真实路径必须是项目根目录的直接子目录');
   }

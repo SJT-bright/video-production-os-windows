@@ -277,9 +277,13 @@ async function main() {
       report.dom = await creator.evaluate(() => ({ ready: document.body.dataset.ready, mode: document.body.dataset.mode,
         bodyClass: document.body.className, formHidden: document.getElementById('templateCreateForm')?.hidden,
         formClass: document.getElementById('templateCreateForm')?.className,
+        folderPaths: [...document.querySelectorAll('.quick-folder-row')].map(row => row.dataset.folderPath),
+        assetStatus: document.getElementById('quickAssetStatus')?.textContent,
+        projectId: state.projectId, treeScope: state.quickAssetTree?.scopePath,
         accordions: ['promptAccordion', 'scriptAccordion', 'assetAccordion'].map(id => ({ id, open: document.getElementById(id)?.open })) })).catch(() => null);
       try { await creator.locator('#promptPanel').screenshot({ path: path.join(evidenceRoot, 'failure-sidebar.png') }); } catch {}
     }
+    console.error('CREATOR_SIDEBAR_FAILURE ' + JSON.stringify(report));
     throw error;
   } finally {
     clearTimeout(watchdog);

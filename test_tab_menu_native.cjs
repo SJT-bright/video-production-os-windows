@@ -46,6 +46,7 @@ async function main() {
   const report = { status: 'running', testedAt: new Date().toISOString(), checks: {},
     scope: { isolatedSourceOrPackagedApp: true, formalAppChanged: false,
       realUserTabsClosed: false, assetsDeleted: false, physicalMouseE2E: false,
+      initialNativeCursor: 'isolated screen-position adapter; subsequent pointer events use Chromium input',
       inputMethod: 'Playwright Chromium mouse input into native Electron windows' } };
   let application, creator, latestMenu;
   let timedOut = false;
@@ -103,7 +104,25 @@ async function main() {
       platform.webContents.on('did-navigate', () => globalThis.__tabMenuNativeProbe.navigations++);
       platform.webContents.on('did-finish-load', () => globalThis.__tabMenuNativeProbe.loads++);
     });
-    await application.evaluate(({ app, BrowserWindow }) => {
+    await application.evaluate(({ app, BrowserWindow, screen }) => {
+      // CDP input does not move the host OS cursor. Keep the initial cursor
+      // inside until Playwright attaches to the new popup; otherwise the
+      // requested 500ms outside timeout can expire before the test gets a Page.
+      // The never-entered case explicitly supplies an outside position below.
+      globalThis.__tabMenuOriginalCursor = screen.getCursorScreenPoint;
+      globalThis.__tabMenuInitialCursorOutside = false;
+      screen.getCursorScreenPoint = () => {
+        const popup = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().includes('/tab-menu.html'));
+        if (!popup) return globalThis.__tabMenuOriginalCursor.call(screen);
+        const bounds = popup.getContentBounds();
+        const point = globalThis.__tabMenuInitialCursorOutside
+          ? { x: bounds.x - 30, y: bounds.y - 30 }
+          : { x: bounds.x + Math.floor(bounds.width / 2), y: bounds.y + 20 };
+        if (globalThis.__tabMenuInitialCursorOutside && !globalThis.__tabMenuInitialProbe) {
+          globalThis.__tabMenuInitialProbe = { at: Date.now(), id: popup.id, bounds, cursor: point, outside: true };
+        }
+        return point;
+      };
       globalThis.__tabMenuWindowEvents = [];
       app.on('activate', () => globalThis.__tabMenuWindowEvents.push({ kind: 'app-activate', at: Date.now() }));
       app.on('browser-window-focus', (_event, win) => globalThis.__tabMenuWindowEvents.push({ kind: 'app-window-focus', at: Date.now(), id: win.id }));
@@ -139,6 +158,7 @@ async function main() {
       latestMenu = menu;
       menu.setDefaultTimeout(10000);
       await menu.locator('[data-action="close"]').waitFor({ state: 'visible' });
+      await menu.waitForFunction(() => innerHeight > 64);
       await menu.evaluate(() => {
         window.__nativePointerEvents = [];
         for (const kind of ['pointerenter', 'pointerleave']) document.documentElement.addEventListener(kind, event => {
@@ -147,7 +167,7 @@ async function main() {
         });
       });
       if (enterImmediately) {
-        const box = await menu.locator('[data-action="duplicate"]').boundingBox();
+        const box = await menu.locator('[data-action="rename"]').boundingBox();
         assert.ok(box);
         await menu.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
         // Move into the popup before networkidle's 500ms wait, because the user
@@ -168,7 +188,7 @@ async function main() {
       }),
     }));
     const moveInside = async menu => {
-      const box = await menu.locator('[data-action="duplicate"]').boundingBox();
+      const box = await menu.locator('[data-action="rename"]').boundingBox();
       assert.ok(box);
       await menu.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     };
@@ -226,25 +246,19 @@ async function main() {
     report.checks.quickReturnCancelsDismissal = true;
     await unchanged('Leave/return/cancel preserves native view identity');
 
-    menu = await open(sourceId, false);
-    const initiallyOutside = await application.evaluate(({ BrowserWindow, screen }) => {
-      const popup = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().includes('/tab-menu.html'));
-      const bounds = popup.getBounds(), cursor = screen.getCursorScreenPoint();
-      return { cursor, bounds, outside: cursor.x < bounds.x || cursor.y < bounds.y
-        || cursor.x >= bounds.x + bounds.width || cursor.y >= bounds.y + bounds.height };
+    await application.evaluate(() => {
+      globalThis.__tabMenuInitialCursorOutside = true;
+      globalThis.__tabMenuInitialProbe = null;
     });
-    if (initiallyOutside.outside) {
-      const openedAt = Date.now();
-      await delay(180);
-      assert.equal(menu.isClosed(), false, 'Initially outside popup must also dwell, not close instantly');
-      await until(() => menu.isClosed(), 'never-entered popup closes', 1800);
-      report.checks.initiallyOutsideWithoutEnterCloses = true;
-      report.initiallyOutside = { ...initiallyOutside, elapsedFromReadyMs: Date.now() - openedAt };
-    } else {
-      report.checks.initiallyOutsideWithoutEnterCloses = 'not-tested: physical cursor happened to be inside';
-      await menu.keyboard.press('Escape');
-      await until(() => menu.isClosed(), 'inside popup escape');
-    }
+    await tab(sourceId).click({ button: 'right' });
+    const initiallyOutside = await until(() => application.evaluate(() => globalThis.__tabMenuInitialProbe), 'initial outside cursor is sampled');
+    const outsideClosed = await until(() => application.evaluate((_electron, id) => globalThis.__tabMenuWindowEvents
+      .find(event => event.kind === 'closed' && event.id === id), initiallyOutside.id), 'never-entered popup closes', 1800);
+    const outsideElapsed = outsideClosed.at - initiallyOutside.at;
+    assert.ok(outsideElapsed >= 440 && outsideElapsed < 1600, `Initial outside timeout: ${outsideElapsed}`);
+    report.checks.initiallyOutsideWithoutEnterCloses = true;
+    report.initiallyOutside = { ...initiallyOutside, elapsedFromNativeStartMs: outsideElapsed };
+    await application.evaluate(() => { globalThis.__tabMenuInitialCursorOutside = false; });
     await unchanged('Never-entered menu cancellation preserves platform');
 
     menu = await open(sourceId);
@@ -333,6 +347,7 @@ async function main() {
       report.windowEvents = await application.evaluate(() => globalThis.__tabMenuWindowEvents || []).catch(() => []);
       await application.evaluate(({ screen }) => {
         if (globalThis.__tabMenuOriginalNearestDisplay) screen.getDisplayNearestPoint = globalThis.__tabMenuOriginalNearestDisplay;
+        if (globalThis.__tabMenuOriginalCursor) screen.getCursorScreenPoint = globalThis.__tabMenuOriginalCursor;
       }).catch(() => {});
       await application.close().catch(() => application.process()?.kill('SIGKILL'));
     }
