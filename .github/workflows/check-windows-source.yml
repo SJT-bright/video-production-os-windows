@@ -32,6 +32,10 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Prepare Windows audio component
         run: node prepare-media-tools.cjs win32 x64
+      - name: Build isolated Windows App
+        env:
+          DEBUG: electron-packager,extract-zip
+        run: npm run build:windows:release
       - name: Check shared source and Windows workflows
         run: npm run test:source
       - name: Check native menus and template migration
@@ -40,10 +44,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node test_prompt_template_migration_native.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build isolated Windows App
-        env:
-          DEBUG: electron-packager
-        run: npm run build:windows:release
       - name: Launch packaged EXE and verify retained data
         run: node test_windows_release.cjs
       - name: Verify bundled audio clipping
