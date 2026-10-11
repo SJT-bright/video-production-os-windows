@@ -121,7 +121,9 @@ function resolveDownloadTarget({
 async function deleteBrowserDownloadFile({ libraryRoot, downloadsRoot, relativePath }) {
   const entry = resolveCreativeAsset(libraryRoot, relativePath, 'file');
   if (!entry || !entry.stat.isFile()) throw new Error('下载文件不存在');
-  const root = fs.realpathSync(downloadsRoot);
+  // Match the asset resolver's native spelling, including Windows TEMP's
+  // short-name aliases, before checking the selected project's boundary.
+  const root = fs.realpathSync.native(downloadsRoot);
   const within = path.relative(root, entry.abs);
   if (!within || within === '..' || within.startsWith(`..${path.sep}`) || path.isAbsolute(within)) {
     throw new Error('只能永久删除当前剧本的浏览器下载文件');

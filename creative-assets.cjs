@@ -74,7 +74,7 @@ function resolveCreativeAsset(root, relativePath, kind = 'file') {
     const stat = fs.statSync(candidate);
     if (kind === 'file' && !stat.isFile()) return null;
     if (kind === 'folder' && !stat.isDirectory()) return null;
-    const real = fs.realpathSync(candidate);
+    const real = fs.realpathSync.native(candidate);
     if (!isWithin(realRoot, real)) return null;
     return { abs: real, rel: normalized, stat };
   } catch {
