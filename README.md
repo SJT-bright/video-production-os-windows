@@ -1,18 +1,20 @@
-# 视频制作 OS · v1.3.7
+# 视频制作 OS · v1.3.8
 
 把图片／视频创作网页、剧本、固定提示词、分集资产和人物音频整理到一个本地工作台。作者：[SJT-bright](https://github.com/SJT-bright)。应用使用 Electron、Node.js、原生 HTML/CSS/JavaScript 和 SQLite；生成仍在使用者自己的第三方网站账号中完成。
 
 ## 下载最新版
 
-- [Mac 通用版 v1.3.7](https://github.com/SJT-bright/video-production-os/releases/tag/v1.3.7)：下载 `VideoProductionOS-Mac-v1.3.7-Universal.zip`，解压后打开 App。包含 Apple Silicon 和 Intel 架构；本地 ad-hoc 签名，未经过 Apple 公证。
-- [Windows x64 v1.3.7](https://github.com/SJT-bright/video-production-os-windows/releases/tag/v1.3.7)：下载 `VideoProductionOS-Windows-x64.zip`，完整解压后双击 `视频制作OS.exe`，不能只移动 EXE。
+- [Mac 通用版 v1.3.8](https://github.com/SJT-bright/video-production-os/releases/tag/v1.3.8)：下载 `VideoProductionOS-Mac-v1.3.8-Universal.zip`，解压后打开 App。包含 Apple Silicon 和 Intel 架构；本地 ad-hoc 签名，未经过 Apple 公证。
+- [Windows x64 v1.3.8](https://github.com/SJT-bright/video-production-os-windows/releases/tag/v1.3.8)：下载 `VideoProductionOS-Windows-x64.zip`，完整解压后双击 `视频制作OS.exe`，不能只移动 EXE。
 - [Mac 源码](https://github.com/SJT-bright/video-production-os) · [Windows 源码](https://github.com/SJT-bright/video-production-os-windows) · [更新说明](RELEASE-NOTES.md)
 
 GitHub 自动生成的 Source code ZIP 是源码，不是可直接运行的 App。安装包无个人剧本、素材、数据库或网站登录配置。新用户会建立自己的工作区；升级时只替换软件，不删除用户数据目录。
 
 本软件使用 FFmpeg（LGPL-2.1-or-later）进行人物音轨提取，每个 Release 都附带对应的完整组件源码及许可说明：[第三方组件](THIRD-PARTY-NOTICES.md)。
 
-## v1.3.7 的新增优化
+## v1.3.8 的新增优化
+
+- Windows 双拼弹窗缩放时，背景捕获可唤醒隐藏网页的绘制；不会把原生网页放回弹窗前面，也不调用窗口置顶或聚焦。
 
 - 图片右键可直接改名，图片和视频模式均可操作；保留扩展名，同名会提示，取消不改文件。
 - 工具栏增加双拼：选择另一网页后左右并排，分隔条可调宽度，地址与导航跟随当前侧；退出双拼保留两个标签和网页草稿。

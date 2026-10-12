@@ -1,4 +1,6 @@
-# v1.3.7 · 双拼、侧边栏与图片改名
+# v1.3.8 · 两端同步双拼、侧边栏与图片改名
+
+- 修复 Windows 双拼弹窗缩放后的背景捕获：允许隐藏网页在截图时绘制，不重新附着网页、不聚焦窗口，保留原捕获上限和失败兜底。Mac 捕获行为保持不变。
 
 - 图片右键增加改名：图片／视频模式都可操作，保留扩展名，同名不覆盖，取消不修改原文件。
 - 浏览器增加双拼选择器、可调分隔条和当前侧导航；退出双拼保留两个网页及草稿。
@@ -22,7 +24,7 @@
 
 ## 下载与升级
 
-Mac：下载 `VideoProductionOS-Mac-v1.3.7-Universal.zip`，解压打开 App，含 Apple Silicon 和 Intel 架构。本地 ad-hoc 签名，未 Apple 公证。
+Mac：下载 `VideoProductionOS-Mac-v1.3.8-Universal.zip`，解压打开 App，含 Apple Silicon 和 Intel 架构。本地 ad-hoc 签名，未 Apple 公证。
 
 Windows：下载 `VideoProductionOS-Windows-x64.zip`，完整解压后双击 `视频制作OS.exe`。DLL、resources、locales 与音频组件必须一同保留。
 

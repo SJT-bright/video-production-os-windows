@@ -6,7 +6,7 @@ on:
       tag:
         description: 'Verified release tag'
         required: true
-        default: 'v1.3.7'
+        default: 'v1.3.8'
 
 permissions:
   contents: write

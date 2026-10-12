@@ -2736,7 +2736,9 @@ function setPlatformViewHidden(hidden, refresh = false) {
     const frames = await Promise.all(layout.frames.map(async ({ view, pane, bounds }) => {
       let image = '';
       try {
-        const capture = await Promise.race([view.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true }), new Promise(resolve => setTimeout(() => resolve(null), 200))]);
+        // Windows stops painting a detached view. Allow capture to wake its
+        // compositor; this does not attach the View or focus the App window.
+        const capture = await Promise.race([view.webContents.capturePage(undefined, { stayHidden: process.platform !== 'win32', stayAwake: true }), new Promise(resolve => setTimeout(() => resolve(null), 200))]);
         if (capture && !capture.isEmpty()) image = capture.toDataURL();
       } catch { logDiagnostic('platform-backdrop', '无法读取临时页面底图'); }
       return { pane, bounds, image };
