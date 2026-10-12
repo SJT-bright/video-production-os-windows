@@ -2716,7 +2716,7 @@ function platformBackdropLayout() {
     add(pair[1].view, 'right', panes.right);
   } else add(activeView, 'single', platform);
   if (assetPanelState.open) add(assetView, 'asset', { x: region.x + region.width - panelWidth, y: region.y, width: panelWidth, height: region.height });
-  const key = JSON.stringify([region, frames.map(frame => [frame.view.webContents.id, frame.pane, frame.bounds])]);
+  const key = JSON.stringify([region, frames.map(frame => [frame.view.webContents.id, frame.view.webContents.getURL(), frame.pane, frame.bounds])]);
   return { region: { width: region.width, height: region.height }, frames, key };
 }
 
