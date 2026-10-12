@@ -107,6 +107,23 @@ async function main() {
     await until(async () => (await getState()).split.enabled && (await surface()).rows.every(row => row.visible), 'both views visible');
     const before = await surface(); for (const row of before.rows) assert.deepEqual(row.security, { sandbox: true, contextIsolation: true, webSecurity: true, nodeIntegration: false });
     report.checks.realChooserAndTwoSecureNativeViews = true;
+    // Loading JavaScript is not proof that the native compositor has painted.
+    // Put this test's window in the foreground and wait for actual local frames
+    // before opening the modal. No capture API or application timeout is changed.
+    await native(({ BrowserWindow, app }) => {
+      const host = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('/creator.html'));
+      host.show(); host.focus();
+      if (process.platform === 'darwin') app.focus({ steal: true });
+    });
+    report.captureWarmup = await until(() => native(async ({ webContents, BrowserWindow }) => {
+      const host = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('/creator.html'));
+      const rows = await Promise.all(webContents.getAllWebContents().filter(w => !w.isDestroyed() && w.getURL().includes('splitlab=')).map(async wc => {
+        const start = Date.now();
+        const image = await Promise.race([wc.capturePage(), new Promise(resolve => setTimeout(() => resolve(null), 1500))]);
+        return { id: wc.id, size: image?.getSize(), nonEmpty: !!image && !image.isEmpty(), elapsed: Date.now() - start };
+      }));
+      return rows.length === 2 && rows.every(r => r.nonEmpty) ? { hostVisible: host.isVisible(), hostFocused: host.isFocused(), rows } : false;
+    }), 'actual native frames before modal');
     if (process.env.SPLIT_CAPTURE_DIAGNOSTIC === '1') {
       report.captureProbe = await native(async ({ webContents, BrowserWindow }) => {
         const host = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('/creator.html'));

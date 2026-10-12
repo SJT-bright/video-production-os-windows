@@ -260,7 +260,12 @@ async function main() {
     await creator.locator('#promptPanel').screenshot({ path: path.join(evidenceRoot, 'sidebar-narrow-long-target.png') });
     await application.evaluate(() => globalThis.__sidebarNativeProbe.host.setSize(860, 740));
     await creator.waitForFunction(() => innerWidth <= 900);
+    // WM_SIZE and the renderer's resize handler are asynchronous on Windows.
+    // Wait for responsive state before deciding whether to use the expand button.
+    await creator.waitForFunction(() => document.body.classList.contains('prompt-collapsed')
+      === (state.sidebarCollapsed === null ? matchMedia('(max-width: 900px)').matches : state.sidebarCollapsed));
     if (!await creator.locator('body').evaluate(body => body.classList.contains('prompt-expanded'))) await creator.locator('#togglePrompt').click();
+    await creator.waitForFunction(() => document.body.classList.contains('prompt-expanded'));
     await setAccordions({ prompt: true, scripts: false, assets: true });
     await formHidden('Responsive expanded sidebar cannot override empty form hidden state');
     await delay(350);
