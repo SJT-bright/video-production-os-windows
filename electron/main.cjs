@@ -207,6 +207,8 @@ let chromeOverlaysHidden = false;
 let platformBackdropSequence = 0;
 let platformBackdropPending = null;
 let platformBackdropDisplayedKey = '';
+// Frozen real frames live only for this modal; never written to disk.
+const platformBackdropSnapshots = new Map();
 let platformViewsRequestedHidden = false;
 let activeServiceId = null;
 let activeMode = initialBrowserSession?.activeMode || 'image';
@@ -2039,6 +2041,7 @@ function teardownCreatorViews() {
   platformBackdropSequence += 1;
   platformBackdropPending = null;
   platformBackdropDisplayedKey = '';
+  if (typeof platformBackdropSnapshots !== 'undefined') platformBackdropSnapshots.clear();
   platformViewsRequestedHidden = false;
   if (typeof splitViewSession !== 'undefined' && typeof disableSplit === 'function') splitViewSession = disableSplit(splitViewSession);
   activeView = null;
@@ -2718,6 +2721,7 @@ function platformBackdropLayout() {
 }
 
 function setPlatformViewHidden(hidden, refresh = false) {
+  if (!hidden || !platformViewsRequestedHidden) platformBackdropSnapshots.clear();
   platformViewsRequestedHidden = hidden;
   const layout = hidden ? platformBackdropLayout() : null;
   if (hidden && platformBackdropPending?.key === layout.key) return platformBackdropPending.promise;
@@ -2734,20 +2738,26 @@ function setPlatformViewHidden(hidden, refresh = false) {
   pending.promise = (async () => {
     // 同时截取左右页（及已打开的资产面板），各自保留位置；不合成巨幅位图、不落盘。
     const frames = await Promise.all(layout.frames.map(async ({ view, pane, bounds }) => {
+      const snapshotKey = JSON.stringify([view.webContents.id, view.webContents.getURL()]);
+      // A detached renderer may no longer paint on either desktop platform.
+      // Resize the frozen modal background, not a live page behind the modal.
+      const frozen = chromeOverlaysHidden ? platformBackdropSnapshots.get(snapshotKey) : '';
+      if (frozen) return { pane, bounds, image: frozen, snapshotKey };
       let image = '';
       try {
-        // Windows stops painting a detached view. Allow capture to wake its
-        // compositor; this does not attach the View or focus the App window.
-        const capture = await Promise.race([view.webContents.capturePage(undefined, { stayHidden: process.platform !== 'win32', stayAwake: true }), new Promise(resolve => setTimeout(() => resolve(null), 200))]);
+        const capture = await Promise.race([view.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true }), new Promise(resolve => setTimeout(() => resolve(null), 200))]);
         if (capture && !capture.isEmpty()) image = capture.toDataURL();
       } catch { logDiagnostic('platform-backdrop', '无法读取临时页面底图'); }
-      return { pane, bounds, image };
+      return { pane, bounds, image, snapshotKey };
     }));
     const current = () => platformViewsRequestedHidden && sequence === platformBackdropSequence && workspaceSurface === 'creator'
       && creatorLayoutReady && creatorWindow && !creatorWindow.isDestroyed() && layout.key === platformBackdropLayout().key;
     if (!current()) return browserState();
+    platformBackdropSnapshots.clear();
+    for (const frame of frames) if (frame.image) platformBackdropSnapshots.set(frame.snapshotKey, frame.image);
     platformBackdropDisplayedKey = layout.key;
-    sendCreator('creator:platform-backdrop', { image: frames[0]?.image || '', frames, region: layout.region, sequence });
+    sendCreator('creator:platform-backdrop', { image: frames[0]?.image || '',
+      frames: frames.map(({ snapshotKey, ...frame }) => frame), region: layout.region, sequence });
     if (frames.some(frame => frame.image)) {
       // 只等本地宿主图像解码；截图永不写盘。100ms兜底保持模态仍可操作。
       await creatorWindow.webContents.executeJavaScript(`Promise.race([

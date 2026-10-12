@@ -162,6 +162,15 @@ async function main() {
     });
     await renderer(() => document.getElementById('splitReplace').click());
     await until(async () => { const b = await backdrop(); return !b.hidden && b.panes.length === 2 && b.panes.every(p => p.decoded) && (await surface()).rows.every(r => !r.visible); }, 'pair-aware backdrop');
+    const frozenSources = await renderer(() => [...document.querySelectorAll('#platformBackdropLayer .platform-backdrop-pane:not([hidden]) img')].map(img => img.src));
+    // A frozen modal must survive resizing even if detached renderers cannot
+    // provide another frame. The initial frames above came from the real pages.
+    await native(({ webContents }) => {
+      for (const wc of webContents.getAllWebContents().filter(w => !w.isDestroyed() && w.getURL().includes('splitlab='))) {
+        wc.__resizeCapture = wc.capturePage.bind(wc);
+        wc.capturePage = () => Promise.reject(new Error('isolated hidden resize capture failure'));
+      }
+    });
     report.backdrops = [];
     for (const dimensions of [[1261, 861], [1437, 917]]) {
       await native(({ BrowserWindow }, size) => BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('/creator.html')).setContentSize(...size), dimensions);
@@ -170,8 +179,15 @@ async function main() {
       assert.equal(b.color, 'rgb(217, 217, 222)'); assert.equal(b.gutter.width, 4);
       assert.ok(Math.abs(b.panes[0].x - b.stage.x) < .15); assert.ok(Math.abs(b.panes[1].x + b.panes[1].width - b.stage.x - b.stage.width) < .15);
       assert.ok(Math.abs(b.gutter.x - b.panes[0].x - b.panes[0].width) < .55);
+      assert.deepEqual(await renderer(() => [...document.querySelectorAll('#platformBackdropLayer .platform-backdrop-pane:not([hidden]) img')].map(img => img.src)), frozenSources);
       report.backdrops.push(b);
     }
+    await native(({ webContents }) => {
+      for (const wc of webContents.getAllWebContents().filter(w => !w.isDestroyed() && w.getURL().includes('splitlab='))) {
+        wc.capturePage = wc.__resizeCapture; delete wc.__resizeCapture;
+      }
+    });
+    report.checks.frozenBackdropSurvivesResizeWithoutHiddenRecapture = true;
     const hostImage = await native(async ({ BrowserWindow }) => {
       const host = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('/creator.html'));
       return (await host.webContents.capturePage()).toDataURL();

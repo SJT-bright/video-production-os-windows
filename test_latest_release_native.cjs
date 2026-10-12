@@ -31,6 +31,7 @@ const split = JSON.parse(fs.readFileSync(path.join(evidence, 'split-layout/recei
 assert.equal(split.status, 'layout-passed-drag-not-tested');
 for (const key of ['realChooserAndTwoSecureNativeViews', 'ratioAndNonOverlappingBounds',
   'pairBackdropResizeCancelAndLateCapture', 'pushedAssetPanelDoesNotCropSecondPage',
+  'frozenBackdropSurvivesResizeWithoutHiddenRecapture',
   'captureFailureHasOpaqueFallbackAndRestores', 'realSecondPageReplacementKeepsFirstPage',
   'sidebarCollapseReloadExpandKeepsNativePages', 'closePreservesBothDocumentsAndDrafts',
   'restartKeepsBothTabsAndCanSplitAgain']) assert.equal(split.checks[key], true, key);
