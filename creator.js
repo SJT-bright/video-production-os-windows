@@ -35,6 +35,7 @@ const state = {
   },
   scripts: { groups: [] },
   accordions: { prompt: false, scripts: true, assets: true },
+  sidebarCollapsed: null,
   quickFolders: [],
   quickAssetFolder: '',
   collapsedQuickFolders: new Set(),
@@ -72,9 +73,11 @@ const el = Object.fromEntries([
   'quickMoveDialog', 'quickMoveDialogTitle', 'quickMoveDialogHint', 'quickMoveFolderList', 'quickCancelMove', 'quickCancelMoveTop',
   'importLocalAssets', 'openAssetLibrary', 'assetDropZone',
   'quickTools', 'quickMultiSelect', 'quickSelInfo', 'quickSelClear',
-  'downloadSummary', 'downloadList', 'openModeFolder', 'browserStage', 'platformBackdrop', 'addressService',
+  'downloadSummary', 'downloadList', 'openModeFolder', 'browserStage', 'platformBackdrop', 'platformBackdropLayer', 'platformBackdropPrimary', 'addressService',
   'browserPlaceholderTitle', 'reconnectBrowser',
-  'addressForm', 'addressInput', 'addressGo', 'loadDot', 'openExternal', 'togglePrompt', 'showMainWindow', 'creatorToast',
+  'addressForm', 'addressInput', 'addressGo', 'loadDot', 'openExternal', 'togglePrompt', 'collapseMaterialSidebar', 'showMainWindow', 'creatorToast',
+  'splitViewToggle', 'splitBar', 'splitFocusLeft', 'splitFocusRight', 'splitReplace', 'splitClose', 'splitGutter',
+  'splitPickerDialog', 'splitPickerTitle', 'splitPickerHint', 'splitPickerBody', 'splitPickerClose',
   'importDownloadedFiles', 'browserRecovery',
   'browserRecoveryMessage', 'browserRecoveryUrl', 'browserRecoveryReload',
   'browserRecoveryExternal', 'browserRecoveryImport', 'toggleAssets',
@@ -197,6 +200,7 @@ function loadWorkspace() {
       };
     }
     if (typeof global.skipClearConfirm === 'boolean') state.skipClearConfirm = global.skipClearConfirm;
+    if (typeof global.sidebarCollapsed === 'boolean') state.sidebarCollapsed = global.sidebarCollapsed;
     if (global.accordions && typeof global.accordions === 'object') {
       for (const key of ['prompt', 'scripts', 'assets']) {
         if (typeof global.accordions[key] === 'boolean') state.accordions[key] = global.accordions[key];
@@ -257,6 +261,7 @@ function saveWorkspace(immediate = false) {
         services: state.services,
         assetPanel: state.assetPanel,
         accordions: state.accordions,
+        sidebarCollapsed: state.sidebarCollapsed,
         skipClearConfirm: state.skipClearConfirm,
       }));
       const projectKey = `${PROJECT_STORAGE_PREFIX}${snapshot.projectId}`;
@@ -435,6 +440,30 @@ function renderMode() {
   renderQuickFolderTree();
   renderDownloads();
   syncAccordionState();
+  syncMaterialSidebar();
+  queueBoundsUpdate();
+}
+
+function materialSidebarCollapsed() {
+  return state.sidebarCollapsed === null ? window.matchMedia('(max-width: 900px)').matches : state.sidebarCollapsed;
+}
+
+function syncMaterialSidebar() {
+  const collapsed = materialSidebarCollapsed();
+  document.body.classList.toggle('prompt-collapsed', collapsed);
+  document.body.classList.toggle('prompt-expanded', !collapsed);
+  for (const button of [el.togglePrompt, el.collapseMaterialSidebar]) {
+    if (!button) continue;
+    button.setAttribute('aria-expanded', String(!collapsed));
+    button.title = collapsed ? '展开创作材料栏' : '收起创作材料栏';
+    button.setAttribute('aria-label', button.title);
+  }
+}
+
+function toggleMaterialSidebar() {
+  state.sidebarCollapsed = !materialSidebarCollapsed();
+  syncMaterialSidebar();
+  saveWorkspace(true);
   queueBoundsUpdate();
 }
 
@@ -1225,8 +1254,9 @@ function renderPlatformOpenList() {
 let renameTarget = null;
 
 function openRenameDialog(kind, id, name) {
-  renameTarget = { kind, id };
-  el.renameTitle.textContent = kind === 'tab' ? '修改标签名称' : '修改网站名称';
+  renameTarget = { kind, id, projectId: kind === 'asset' ? state.projectId : null };
+  el.renameTitle.textContent = kind === 'asset' ? '修改图片名称' : kind === 'tab' ? '修改标签名称' : '修改网站名称';
+  el.renameName.maxLength = kind === 'asset' ? 120 : 40;
   el.renameName.value = name;
   el.renameError.textContent = '';
   el.renameSave.disabled = false;
@@ -1243,7 +1273,17 @@ async function saveRenamedItem(event) {
   if (!name) { el.renameError.textContent = '请输入名称'; return; }
   el.renameSave.disabled = true;
   try {
-    if (target.kind === 'service') {
+    if (target.kind === 'asset') {
+      if (target.projectId !== state.projectId) throw new Error('剧本已切换，请重新选择图片');
+      const response = await fetch(`/api/creative-assets/rename?project=${encodeURIComponent(target.projectId)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: target.id, name }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      applyQuickAssetMoves([{ ...result, oldPath: target.id }], target.projectId);
+      if (target.projectId === state.projectId) await loadAssetItems();
+    } else if (target.kind === 'service') {
       await API.renameService(target.id, name);
       state.config = await API.getConfig();
       renderPlatforms();
@@ -2470,6 +2510,7 @@ function showQuickFileMenu(item, event) {
     { label: `移动到…${selected.length > 1 ? `（${selected.length} 项）` : ''}`, run: () => openQuickTransferDialog(selected) },
     { label: `复制到…${selected.length > 1 ? `（${selected.length} 项）` : ''}`, run: () => openQuickTransferDialog(selected, 'copy') },
   ];
+  if (item.type === 'image') items.unshift({ label: '改名…', run: () => openRenameDialog('asset', item.path, item.name.replace(/\.[^.]+$/, '')) });
   if (selected.length === 1) items.push({ label: '在完整库中查看', run: () => API.focusAssetInLibrary?.(item.path, state.projectId) });
   FolderEditor.menu(event, items, el.quickFolderTree);
 }
@@ -3731,17 +3772,35 @@ async function loadMoreInbox() {
 let platformBackdropSequence = -1;
 
 function applyPlatformBackdrop(payload = {}) {
-  if (!el.platformBackdrop) return;
+  if (!el.platformBackdrop || !el.platformBackdropLayer) return;
   const sequence = Number(payload.sequence);
   if (!Number.isFinite(sequence) || sequence < platformBackdropSequence) return;
   platformBackdropSequence = sequence;
-  if (typeof payload.image === 'string' && /^data:image\/(png|jpeg|webp);base64,/.test(payload.image)) {
-    el.platformBackdrop.src = payload.image;
-    el.platformBackdrop.hidden = false;
-  } else {
-    el.platformBackdrop.hidden = true;
-    el.platformBackdrop.removeAttribute('src');
-  }
+  const validImage = image => typeof image === 'string' && /^data:image\/(png|jpeg|webp);base64,/.test(image);
+  const region = payload.region;
+  const frames = Array.isArray(payload.frames) && Number(region?.width) > 0 && Number(region?.height) > 0
+    ? payload.frames.slice(0, 3).filter(frame => frame?.bounds && ['x', 'y', 'width', 'height'].every(key => Number.isFinite(frame.bounds[key])) && frame.bounds.width > 0 && frame.bounds.height > 0)
+    : validImage(payload.image) ? [{ image: payload.image, bounds: { x: 0, y: 0, width: 1, height: 1 } }] : [];
+  const width = Number(region?.width) > 0 ? region.width : 1;
+  const height = Number(region?.height) > 0 ? region.height : 1;
+  el.platformBackdropLayer.querySelectorAll('.platform-backdrop-secondary').forEach(pane => pane.remove());
+  el.platformBackdropLayer.hidden = !frames.length;
+  el.platformBackdropPrimary.hidden = !frames.length;
+  el.platformBackdrop.hidden = true;
+  el.platformBackdrop.removeAttribute('src');
+  frames.forEach((frame, index) => {
+    const pane = index ? document.createElement('div') : el.platformBackdropPrimary;
+    const image = index ? document.createElement('img') : el.platformBackdrop;
+    pane.className = `platform-backdrop-pane${index ? ' platform-backdrop-secondary' : ''}`;
+    pane.dataset.pane = frame.pane || 'single';
+    Object.assign(pane.style, { left: `${frame.bounds.x / width * 100}%`, top: `${frame.bounds.y / height * 100}%`,
+      width: `${frame.bounds.width / width * 100}%`, height: `${frame.bounds.height / height * 100}%`, right: 'auto', bottom: 'auto' });
+    image.className = 'platform-backdrop';
+    image.alt = '';
+    image.hidden = !validImage(frame.image);
+    if (!image.hidden) image.src = frame.image;
+    if (index) { pane.append(image); el.platformBackdropLayer.append(pane); }
+  });
 }
 
 function syncCreatorDialogVisibility() {
@@ -4235,28 +4294,643 @@ async function restoreModeBrowser(mode = state.mode) {
     state.modeSwitchPending = false;
     document.querySelectorAll('.mode-button').forEach(button => { button.disabled = false; });
     renderPlatforms();
+    renderSplitChrome();
   }
 }
+
+const SPLIT_GUTTER = 4;
+const SPLIT_RATIO_MIN = 0.2;
+const SPLIT_RATIO_MAX = 0.8;
+const SPLIT_KEY_STEP = 0.05;
+
+let splitDrag = null;
+let splitRatioFrame = 0;
+let splitRatioPending = null;
+let splitRatioTicket = 0;
+let splitRatioCommitted = 0.5;
+let splitRatioRejected = false;
+let splitApiMissingNotified = false;
+let splitPickerSession = null;
+let splitPickerRendered = '';
+let splitPickerDismissReason = '';
+let splitChoicePending = false;
+let splitExitPending = false;
+
+function clampSplitRatio(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0.5;
+  return Math.min(SPLIT_RATIO_MAX, Math.max(SPLIT_RATIO_MIN, number));
+}
+
+function normalizeSplit(split) {
+  if (!split || typeof split !== 'object' || split.enabled !== true) {
+    return { enabled: false, leftTabId: '', rightTabId: '', focusedPane: 'left', ratio: 0.5, gutter: SPLIT_GUTTER };
+  }
+  return {
+    enabled: true,
+    leftTabId: typeof split.leftTabId === 'string' ? split.leftTabId : '',
+    rightTabId: typeof split.rightTabId === 'string' ? split.rightTabId : '',
+    focusedPane: split.focusedPane === 'right' ? 'right' : 'left',
+    ratio: clampSplitRatio(split.ratio),
+    gutter: SPLIT_GUTTER,
+  };
+}
+
+function isBrowserStatePayload(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  return Array.isArray(value.tabs)
+    || typeof value.tabId === 'string'
+    || typeof value.serviceId === 'string'
+    || typeof value.mode === 'string'
+    || (!!value.split && typeof value.split === 'object');
+}
+
+function splitApiMissing() {
+  if (splitApiMissingNotified) return;
+  splitApiMissingNotified = true;
+  showToast('当前桌面版还没有双拼。请保存网页内容，按 ⌘Q 完全退出后重新打开新版；刷新网页不会更新桌面程序。');
+}
+
+function stageLayoutWidth() {
+  const rect = el.browserStage?.getBoundingClientRect();
+  return rect && Number.isFinite(rect.width) ? Math.max(0, rect.width) : 0;
+}
+
+// 与主进程 applyCreatorLayout 同一条推开宽度：只有 push 才扣资产库，overlay 不缩。
+// 与原生 View 一样，先取整再分配；4px 分隔条必须完全填满，不能露出底层占位页。
+function platformContentWidth(stageWidth) {
+  const width = Math.max(0, Math.round(Number(stageWidth) || 0));
+  const panel = state.assetPanel;
+  if (!panel?.open || panel.layout !== 'push') return width;
+  const minimumBrowserWidth = Math.min(420, Math.floor(width / 2));
+  const panelWidth = Math.max(1, Math.min(Number(panel.width) || 0, width - minimumBrowserWidth));
+  return Math.max(0, width - panelWidth);
+}
+
+function tabLabelFromList(tabs, tab) {
+  if (!tab) return '';
+  const mode = tab.mode || state.mode;
+  const sameMode = (Array.isArray(tabs) ? tabs : []).filter(item => item && item.mode === mode && validServiceForMode(mode, item.serviceId));
+  const indexed = tabsWithIndexes(sameMode).find(item => item.id === tab.id);
+  const base = serviceLabel(serviceById(tab.serviceId), mode);
+  if (tab.customName) return tab.customName;
+  if (indexed && indexed.index > 1) return `${base}·${indexed.index}`;
+  return base;
+}
+
+function labeledModeTabs() {
+  return tabsWithIndexes(visibleTabs()).map(tab => ({ ...tab, displayLabel: tabLabelFromList(state.browser?.tabs, tab) }));
+}
+
+function tabLabelById(tabId) {
+  if (!tabId) return '';
+  const labeled = labeledModeTabs().find(tab => tab.id === tabId);
+  if (labeled) return labeled.displayLabel;
+  const tab = (state.browser?.tabs || []).find(item => item.id === tabId);
+  return tab ? tabLabelFromList(state.browser?.tabs, tab) : '';
+}
+
+function tabStillPresent(tabId) {
+  if (!tabId) return false;
+  const tabs = state.browser?.tabs;
+  if (!Array.isArray(tabs) || !tabs.length) return state.browser?.tabId === tabId;
+  return tabs.some(tab => tab.id === tabId && (!tab.mode || tab.mode === state.mode));
+}
+
+function hasSplitSourcePage() {
+  const browser = state.browser;
+  if (!browser?.tabId) return false;
+  return !!(browser.serviceId || browser.url || tabStillPresent(browser.tabId));
+}
+
+function focusedPanePresentation(browser, split) {
+  if (!split?.enabled || !browser?.tabId) return {};
+  const focusedId = split.focusedPane === 'right' ? split.rightTabId : split.leftTabId;
+  if (!focusedId || browser.tabId === focusedId) return {};
+  const otherId = split.focusedPane === 'right' ? split.leftTabId : split.rightTabId;
+  if (browser.tabId !== otherId) return {};
+  const tabs = Array.isArray(browser.tabs) ? browser.tabs : [];
+  const tab = tabs.find(item => item.id === focusedId);
+  if (!tab) return {};
+  return {
+    serviceId: tab.serviceId,
+    displayLabel: tabLabelFromList(tabs, tab),
+    url: tab.url || '',
+  };
+}
+
+function ratioFromClientX(clientX) {
+  const rect = el.browserStage.getBoundingClientRect();
+  const content = Math.max(1, platformContentWidth(rect.width) - SPLIT_GUTTER);
+  return clampSplitRatio((clientX - rect.left) / content);
+}
+
+function positionSplitGutter() {
+  const gutter = el.splitGutter;
+  if (!gutter) return;
+  const split = normalizeSplit(state.browser?.split);
+  el.browserStage.classList.toggle('is-split', split.enabled);
+  if (!split.enabled) {
+    gutter.hidden = true;
+    return;
+  }
+  const rect = el.browserStage.getBoundingClientRect();
+  const content = Math.max(0, platformContentWidth(rect.width) - SPLIT_GUTTER);
+  const percent = Math.round(split.ratio * 100);
+  gutter.hidden = false;
+  gutter.style.left = `${Math.round(rect.left) - rect.left + Math.round(content * split.ratio)}px`;
+  gutter.style.top = `${Math.round(rect.top) - rect.top}px`;
+  gutter.style.height = `${Math.round(rect.height)}px`;
+  gutter.style.width = `${SPLIT_GUTTER}px`;
+  gutter.setAttribute('aria-valuenow', String(percent));
+  gutter.setAttribute('aria-valuetext', `左侧 ${percent}%`);
+}
+
+function previewSplitRatio(ratio) {
+  const next = clampSplitRatio(ratio);
+  if (!state.browser?.split?.enabled) return;
+  state.browser.split.ratio = next;
+  if (splitDrag) splitDrag.ratio = next;
+  positionSplitGutter();
+  splitRatioPending = next;
+  if (splitRatioFrame || splitRatioRejected) return;
+  splitRatioFrame = requestAnimationFrame(() => {
+    splitRatioFrame = 0;
+    const pending = splitRatioPending;
+    splitRatioPending = null;
+    if (pending == null || splitRatioRejected) return;
+    void pushSplitRatio(pending, { apply: !splitDrag });
+  });
+}
+
+function flushSplitRatio() {
+  if (splitRatioFrame) {
+    cancelAnimationFrame(splitRatioFrame);
+    splitRatioFrame = 0;
+  }
+  const pending = splitRatioPending;
+  splitRatioPending = null;
+  if (pending == null || splitRatioRejected) return;
+  void pushSplitRatio(pending, { apply: true });
+}
+
+async function pushSplitRatio(ratio, { apply = true } = {}) {
+  const requested = clampSplitRatio(ratio);
+  if (!normalizeSplit(state.browser?.split).enabled) return;
+  if (typeof API?.setSplitRatio !== 'function') {
+    splitApiMissing();
+    splitRatioRejected = true;
+    return;
+  }
+  const ticket = ++splitRatioTicket;
+  try {
+    const browser = await API.setSplitRatio(requested);
+    if (ticket !== splitRatioTicket) return;
+    if (!isBrowserStatePayload(browser) || !normalizeSplit(browser.split).enabled) {
+      splitRatioRejected = true;
+      if (state.browser?.split?.enabled) {
+        state.browser.split.ratio = splitRatioCommitted;
+        positionSplitGutter();
+      }
+      showToast('双拼比例没有生效，请确认桌面程序已更新到新版');
+      return;
+    }
+    splitRatioCommitted = normalizeSplit(browser.split).ratio;
+    splitRatioRejected = false;
+    if (apply) applyBrowserState(browser);
+  } catch (error) {
+    if (ticket !== splitRatioTicket) return;
+    splitRatioRejected = true;
+    if (state.browser?.split?.enabled) {
+      state.browser.split.ratio = splitRatioCommitted;
+      positionSplitGutter();
+    }
+    showToast(error.message || '调整双拼宽度失败');
+  }
+}
+
+function renderSplitChrome() {
+  const toggle = el.splitViewToggle;
+  if (!toggle || !el.splitBar || !el.splitGutter) return;
+  const split = normalizeSplit(state.browser?.split);
+  const enabled = split.enabled;
+  const available = hasSplitSourcePage();
+  const barChanged = el.splitBar.hidden !== !enabled;
+  toggle.disabled = !!state.modeSwitchPending || (!enabled && !available);
+  toggle.setAttribute('aria-pressed', String(enabled));
+  if (state.modeSwitchPending) {
+    toggle.title = '正在切换创作模式';
+    toggle.setAttribute('aria-label', '双拼，正在切换创作模式');
+  } else if (enabled) {
+    toggle.title = '退出双拼，回到单页';
+    toggle.setAttribute('aria-label', '双拼，已开启，再按一次回到单页');
+  } else if (!available) {
+    toggle.title = '先打开一个网页，才能左右双拼';
+    toggle.setAttribute('aria-label', '双拼，先打开一个网页');
+  } else {
+    toggle.title = '双拼：选择另一个网页，左右并排';
+    toggle.setAttribute('aria-label', '双拼，选择另一个网页左右并排');
+  }
+  el.splitBar.hidden = !enabled;
+  if (enabled && el.splitFocusLeft && el.splitFocusRight) {
+    const left = tabLabelById(split.leftTabId) || '左侧网页';
+    const right = tabLabelById(split.rightTabId) || '右侧网页';
+    el.splitFocusLeft.textContent = left;
+    el.splitFocusRight.textContent = right;
+    el.splitFocusLeft.title = `聚焦左侧：${left}`;
+    el.splitFocusRight.title = `聚焦右侧：${right}`;
+    el.splitFocusLeft.setAttribute('aria-label', `聚焦左侧网页 ${left}`);
+    el.splitFocusRight.setAttribute('aria-label', `聚焦右侧网页 ${right}`);
+    el.splitFocusLeft.setAttribute('aria-pressed', String(split.focusedPane !== 'right'));
+    el.splitFocusRight.setAttribute('aria-pressed', String(split.focusedPane === 'right'));
+  }
+  positionSplitGutter();
+  syncSplitPicker();
+  if (barChanged) queueBoundsUpdate();
+}
+
+function splitPickerContextAlive(session) {
+  if (!session) return false;
+  if (session.mode !== state.mode || session.projectId !== state.projectId) return false;
+  if (!tabStillPresent(session.primaryTabId)) return false;
+  const currentId = state.browser?.tabId;
+  if (currentId && currentId !== session.primaryTabId) {
+    const split = normalizeSplit(state.browser?.split);
+    const focusedId = split.focusedPane === 'right' ? split.rightTabId : split.leftTabId;
+    const otherId = split.focusedPane === 'right' ? split.leftTabId : split.rightTabId;
+    const laggingOtherPane = split.enabled && focusedId === session.primaryTabId && currentId === otherId;
+    if (!laggingOtherPane) return false;
+  }
+  return true;
+}
+
+function splitPickerSignature(session) {
+  const tabs = labeledModeTabs().map(tab => `${tab.id}:${tab.displayLabel}`).join('|');
+  const services = (state.config?.modeServices?.[state.mode] || []).join('|');
+  const otherId = normalizeSplit(state.browser?.split).rightTabId;
+  return `${session?.primaryTabId || ''}|${otherId}|${tabs}|${services}`;
+}
+
+function splitChoiceButton(name, meta, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'split-picker-choice';
+  const label = document.createElement('span');
+  label.className = 'split-picker-name';
+  label.textContent = name;
+  const aside = document.createElement('span');
+  aside.className = 'split-picker-meta';
+  aside.textContent = meta;
+  button.append(label, aside);
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+function renderSplitPickerList({ focus = false } = {}) {
+  const body = el.splitPickerBody;
+  const session = splitPickerSession;
+  if (!body || !session) return;
+  body.replaceChildren();
+  const primary = labeledModeTabs().find(tab => tab.id === session.primaryTabId)
+    || (state.browser?.tabs || []).find(tab => tab.id === session.primaryTabId);
+  const primaryLabel = primary ? (primary.displayLabel || tabLabelFromList(state.browser?.tabs, primary)) : '';
+  if (el.splitPickerHint) {
+    el.splitPickerHint.textContent = primaryLabel
+      ? `当前网页是「${primaryLabel}」。选另一侧要并排的网页，文字和图片可以左右拖。`
+      : '选另一侧要并排的网页。';
+  }
+  const tabsHeading = document.createElement('h3');
+  tabsHeading.className = 'split-picker-label';
+  tabsHeading.textContent = '已打开的网页';
+  body.appendChild(tabsHeading);
+  const others = labeledModeTabs().filter(tab => tab.id !== session.primaryTabId);
+  const split = normalizeSplit(state.browser?.split);
+  const pairedId = split.enabled
+    ? (session.primaryTabId === split.leftTabId ? split.rightTabId : split.leftTabId)
+    : '';
+  if (!others.length) {
+    const empty = document.createElement('p');
+    empty.className = 'split-picker-empty';
+    empty.textContent = '当前模式没有其他已打开的网页。';
+    body.appendChild(empty);
+  } else {
+    for (const tab of others) {
+      const meta = tab.id === pairedId ? '当前另一侧' : '已打开';
+      body.appendChild(splitChoiceButton(tab.displayLabel, meta, () => confirmSplitChoice({ tabId: tab.id })));
+    }
+  }
+  const serviceHeading = document.createElement('h3');
+  serviceHeading.className = 'split-picker-label';
+  serviceHeading.textContent = '新开网站';
+  body.appendChild(serviceHeading);
+  const serviceIds = state.config?.modeServices?.[state.mode] || [];
+  const services = serviceIds.map(serviceId => serviceById(serviceId)).filter(Boolean);
+  if (!services.length) {
+    const empty = document.createElement('p');
+    empty.className = 'split-picker-empty';
+    empty.textContent = '没有可新开的已配置网站。';
+    body.appendChild(empty);
+  } else {
+    for (const service of services) {
+      body.appendChild(splitChoiceButton(serviceLabel(service), '新开', () => confirmSplitChoice({ serviceId: service.id })));
+    }
+  }
+  splitPickerRendered = splitPickerSignature(session);
+  if (focus) requestAnimationFrame(() => body.querySelector('button')?.focus());
+}
+
+function syncSplitPicker() {
+  const dialog = el.splitPickerDialog;
+  if (!dialog?.open || !splitPickerSession) return;
+  if (!splitPickerContextAlive(splitPickerSession)) {
+    splitPickerDismissReason = 'stale';
+    closeCreatorDialog(dialog, { instant: true });
+    return;
+  }
+  if (splitPickerSignature(splitPickerSession) === splitPickerRendered) return;
+  renderSplitPickerList();
+}
+
+function openSplitPicker() {
+  if (state.modeSwitchPending || splitChoicePending) return;
+  const primaryTabId = state.browser?.tabId || '';
+  if (!primaryTabId || !hasSplitSourcePage()) {
+    showToast('先打开一个网页，再使用双拼');
+    return;
+  }
+  splitPickerSession = { mode: state.mode, projectId: state.projectId, primaryTabId };
+  splitPickerRendered = '';
+  renderSplitPickerList({ focus: true });
+  openCreatorDialog(el.splitPickerDialog);
+}
+
+async function cancelSplitAfterStale(browser) {
+  if (normalizeSplit(browser?.split).enabled && typeof API?.closeSplitView === 'function') {
+    try {
+      const closed = await API.closeSplitView();
+      if (isBrowserStatePayload(closed)) {
+        applyBrowserState(closed);
+        showToast('页面已切换，已取消双拼');
+        return;
+      }
+    } catch {}
+  }
+  if (isBrowserStatePayload(browser)) applyBrowserState(browser);
+  showToast('页面已切换，未开启双拼');
+}
+
+async function confirmSplitChoice(choice) {
+  const session = splitPickerSession;
+  if (!session || splitChoicePending) return;
+  if (!splitPickerContextAlive(session)) {
+    splitPickerDismissReason = 'stale';
+    closeCreatorDialog(el.splitPickerDialog, { instant: true });
+    return;
+  }
+  if (choice.tabId) {
+    if (choice.tabId === session.primaryTabId) return;
+    if (!tabStillPresent(choice.tabId)) {
+      showToast('这个网页已经关闭，请重新选择');
+      splitPickerRendered = '';
+      renderSplitPickerList();
+      return;
+    }
+  } else if (!choice.serviceId || !validServiceForMode(session.mode, choice.serviceId)) {
+    showToast('这个网站已不在当前模式，请重新选择');
+    splitPickerRendered = '';
+    renderSplitPickerList();
+    return;
+  }
+  const tabsBefore = new Set((state.browser?.tabs || []).map(tab => tab.id));
+  const tabIdBefore = state.browser?.tabId || '';
+  splitChoicePending = true;
+  splitPickerDismissReason = 'chosen';
+  closeCreatorDialog(el.splitPickerDialog, { instant: true });
+  try {
+    if (session.mode !== state.mode || session.projectId !== state.projectId || !tabStillPresent(session.primaryTabId)) {
+      showToast('页面已切换，未开启双拼');
+      return;
+    }
+    if (typeof API?.setSplitView !== 'function') {
+      splitApiMissing();
+      return;
+    }
+    const payload = choice.tabId
+      ? { enabled: true, primaryTabId: session.primaryTabId, secondaryTabId: choice.tabId }
+      : { enabled: true, primaryTabId: session.primaryTabId, serviceId: choice.serviceId };
+    const browser = await API.setSplitView(payload);
+    const switchedAway = session.mode !== state.mode
+      || session.projectId !== state.projectId
+      || !tabStillPresent(session.primaryTabId);
+    const currentId = state.browser?.tabId || '';
+    const currentTab = (state.browser?.tabs || []).find(tab => tab.id === currentId);
+    const openedService = !!choice.serviceId && currentTab?.serviceId === choice.serviceId;
+    const movedToExistingThirdPage = !!currentId
+      && currentId !== tabIdBefore
+      && currentId !== session.primaryTabId
+      && currentId !== choice.tabId
+      && tabsBefore.has(currentId)
+      && !openedService;
+    if (switchedAway || movedToExistingThirdPage) {
+      await cancelSplitAfterStale(browser);
+      return;
+    }
+    if (!isBrowserStatePayload(browser) || !normalizeSplit(browser.split).enabled) {
+      showToast('双拼没有生效，请确认桌面程序已更新到新版');
+      if (isBrowserStatePayload(browser)) applyBrowserState(browser);
+      return;
+    }
+    applyBrowserState(browser);
+    queueBoundsUpdate();
+  } catch (error) {
+    showToast(error.message || '开启双拼失败');
+  } finally {
+    splitChoicePending = false;
+  }
+}
+
+async function focusSplitPane(pane) {
+  if (pane !== 'left' && pane !== 'right') return;
+  const split = normalizeSplit(state.browser?.split);
+  if (!split.enabled || splitFocusPending()) return;
+  if (!(pane === 'right' ? split.rightTabId : split.leftTabId)) {
+    showToast('这一侧没有网页');
+    return;
+  }
+  if (typeof API?.focusSplitPane !== 'function') {
+    splitApiMissing();
+    return;
+  }
+  focusSplitPane.pending = true;
+  try {
+    const browser = await API.focusSplitPane(pane);
+    if (!isBrowserStatePayload(browser) || !normalizeSplit(browser.split).enabled || normalizeSplit(browser.split).focusedPane !== pane) {
+      showToast('切换双拼焦点没有生效，请确认桌面程序已更新到新版');
+      if (isBrowserStatePayload(browser)) applyBrowserState(browser);
+      return;
+    }
+    applyBrowserState(browser);
+  } catch (error) {
+    showToast(error.message || '切换双拼页面失败');
+  } finally {
+    focusSplitPane.pending = false;
+  }
+}
+
+function splitFocusPending() {
+  return focusSplitPane.pending === true;
+}
+
+async function exitSplitView() {
+  if (!normalizeSplit(state.browser?.split).enabled || splitExitPending) return;
+  if (typeof API?.closeSplitView !== 'function') {
+    splitApiMissing();
+    return;
+  }
+  splitExitPending = true;
+  try {
+    const browser = await API.closeSplitView();
+    if (!isBrowserStatePayload(browser)) {
+      showToast('退出双拼没有生效，请确认桌面程序已更新到新版');
+      return;
+    }
+    if (normalizeSplit(browser.split).enabled) {
+      showToast('退出双拼没有生效，请确认桌面程序已更新到新版');
+      applyBrowserState(browser);
+      return;
+    }
+    applyBrowserState(browser);
+    queueBoundsUpdate();
+    showToast('已回到单页，两边的网页标签都还在');
+  } catch (error) {
+    showToast(error.message || '退出双拼失败');
+  } finally {
+    splitExitPending = false;
+  }
+}
+
+function onSplitToggleClick() {
+  if (!el.splitViewToggle || el.splitViewToggle.disabled || splitChoicePending) return;
+  if (normalizeSplit(state.browser?.split).enabled) {
+    void exitSplitView();
+    return;
+  }
+  openSplitPicker();
+}
+
+function bindSplitGutter() {
+  const gutter = el.splitGutter;
+  if (!gutter || gutter.dataset.bound === '1') return;
+  gutter.dataset.bound = '1';
+  const endDrag = (event, commit) => {
+    if (!splitDrag || event.pointerId !== splitDrag.pointerId) return;
+    const ratio = commit ? ratioFromClientX(event.clientX) : splitDrag.ratio;
+    splitDrag = null;
+    gutter.classList.remove('is-dragging');
+    try { gutter.releasePointerCapture(event.pointerId); } catch {}
+    previewSplitRatio(ratio);
+    flushSplitRatio();
+  };
+  gutter.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || !normalizeSplit(state.browser?.split).enabled) return;
+    event.preventDefault();
+    splitRatioRejected = false;
+    splitDrag = { pointerId: event.pointerId, ratio: normalizeSplit(state.browser.split).ratio };
+    gutter.classList.add('is-dragging');
+    gutter.setPointerCapture(event.pointerId);
+    gutter.focus();
+  });
+  gutter.addEventListener('pointermove', event => {
+    if (!splitDrag || event.pointerId !== splitDrag.pointerId) return;
+    event.preventDefault();
+    previewSplitRatio(ratioFromClientX(event.clientX));
+  });
+  gutter.addEventListener('pointerup', event => endDrag(event, true));
+  gutter.addEventListener('pointercancel', event => endDrag(event, false));
+  gutter.addEventListener('lostpointercapture', event => endDrag(event, false));
+  gutter.addEventListener('dblclick', event => {
+    if (!normalizeSplit(state.browser?.split).enabled) return;
+    event.preventDefault();
+    splitRatioRejected = false;
+    previewSplitRatio(0.5);
+    flushSplitRatio();
+  });
+  gutter.addEventListener('keydown', event => {
+    if (!normalizeSplit(state.browser?.split).enabled) return;
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    splitRatioRejected = false;
+    const current = normalizeSplit(state.browser.split).ratio;
+    previewSplitRatio(current + (event.key === 'ArrowLeft' ? -SPLIT_KEY_STEP : SPLIT_KEY_STEP));
+  });
+}
+
+function bindSplitControls() {
+  if (!el.splitViewToggle || el.splitViewToggle.dataset.bound === '1') return;
+  el.splitViewToggle.dataset.bound = '1';
+  el.splitViewToggle.addEventListener('click', onSplitToggleClick);
+  el.splitFocusLeft?.addEventListener('click', () => { void focusSplitPane('left'); });
+  el.splitFocusRight?.addEventListener('click', () => { void focusSplitPane('right'); });
+  el.splitReplace?.addEventListener('click', openSplitPicker);
+  el.splitClose?.addEventListener('click', () => { void exitSplitView(); });
+  bindSplitGutter();
+  const dialog = el.splitPickerDialog;
+  if (!dialog) return;
+  el.splitPickerClose?.addEventListener('click', () => closeCreatorDialog(dialog));
+  dialog.addEventListener('click', event => {
+    if (event.target === dialog) closeCreatorDialog(dialog);
+  });
+  dialog.addEventListener('cancel', event => {
+    event.preventDefault();
+    closeCreatorDialog(dialog);
+  });
+  dialog.addEventListener('close', () => {
+    const reason = splitPickerDismissReason;
+    splitPickerDismissReason = '';
+    splitPickerSession = null;
+    splitPickerRendered = '';
+    if (reason === 'stale') showToast('页面已切换，已关闭双拼选择');
+  });
+}
+
+let browserChromeSignature = '';
 
 function applyBrowserState(browser) {
   if (!browser) return;
   if (browser.mode && browser.mode !== state.mode) return;
+  const split = normalizeSplit(browser.split);
+  // Resizing changes geometry, not tab contents. Avoid replacing the entire
+  // tab strip on every pointer frame (and keep any focused controls intact).
+  const { split: ignoredSplit, ...chrome } = browser;
+  const signature = JSON.stringify(chrome);
+  const previousSplit = state.browser?.split;
+  const ratioOnly = signature === browserChromeSignature && split.enabled && previousSplit?.enabled
+    && split.leftTabId === previousSplit.leftTabId && split.rightTabId === previousSplit.rightTabId
+    && split.focusedPane === previousSplit.focusedPane;
+  browserChromeSignature = signature;
   state.browser = {
     ...state.browser,
     ...browser,
     tabs: Array.isArray(browser.tabs) ? browser.tabs : (state.browser?.tabs || []),
+    split,
   };
+  if (splitDrag && state.browser.split.enabled) state.browser.split.ratio = clampSplitRatio(splitDrag.ratio);
+  else if (split.enabled) splitRatioCommitted = state.browser.split.ratio;
+  if (ratioOnly) { positionSplitGutter(); return; }
   if (Object.hasOwn(browser, 'serviceId')) {
     state.activeService = browser.serviceId;
     if (validServiceForMode(state.mode, browser.serviceId)) state.services[state.mode] = browser.serviceId;
   }
-  const service = serviceById(browser.serviceId);
+  const focusedView = focusedPanePresentation(browser, split);
+  const followsFocusedPane = Object.hasOwn(focusedView, 'url');
+  const shownService = serviceById(followsFocusedPane ? focusedView.serviceId : browser.serviceId);
+  const shownUrl = followsFocusedPane ? (focusedView.url || shownService?.url || '') : (browser.url || shownService?.url || '');
   const empty = !browser.tabId && !browser.serviceId;
-  el.addressService.textContent = empty ? '网页' : browser.displayLabel || serviceLabel(service);
+  el.addressService.textContent = empty ? '网页' : (focusedView.displayLabel || browser.displayLabel || serviceLabel(shownService));
   if (document.activeElement !== el.addressInput) {
-    el.addressInput.value = browser.url || service?.url || '';
+    el.addressInput.value = shownUrl;
   }
-  el.addressInput.title = browser.url || '';
+  el.addressInput.title = followsFocusedPane ? (focusedView.url || '') : (browser.url || '');
   el.addressInput.disabled = empty;
   el.addressGo.disabled = empty;
   el.openExternal.disabled = empty;
@@ -4277,6 +4951,7 @@ function applyBrowserState(browser) {
   el.reconnectBrowser.textContent = empty ? '打开创作网站' : '重新显示网页';
   renderPlatforms();
   renderBrowserRecovery(browser);
+  renderSplitChrome();
   if (browser.error) showToast(browser.error);
 }
 
@@ -4565,6 +5240,7 @@ async function importDroppedAssets(dataTransfer) {
 function queueBoundsUpdate() {
   cancelAnimationFrame(boundsFrame);
   boundsFrame = requestAnimationFrame(() => {
+    positionSplitGutter();
     const rect = el.browserStage.getBoundingClientRect();
     API.setBrowserBounds({ x: rect.x, y: rect.y, width: rect.width, height: rect.height }).catch(() => {});
   });
@@ -4587,6 +5263,7 @@ function applyAssetPanelState(panel) {
   el.toggleAssets.title = available
     ? (state.assetPanel.open ? '关闭创作资产库' : '打开创作资产库')
     : '创作资产库暂不可用';
+  positionSplitGutter();
   clearTimeout(assetPanelSaveTimer);
   assetPanelSaveTimer = setTimeout(() => saveWorkspace(true), 180);
 }
@@ -4643,6 +5320,7 @@ function bindEvents() {
     dialogObserver.observe(dialog, { attributes: true, attributeFilter: ['open'] });
   });
   syncCreatorDialogVisibility();
+  bindSplitControls();
   document.querySelectorAll('.mode-button').forEach(button => {
     button.addEventListener('click', () => setMode(button.dataset.mode));
   });
@@ -4959,15 +5637,8 @@ function bindEvents() {
     el.addressInput.setAttribute('aria-invalid', 'false');
     el.addressInput.blur();
   });
-  el.togglePrompt.addEventListener('click', () => {
-    const compact = window.matchMedia('(max-width: 900px)').matches;
-    const collapsed = compact
-      ? !document.body.classList.toggle('prompt-expanded')
-      : document.body.classList.toggle('prompt-collapsed');
-    el.togglePrompt.setAttribute('aria-expanded', String(!collapsed));
-    el.togglePrompt.title = collapsed ? '展开创作材料栏' : '收起创作材料栏';
-    queueBoundsUpdate();
-  });
+  el.togglePrompt.addEventListener('click', toggleMaterialSidebar);
+  el.collapseMaterialSidebar.addEventListener('click', toggleMaterialSidebar);
   el.promptEditor.addEventListener('input', () => {
     state.prompts[state.mode] = el.promptEditor.value;
     updateCharacterCount();
@@ -5008,7 +5679,7 @@ function bindEvents() {
     });
   });
   new ResizeObserver(queueBoundsUpdate).observe(el.browserStage);
-  window.addEventListener('resize', queueBoundsUpdate);
+  window.addEventListener('resize', () => { syncMaterialSidebar(); queueBoundsUpdate(); });
   window.addEventListener('beforeunload', () => saveWorkspace(true));
   API.onBrowserState(applyBrowserState);
   if (typeof API.onPlatformBackdrop === 'function') API.onPlatformBackdrop(applyPlatformBackdrop);

@@ -46,7 +46,9 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
             <span data-ui-icon="library" aria-hidden="true"></span>
             创作资产
           </button>
-          <button class="icon-button" id="togglePrompt" title="收起或展开创作材料栏" aria-label="收起或展开创作材料栏" aria-controls="promptPanel" aria-expanded="true">◧</button>
+          <button class="icon-button material-sidebar-toggle" id="togglePrompt" type="button" title="收起创作材料栏" aria-label="收起创作材料栏" aria-controls="promptPanel" aria-expanded="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"></rect><path d="M9 4v16"></path></svg>
+          </button>
           <button class="quiet-button clear-browser-tabs" id="clearBrowserTabs" type="button" title="关闭图片和视频模式的全部网页，保留网站登录和素材">清空网页</button>
           <button class="quiet-button" id="showMainWindow">返回制作 OS</button>
         </div>
@@ -102,6 +104,9 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
             <span>CREATION KIT</span>
             <h1>创作材料</h1>
           </div>
+          <button class="icon-button material-sidebar-toggle" id="collapseMaterialSidebar" type="button" title="收起创作材料栏" aria-label="收起创作材料栏" aria-controls="promptPanel" aria-expanded="true">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"></rect><path d="M9 4v16"></path></svg>
+          </button>
           <span class="sr-only" id="draftStatus" aria-live="polite">已在本机自动保存</span>
         </div>
 
@@ -245,8 +250,22 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
             <button class="quiet-button" id="creatorWorkflowOpen" type="button">制作流程</button>
             <button class="quiet-button" id="importDownloadedFiles" type="button" aria-label="导入下载的文件并归档" title="选择刚从系统浏览器下载的文件并归档">导入文件</button>
             <button class="quiet-button" id="openExternal" type="button" aria-label="在系统浏览器中打开当前页面" title="在系统浏览器中打开当前页面；系统浏览器的登录状态不会同步回内嵌浏览器">外部打开</button>
+            <button class="quiet-button split-toggle" id="splitViewToggle" type="button" aria-pressed="false" aria-label="双拼，先打开一个网页" title="先打开一个网页，才能左右双拼" disabled>
+              <svg class="split-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+                <rect x="1.25" y="1.25" width="13.5" height="13.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"></rect>
+                <path d="M8 1.25v13.5" fill="none" stroke="currentColor" stroke-width="1.4"></path>
+              </svg>
+              <span>双拼</span>
+            </button>
           </div>
-
+            <div class="split-bar" id="splitBar" hidden>
+              <div class="split-pane-switch" role="group" aria-label="双拼中的网页">
+                <button type="button" id="splitFocusLeft" aria-pressed="false">左侧</button>
+                <button type="button" id="splitFocusRight" aria-pressed="false">右侧</button>
+              </div>
+              <button class="quiet-button" id="splitReplace" type="button">换另一网页</button>
+              <button class="quiet-button" id="splitClose" type="button" aria-label="关闭双拼" title="关闭双拼，网页标签仍保留">关闭</button>
+            </div>
           <div class="browser-recovery" id="browserRecovery" role="alert" aria-live="assertive" aria-atomic="true" hidden>
             <div class="browser-recovery-copy">
               <strong>平台页面加载失败</strong>
@@ -268,7 +287,24 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
             <p>网页没有出现时，可重新挂载当前平台。</p>
             <button class="secondary-action" id="reconnectBrowser" type="button">重新显示网页</button>
           </div>
-          <img class="platform-backdrop" id="platformBackdrop" alt="" aria-hidden="true" hidden>
+          <div class="platform-backdrop-layer" id="platformBackdropLayer" aria-hidden="true" hidden>
+            <div class="platform-backdrop-pane" id="platformBackdropPrimary">
+              <img class="platform-backdrop" id="platformBackdrop" alt="" aria-hidden="true" hidden>
+            </div>
+          </div>
+          <div
+            class="split-gutter"
+            id="splitGutter"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整左右网页宽度"
+            aria-valuemin="20"
+            aria-valuemax="80"
+            aria-valuenow="50"
+            aria-valuetext="左侧 50%"
+            tabindex="0"
+            hidden
+          ></div>
         </div>
       </section>
     </main>
@@ -292,6 +328,19 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
         <button class="secondary-action" id="quickPreviewInLibrary" type="button">在完整资产库中查看</button>
         <button class="primary-action" id="quickPreviewDone" type="button">关闭</button>
       </footer>
+    </div>
+  </dialog>
+
+  <dialog id="splitPickerDialog" class="creator-dialog split-picker-dialog" aria-labelledby="splitPickerTitle">
+    <div class="creator-dialog-sheet split-picker-sheet">
+      <header class="creator-dialog-head">
+        <div>
+          <h2 id="splitPickerTitle">选择另一网页</h2>
+          <p id="splitPickerHint">左右并排，方便把文字和图片拖到另一边。</p>
+        </div>
+        <button class="icon-button" id="splitPickerClose" type="button" aria-label="关闭">×</button>
+      </header>
+      <div class="split-picker-body" id="splitPickerBody"></div>
     </div>
   </dialog>
 

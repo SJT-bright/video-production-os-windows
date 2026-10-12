@@ -127,9 +127,16 @@ async function main() {
     };
     const newDraft = async (name, body) => {
       if (!await creator.locator('#promptAccordion').evaluate(element => element.open)) await creator.locator('#promptAccordion > summary').click();
-      if (await creator.locator('#templateCreateForm').evaluate(element => element.hidden)) await creator.locator('#templateCreate').click();
+      if (await creator.locator('#templateCreateForm').evaluate(element => element.hidden)) {
+        await creator.locator('#templateCreate').click();
+        // Opening deliberately focuses the name on the next animation frame.
+        // Wait for that real UI action before sending text to a different field.
+        await creator.waitForFunction(() => document.activeElement === document.getElementById('templateCreateName'));
+      }
       await creator.locator('#templateCreateName').fill(name);
       await creator.locator('#templateCreateBody').fill(body);
+      assert.equal(await creator.locator('#templateCreateName').inputValue(), name);
+      assert.equal(await creator.locator('#templateCreateBody').inputValue(), body);
     };
     const readDraft = async () => ({
       name: await creator.locator('#templateCreateName').inputValue(), body: await creator.locator('#templateCreateBody').inputValue(),

@@ -934,9 +934,9 @@ async function deleteItem(item) {
   }
 }
 
-async function postAssetAction(action, body) {
+async function postAssetAction(action, body, projectId = activeProjectId()) {
   if ([body.path, body.folder, body.parent].some(isHistoryFolderPath)) throw new Error('历史素材入口不是磁盘目录，未执行写入');
-  const response = await fetch(`/api/creative-assets/${action}?project=${encodeURIComponent(activeProjectId())}`, {
+  const response = await fetch(`/api/creative-assets/${action}?project=${encodeURIComponent(projectId)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -947,9 +947,11 @@ async function postAssetAction(action, body) {
 }
 
 let renameTarget = null;
+let renameBusy = false;
 
 function openRenameDialog(item) {
-  renameTarget = item;
+  if (renameBusy) return;
+  renameTarget = { ...item, projectId: activeProjectId() };
   el.renameDialogFrom.textContent = `位置：${item.folderPath || '创作资产库'}`;
   el.renameInput.value = item.name.replace(/\.[^.]+$/, '');
   openCreatorDialog(el.renameDialog);
@@ -959,14 +961,19 @@ function openRenameDialog(item) {
 async function submitRename() {
   const item = renameTarget;
   const name = el.renameInput.value.trim();
-  if (!item || !name) { el.renameInput.focus(); return; }
+  if (!item || !name || renameBusy) { el.renameInput.focus(); return; }
+  renameBusy = true;
   try {
-    const result = await postAssetAction('rename', { path: item.path, name });
+    if (item.projectId !== activeProjectId()) throw new Error('剧本已切换，请重新选择图片');
+    const result = await postAssetAction('rename', { path: item.path, name }, item.projectId);
+    applyLibraryAssetMoves([{ ...result, oldPath: item.path }], item.projectId);
     closeCreatorDialog(el.renameDialog);
     showToast(`已重命名为「${result.name}」`);
-    await loadLibrary({ select: state.selectedFolder });
+    if (item.projectId === activeProjectId()) await loadLibrary({ select: state.selectedFolder });
   } catch (error) {
     showToast(`重命名失败：${error.message}`);
+  } finally {
+    renameBusy = false;
   }
 }
 
@@ -1041,12 +1048,14 @@ async function submitMove(folderPath) {
 function showLibraryFileMenu(item, event) {
   event.preventDefault(); event.stopPropagation();
   const paths = state.selectedPaths.has(item.path) ? [...state.selectedPaths] : [item.path];
-  FolderEditor.menu(event, [
+  const items = [
     { label: `移动到…${paths.length > 1 ? `（${paths.length} 项）` : ''}`, run: () => openMoveDialog(paths) },
     { label: `复制到…${paths.length > 1 ? `（${paths.length} 项）` : ''}`, run: () => openMoveDialog(paths, 'copy') },
     { label: '预览', run: () => openPreview(item) },
     { label: '在文件夹中显示', run: () => showItem(item) },
-  ]);
+  ];
+  if (item.type === 'image') items.unshift({ label: '改名…', run: () => openRenameDialog(item) });
+  FolderEditor.menu(event, items);
 }
 
 /* ---------- 多选批量操作 ---------- */

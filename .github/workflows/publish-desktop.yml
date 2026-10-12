@@ -6,7 +6,7 @@ on:
       tag:
         description: 'Verified release tag'
         required: true
-        default: 'v1.3.4'
+        default: 'v1.3.7'
 
 permissions:
   contents: write
@@ -53,6 +53,14 @@ jobs:
         run: npm run build:mac -- --arch universal --portable
       - name: Launch packaged App with independent user data
         run: node test_mac_release.cjs --arch universal
+      - name: Verify packaged image rename, split layout and sidebar persistence
+        run: node test_latest_release_native.cjs
+      - name: Preserve native feature verification receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-latest-native-verification
+          path: 视频制作OS/test-artifacts/latest-release-native/
+          if-no-files-found: error
       - name: Verify packaged audio extraction
         env:
           VOICE_TEST_APP_ROOT: dist/public-release/视频制作 OS-darwin-universal/视频制作 OS.app/Contents/Resources/app
@@ -125,6 +133,14 @@ jobs:
         run: npm run build:windows:release
       - name: Launch real packaged EXE and verify retained tabs and confirmation
         run: node test_windows_release.cjs
+      - name: Verify packaged image rename, split layout and sidebar persistence
+        run: node test_latest_release_native.cjs
+      - name: Preserve native feature verification receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-latest-native-verification
+          path: test-artifacts/latest-release-native/
+          if-no-files-found: error
       - name: Verify bundled audio extraction
         env:
           VOICE_TEST_APP_ROOT: dist/视频制作OS-win32-x64/resources/app

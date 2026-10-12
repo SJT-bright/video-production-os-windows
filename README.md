@@ -1,18 +1,25 @@
-# 视频制作 OS · v1.3.4
+# 视频制作 OS · v1.3.7
 
 把图片／视频创作网页、剧本、固定提示词、分集资产和人物音频整理到一个本地工作台。作者：[SJT-bright](https://github.com/SJT-bright)。应用使用 Electron、Node.js、原生 HTML/CSS/JavaScript 和 SQLite；生成仍在使用者自己的第三方网站账号中完成。
 
 ## 下载最新版
 
-- [Mac 通用版 v1.3.4](https://github.com/SJT-bright/video-production-os/releases/tag/v1.3.4)：下载 `VideoProductionOS-Mac-v1.3.4-Universal.zip`，解压后打开 App。包含 Apple Silicon 和 Intel 架构；本地 ad-hoc 签名，未经过 Apple 公证。
-- [Windows x64 v1.3.4](https://github.com/SJT-bright/video-production-os-windows/releases/tag/v1.3.4)：下载 `VideoProductionOS-Windows-x64.zip`，完整解压后双击 `视频制作OS.exe`，不能只移动 EXE。
+- [Mac 通用版 v1.3.7](https://github.com/SJT-bright/video-production-os/releases/tag/v1.3.7)：下载 `VideoProductionOS-Mac-v1.3.7-Universal.zip`，解压后打开 App。包含 Apple Silicon 和 Intel 架构；本地 ad-hoc 签名，未经过 Apple 公证。
+- [Windows x64 v1.3.7](https://github.com/SJT-bright/video-production-os-windows/releases/tag/v1.3.7)：下载 `VideoProductionOS-Windows-x64.zip`，完整解压后双击 `视频制作OS.exe`，不能只移动 EXE。
 - [Mac 源码](https://github.com/SJT-bright/video-production-os) · [Windows 源码](https://github.com/SJT-bright/video-production-os-windows) · [更新说明](RELEASE-NOTES.md)
 
 GitHub 自动生成的 Source code ZIP 是源码，不是可直接运行的 App。安装包无个人剧本、素材、数据库或网站登录配置。新用户会建立自己的工作区；升级时只替换软件，不删除用户数据目录。
 
 本软件使用 FFmpeg（LGPL-2.1-or-later）进行人物音轨提取，每个 Release 都附带对应的完整组件源码及许可说明：[第三方组件](THIRD-PARTY-NOTICES.md)。
 
-## v1.3.4 的主要优化
+## v1.3.7 的新增优化
+
+- 图片右键可直接改名，图片和视频模式均可操作；保留扩展名，同名会提示，取消不改文件。
+- 工具栏增加双拼：选择另一网页后左右并排，分隔条可调宽度，地址与导航跟随当前侧；退出双拼保留两个标签和网页草稿。
+- 修复双拼接缝与背景遮挡：使用不透明 4 像素分隔条、整数布局及左右分别保留位置的临时背景；取消弹窗或背景获取失败后恢复真实网页。
+- “创作材料”右上角增加侧边栏收起按钮，收起后有再次展开入口；跨模式和刷新记住状态，不清除提示词或资产选择。
+
+## 保留的资产与剧本优化
 
 - 剧本 TXT/DOCX 导入：根据正文集标题识别分集，排除目录、大纲、说明性“第0集”和重复梗概；正文及场次内容原样保留。不按文件名伪造集数。
 - 生成素材按集归档：默认存入当前网站的 `第1集`，点击网站目录右侧的循环按钮，保留这一集并把后续下载切到 `第2集`、`第3集`……。每个剧本、网站、媒体类型独立记忆，下载开始时固定归属。
@@ -31,7 +38,7 @@ GitHub 自动生成的 Source code ZIP 是源码，不是可直接运行的 App�
 
 图片与视频模式各自保存网页标签、地址、名称、顺序及选中状态，同一网站共享本机登录。切回工作台、打开资产库或剧本选择器不销毁网页。“清空网页”先确认；取消不改变标签，确认后清空状态也会记住。
 
-工具栏提供地址、前往、刷新、外部打开和文件导入。第三方网站的登录与内容由网站管理；Chrome 可用不代表内嵌浏览器一定通过验证。遇到网站限制可在系统浏览器继续，再导入下载的文件。
+工具栏提供地址、前往、刷新、双拼、外部打开和文件导入。双拼同时保留两个原生网页，可以左右操作并由网站处理拖入的内容；进入另一个模式或重新启动后恢复普通单页。第三方网站的登录与内容由网站管理；Chrome 可用不代表内嵌浏览器一定通过验证。遇到网站限制可在系统浏览器继续，再导入下载的文件。
 
 ### 剧本与提示词
 
@@ -88,4 +95,4 @@ npm run desktop
 
 ## 验证边界
 
-发布工作流在实际 Mac／Windows runner 中检查共享源码、正文分集、真实打包启动、独立用户数据、标签留存／清空确认和内置音轨截取；通过后才上传 Release。Mac universal 包包含两个架构，启动证明只覆盖 runner 实际执行的架构，不冒充 Intel 实机验收。第三方网站的真实上传、生成与外部软件收件仍需在使用者设备确认。
+发布工作流在实际 Mac／Windows runner 中检查共享源码、正文分集、真实打包启动、独立用户数据、标签留存／清空确认、图片改名、双拼布局与侧栏状态以及内置音轨截取；通过后才上传 Release。Mac universal 包包含两个架构，启动证明只覆盖 runner 实际执行的架构，不冒充 Intel 实机验收。双拼布局验证不等同于物理鼠标跨网页拖拽验收；第三方网站的真实上传、生成与外部软件收件仍需在使用者设备确认。
