@@ -2151,7 +2151,7 @@ async function showAppUpdateNotice(state, manual = false) {
       type: available ? 'info' : state.status === 'error' ? 'warning' : 'info',
       title: available ? '视频制作 OS 有新版本' : '检查更新',
       message: available ? `发现新版 v${state.release.version}（当前 v${state.currentVersion}）`
-        : state.status === 'error' ? '暂时无法检查更新' : state.supported ? '当前版本无需更新' : '当前系统架构暂无自动更新检查',
+        : state.status === 'error' ? '暂时无法检查更新' : state.supported ? '当前版本无需更新' : state.disabledReason || '当前系统架构暂无自动更新检查',
       detail: available ? `${state.release.name}\n${state.release.notes.slice(0, 600)}\n\n点击后打开官方GitHub下载页，不自动退出或覆盖软件，素材和网页登录保持不变。`
         : state.status === 'error' ? `${state.error}\n可以稍后重试，或直接打开官方最新版下载页。`
           : `当前版本：v${state.currentVersion}${state.release ? `\nGitHub正式版：v${state.release.version}` : ''}\n正式版发布后，软件会自动检查并提示；仅推送代码不会触发更新。`,

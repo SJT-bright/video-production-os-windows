@@ -19,12 +19,13 @@
     document.querySelectorAll('[data-app-star]').forEach(renderStar);
     document.querySelectorAll('[data-app-update]').forEach(button => {
       const label = button.querySelector('[data-app-update-label]');
-      button.disabled = !native || busy || state?.checking;
+      button.disabled = !native || busy || state?.checking || state?.supported === false;
       button.dataset.updateAvailable = String(!!state?.available);
       if (label) label.textContent = !native ? '下载新版' : busy || state?.checking ? '检查中…'
         : state?.available ? `更新 v${state.release.version}` : state?.status === 'error' ? '重试更新'
           : state?.currentVersion ? `v${state.currentVersion}` : '检查更新';
       button.title = !native ? '自动检查更新需要桌面版；可从旁边GitHub入口下载'
+        : state?.supported === false ? state.disabledReason || '当前系统架构暂无对应正式安装包'
         : state?.available ? `发现 v${state.release.version}，点击打开官方更新下载页；不会自动退出软件`
           : state?.error || '点击检查GitHub正式版；软件启动后及每6小时也会自动检查';
       button.setAttribute('aria-label', state?.available ? `更新到 v${state.release.version}` : '检查软件更新');

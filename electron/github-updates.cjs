@@ -67,7 +67,12 @@ async function readResponse(response) {
 function createGitHubUpdates(options = {}) {
   const target = releaseTarget(options.platform || process.platform, options.arch || process.arch);
   const currentVersion = String(options.version || '0.0.0');
-  if (!versionParts(currentVersion)) throw new Error('当前软件版本不是正式版本号');
+  // An optional update checker must not prevent developer/candidate builds
+  // from launching or silently downgrade them to the stable channel.
+  if (!versionParts(currentVersion)) {
+    target.supported = false;
+    target.disabledReason = '当前是测试构建，不自动检查正式版更新；请使用正式发布版';
+  }
   const events = new EventEmitter();
   const now = options.now || Date.now;
   const fetchRelease = options.fetch || globalThis.fetch;

@@ -71,6 +71,13 @@ test('unsupported architecture does not fetch an installer', async () => {
   let calls = 0; const service = make({ platform: 'win32', arch: 'arm64', fetch: async () => { calls++; return response(release()); } });
   assert.equal((await service.check({ manual: true })).status, 'unsupported'); assert.equal(calls, 0); service.stop();
 });
+test('developer and candidate versions never prevent App launch or force a downgrade', async () => {
+  for (const version of ['1.3.0-rc.2', 'development']) {
+    let calls = 0; const service = make({ version, fetch: async () => { calls++; return response(release()); } });
+    assert.equal((await service.check({ manual: true })).status, 'unsupported'); assert.equal(calls, 0);
+    assert.equal(service.snapshot().available, false); assert.ok(service.snapshot().disabledReason); service.stop();
+  }
+});
 test('concurrent callers share one request; no browser credentials are sent', async () => {
   let complete, calls = 0, options;
   const service = make({ fetch: async (_url, opt) => { calls++; options = opt; return new Promise(resolve => { complete = resolve; }); } });
