@@ -1,18 +1,28 @@
-# 视频制作 OS · v1.3.8
+# 视频制作 OS · v1.3.11
 
 把图片／视频创作网页、剧本、固定提示词、分集资产和人物音频整理到一个本地工作台。作者：[SJT-bright](https://github.com/SJT-bright)。应用使用 Electron、Node.js、原生 HTML/CSS/JavaScript 和 SQLite；生成仍在使用者自己的第三方网站账号中完成。
 
 ## 下载最新版
 
-- [Mac 通用版 v1.3.8](https://github.com/SJT-bright/video-production-os/releases/tag/v1.3.8)：下载 `VideoProductionOS-Mac-v1.3.8-Universal.zip`，解压后打开 App。包含 Apple Silicon 和 Intel 架构；本地 ad-hoc 签名，未经过 Apple 公证。
-- [Windows x64 v1.3.8](https://github.com/SJT-bright/video-production-os-windows/releases/tag/v1.3.8)：下载 `VideoProductionOS-Windows-x64.zip`，完整解压后双击 `视频制作OS.exe`，不能只移动 EXE。
+- [Mac 最新版](https://github.com/SJT-bright/video-production-os/releases/latest)：v1.3.11包名为 `VideoProductionOS-Mac-v1.3.11-Universal.zip`，解压后打开 App。包含 Apple Silicon 和 Intel 架构；本地 ad-hoc 签名，未经过 Apple 公证。
+- [Windows 最新版](https://github.com/SJT-bright/video-production-os-windows/releases/latest)：v1.3.11包名为 `VideoProductionOS-Windows-v1.3.11-x64.zip`，完整解压后双击 `视频制作OS.exe`，不能只移动 EXE。
 - [Mac 源码](https://github.com/SJT-bright/video-production-os) · [Windows 源码](https://github.com/SJT-bright/video-production-os-windows) · [更新说明](RELEASE-NOTES.md)
 
 GitHub 自动生成的 Source code ZIP 是源码，不是可直接运行的 App。安装包无个人剧本、素材、数据库或网站登录配置。新用户会建立自己的工作区；升级时只替换软件，不删除用户数据目录。
 
 本软件使用 FFmpeg（LGPL-2.1-or-later）进行人物音轨提取，每个 Release 都附带对应的完整组件源码及许可说明：[第三方组件](THIRD-PARTY-NOTICES.md)。
 
-## v1.3.8 的新增优化
+## v1.3.11：Star、更新提示与资产整理
+
+- 创作浏览器和制作OS工具栏都有“☆ Star”，首页作者入口同样可用；Mac和Windows打开各自的公开开源仓库。打开后由用户在GitHub点击Star，不会代替用户自动操作账号。
+- 首次手动升到1.3.11后，软件在启动约15秒及运行中每6小时检查本端GitHub正式Release。有新版就弹出提示，并在工具栏显示“更新 vX”；同一版本自动提示一次，也可随时点击版本按钮检查。
+- 只识别已发布、非预览版且对应安装包/校验文件完整的Release；提交代码、推送标签或不完整上传不算已可更新。按数字比较版本，不降级。网络异常可重试，不误报“已是最新”。
+- 点击“查看更新”打开固定的官方版本下载页；不自动下载或覆盖、不强制退出，不清除素材和网页登录。旧版没有检查器，须先手动升级一次；软件完全退出时不运行后台常驻服务。
+- 左侧框选后可“删除所选”，与完整库共用一次确认/删除锁；成功进系统废纸篓、失败保留选择，取消不改变文件，不删除父目录或其他剧本。
+- 生成视频统一“网站 → 第N集 → 可剪辑/待处理”；未分集素材单列，不搬旧文件、不猜集数。刷新保持查看范围，空自建目录保留；可回选已有集，主动转换视频处理状态。
+- 文件选择保留原名，外部拖入自动编号；普通目录超过30项可继续加载，收起时不再构建隐藏媒体卡片。浏览器兼容入口使用同一归档元数据。
+
+## 保留的 v1.3.8 优化
 
 - 双拼弹窗缩放时，保留本次弹窗已经取得的真实背景，不再依赖隐藏网页重新绘制；关闭即释放，不跨网页或下一次弹窗复用，也不调用窗口置顶或聚焦。
 
@@ -25,7 +35,7 @@ GitHub 自动生成的 Source code ZIP 是源码，不是可直接运行的 App�
 
 - 剧本 TXT/DOCX 导入：根据正文集标题识别分集，排除目录、大纲、说明性“第0集”和重复梗概；正文及场次内容原样保留。不按文件名伪造集数。
 - 生成素材按集归档：默认存入当前网站的 `第1集`，点击网站目录右侧的循环按钮，保留这一集并把后续下载切到 `第2集`、`第3集`……。每个剧本、网站、媒体类型独立记忆，下载开始时固定归属。
-- 历史日期目录不再出现在分集列表：以“未分集历史素材”展示，原文件不移动，也不猜测它属于哪一集。旧待审下载仍保留其原目标。
+- 历史日期目录不再出现在分集列表：以“未分集素材”展示，原文件不移动，也不猜测它属于哪一集。旧待审下载仍保留其原目标。
 - 文件选择器导入保留本地名称；拖入素材继续自动编号，同名与并发导入不会覆盖。
 - 修复“本剧资产”整窗卡住：文档和资产扫描改为有上限、可让出主线程的异步处理；排除构建、依赖和工作树目录，并合并并发扫描。
 - 标签右键保留改名、复制／再开一个标签和删除等操作，鼠标离开菜单约 0.5 秒收起；菜单不会被内嵌网页遮挡。

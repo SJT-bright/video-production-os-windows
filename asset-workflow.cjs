@@ -5,6 +5,22 @@ const path = require('path');
 const crypto = require('crypto');
 const { setImmediate: yieldToMainLoop } = require('node:timers/promises');
 
+const VIDEO_DISPOSITIONS = Object.freeze({ 待处理: 'processing', 可剪辑: 'editable' });
+function generatedVideoLocation(project, relative) {
+  const videoRoot = project?.categories?.find(category => category.id === 'generated-videos')?.path;
+  if (!videoRoot || typeof relative !== 'string' || !relative.startsWith(`${videoRoot}/`)) return null;
+  const parts = relative.slice(videoRoot.length + 1).split('/');
+  if (VIDEO_DISPOSITIONS[parts[0]]) {
+    return { videoRoot, legacy: true, videoDisposition: VIDEO_DISPOSITIONS[parts[0]], platformFolder: parts[1] || '', episode: null };
+  }
+  const match = /^第([1-9]\d{0,5})集$/.exec(parts[1] || '');
+  if (!match) return { videoRoot, legacy: true, platformFolder: parts[0] || '', episode: null };
+  const hasStatus = !!VIDEO_DISPOSITIONS[parts[2]];
+  return { videoRoot, legacy: false, platformFolder: parts[0], episode: Number(match[1]),
+    ...(hasStatus ? { videoDisposition: VIDEO_DISPOSITIONS[parts[2]] } : {}),
+    subfolders: parts.slice(hasStatus ? 3 : 2, -1) };
+}
+
 // Additive metadata: old releases can ignore this file without a database downgrade.
 function createAssetWorkflowStore({ filePath, assetRoot, registerAsset }) {
   let data = { version: 1, items: {} }, loadError = null;
@@ -25,11 +41,10 @@ function createAssetWorkflowStore({ filePath, assetRoot, registerAsset }) {
     } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
   }
   function destination(project, relative) {
-    const videoRoot = project.categories.find(category => category.id === 'generated-videos')?.path;
     const finals = project.categories.find(category => category.id === 'finals')?.path;
     if (finals && within(relative, finals)) return { assetRole: 'finals' };
-    if (videoRoot && within(relative, `${videoRoot}/待处理`)) return { videoDisposition: 'processing', assetRole: 'material' };
-    if (videoRoot && within(relative, `${videoRoot}/可剪辑`)) return { videoDisposition: 'editable', assetRole: 'material' };
+    const location = generatedVideoLocation(project, relative);
+    if (location?.videoDisposition) return { videoDisposition: location.videoDisposition, assetRole: 'material' };
     return {};
   }
   function ensure(project, relative, type, overrides = {}, forceNew = false) {
@@ -116,4 +131,4 @@ function createAssetWorkflowStore({ filePath, assetRoot, registerAsset }) {
   };
 }
 
-module.exports = { createAssetWorkflowStore };
+module.exports = { createAssetWorkflowStore, generatedVideoLocation };

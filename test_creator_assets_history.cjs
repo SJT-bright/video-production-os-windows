@@ -153,7 +153,7 @@ async function run() {
 
     const snapshot = await page.evaluate(() => ({ history: [...state.historyFolders.keys()],
       tree: state.tree, paths: state.assets.map(item => item.path).sort(), folders: state.folders.map(item => item.node.path) }));
-    assert.equal(snapshot.history.length, 5, '仅当前项目的明确网站和旧状态布局应出现历史入口');
+    assert.equal(snapshot.history.length, 3, '图片/音频历史保留；视频的三套旧布局合并为一个网站历史入口');
     assert.deepEqual(snapshot.tree, fixture.tree, '展示收拢不得改动原始目录树');
     assert.deepEqual(snapshot.paths, [...MANIFEST].sort(), '素材真实 path 不得被虚拟路径替代');
     NORMAL_DATES.forEach(folder => assert.ok(snapshot.folders.includes(folder), `普通/未知/无效日期目录应保留：${folder}`));
@@ -172,7 +172,7 @@ async function run() {
     assert.deepEqual(episodeOrder, ['第1集', '第2集', '第10集']);
 
     await page.evaluate(key => selectFolder(key), imageHistory);
-    assert.equal(await page.locator('#currentPath').innerText(), '未分集历史素材');
+    assert.equal(await page.locator('#currentPath').innerText(), '未分集素材');
     assert.equal(await page.locator('#assetCount').innerText(), '136 项');
     assert.equal(await page.locator('.asset-card').count(), 120, '聚合列表首批120条');
     assert.ok(!(await page.locator('.asset-card').evaluateAll(cards => cards.map(card => card.dataset.path))).includes(HISTORY_IMAGES[0]), '搜索测试目标须在未渲染批次');
@@ -257,7 +257,7 @@ async function run() {
     }, BATCH);
     assert.deepEqual(metadataGuards, { counts: [0, 0, 0, 0, 0], rawDates: true }, '无元数据/跨剧本/路径不匹配/停用/单项跨剧本必须保留原树');
     await page.evaluate(() => window.__historyTest.episodes.forEach(callback => callback({ projectId: '另一个剧本', states: [] })));
-    assert.equal(await page.evaluate(() => state.historyFolders.size), 5, '外来项目事件不影响当前历史入口');
+    assert.equal(await page.evaluate(() => state.historyFolders.size), 3, '外来项目事件不影响当前历史入口');
     await page.evaluate(() => { window.__mockConfig.downloadEpisodes = { projectId: state.config.project.id, states: [] };
       window.__historyTest.episodes.forEach(callback => callback(window.__mockConfig.downloadEpisodes)); });
     assert.equal(await page.evaluate(() => state.historyFolders.size), 0, '当前项目映射改变时历史入口即时刷新');

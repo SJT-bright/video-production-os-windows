@@ -1,0 +1,9 @@
+.app-support-controls { display: inline-flex; flex: none; align-items: center; gap: 5px; -webkit-app-region: no-drag; }
+.app-support-button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 29px; min-height: 29px; padding: 4px 9px; border: 1px solid rgba(60,60,67,.17); border-radius: 999px; background: rgba(255,255,255,.74); color: #48484a; font: 600 11px/1.25 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif; text-decoration: none; white-space: nowrap; cursor: pointer; -webkit-app-region: no-drag; }
+.app-support-button:hover { background: #fff; border-color: #007aff; }
+.app-support-button:focus-visible { outline: 3px solid rgba(0,122,255,.35); outline-offset: 2px; }
+.app-support-button[data-update-available="true"] { border-color: #007aff; background: #007aff; color: white; }
+.app-support-button:disabled { opacity: .55; cursor: default; }
+.app-support-announcement { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (max-width:1150px) { .creator-header .app-support-label { display: none; } .creator-header .app-support-button { padding-inline: 6px; } }
+@media (max-width:820px) { .app-support-label { display: none; } .app-support-button { font-size: 10px; padding-inline: 6px; } }

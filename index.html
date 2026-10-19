@@ -7,6 +7,7 @@
 <meta name="theme-color" content="#f5f5f7">
 <title>视频制作 OS</title>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="assets/ui/app-support.css">
 <link rel="stylesheet" href="assets/ui/editor-exports.css">
 <link rel="stylesheet" href="assets/ui/asset-sources.css">
 <link rel="icon" type="image/png" href="assets/ui/creator/studio-3d-v1.png">
@@ -49,6 +50,10 @@ FORM: 用户钉选的内容资产后台结构；参考图是已批准构图，�
         <kbd id="shortcutHint">⌘ K</kbd>
       </div>
       <div class="tb-actions">
+        <div class="app-support-controls" aria-label="软件更新与支持作者">
+          <a class="app-support-button" data-app-star href="https://github.com/SJT-bright/video-production-os" target="_blank" rel="noopener noreferrer" title="打开GitHub，点击Star支持作者"><span aria-hidden="true">☆</span><span class="app-support-label">Star</span></a>
+          <button class="app-support-button" data-app-update type="button" title="检查GitHub正式版更新"><span aria-hidden="true">↻</span><span data-app-update-label>检查更新</span></button>
+        </div>
         <button class="shell-btn secondary" id="rescanBtn" type="button">重新扫描</button>
         <button class="shell-btn primary" id="createBtn" type="button"><span aria-hidden="true">＋</span> 进入创作</button>
         <button class="help-btn" id="tbHelpBtn" type="button" title="使用说明" aria-label="使用说明">?</button>
@@ -207,5 +212,6 @@ FORM: 用户钉选的内容资产后台结构；参考图是已批准构图，�
 <script src="assets/ui/editor-exports.js"></script>
 <script src="assets/ui/asset-sources.js"></script>
 <script src="app.js"></script>
+<script src="assets/ui/app-support.js"></script>
 </body>
 </html>

@@ -50,6 +50,19 @@ async function main() {
     assert.throws(() => normalizeSnapshot({ ...original, platformFolder: '../escape' }), /网站文件夹/);
     const collided = store.capture({ ...scope, serviceId: 'custom-different', serviceLabel: '核绘' });
     assert.notEqual(collided.platformFolder, original.platformFolder, '不同站点不能共享相同归档根');
+    const existing = { exists: snapshot => fs.existsSync(directoryFor(snapshot)) && fs.lstatSync(directoryFor(snapshot)).isDirectory() };
+    assert.equal(store.select({ ...scope, episode: 2, expectedEpisode: 4 }, existing).selected, true);
+    assert.equal(store.get(scope).episode, 2, '补旧集只改变相同网站/种类的当前下载游标');
+    assert.equal(original.episode, 1, '选择已有集不能改进行中任务的快照');
+    assert.equal(store.select({ ...scope, episode: 3, expectedEpisode: 4 }, existing).selected, false, '过期选择不覆盖新游标');
+    assert.throws(() => store.select({ ...scope, episode: 55 }, existing), /不存在/);
+    assert.equal(fs.existsSync(directoryFor({ ...original, episode: 55 })), false, '选已有集不能顺手造新目录');
+    store = createDownloadEpisodeStore({ filePath });
+    assert.equal(store.get(scope).episode, 2, '选择的已有集必须持久化');
+    assert.equal(store.select({ ...scope, episode: 4, expectedEpisode: 2 }, existing).selected, true);
+    assert.equal(store.select({ ...scope, episode: 4 }, existing).selected, false, '同集选择是幂等的');
+    assert.equal(store.get({ ...scope, kind: 'image' }).episode, 1);
+    assert.equal(store.get({ ...scope, projectId: 'project-b' }).episode, 1);
 
     const categoryFor = projectId => path.join(root, 'assets', projectId, '生成视频');
     const targetFor = entry => resolveDownloadTarget({ projectRoot: root, projectDirectories: { video: categoryFor(entry.projectId) },

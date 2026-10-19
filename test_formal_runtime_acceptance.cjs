@@ -219,10 +219,19 @@ class DirectCDP {
     });
   }
   async evaluate(expression, sessionId) {
-    const response = await this.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true,
-      includeCommandLineAPI: !sessionId }, sessionId);
-    if (response.exceptionDetails) throw new Error(`CDP 执行失败：${response.exceptionDetails.text}`);
-    return response.result?.value;
+    // Inspector awaitPromise keeps a weak reference. Pin this test-only Promise
+    // until its response is received, including IPC cancellation during menus.
+    const slot = `__videoOSAcceptance_${this.role}_${Date.now()}_${this.pinSequence = (this.pinSequence || 0) + 1}`;
+    const key = JSON.stringify(slot);
+    try {
+      const pinned = `(() => { globalThis[${key}] = Promise.resolve(${expression}); return globalThis[${key}]; })()`;
+      const response = await this.send('Runtime.evaluate', { expression: pinned, awaitPromise: true, returnByValue: true,
+        includeCommandLineAPI: !sessionId }, sessionId);
+      if (response.exceptionDetails) throw new Error(`CDP 执行失败：${response.exceptionDetails.text}`);
+      return response.result?.value;
+    } finally {
+      await this.send('Runtime.evaluate', { expression: `delete globalThis[${key}]`, returnByValue: true }, sessionId).catch(() => {});
+    }
   }
   close() { this.socket.close(); }
 }
@@ -302,8 +311,14 @@ async function run(options) {
     const ui = await renderer(() => ({ title: document.title,
       removedTrayEntryAndAPI: !document.querySelector('#toggleDragTray, #dragTray, .drag-tray')
         && !Object.keys(window.creatorAPI).some(key => /dragtray/i.test(key)),
-      projectButton: !!document.querySelector('#currentProject'), allTabsButton: !!document.querySelector('#allTabsButton') }));
+      projectButton: !!document.querySelector('#currentProject'), allTabsButton: !!document.querySelector('#allTabsButton'),
+      splitButton: !!document.querySelector('#splitViewToggle .split-icon rect'),
+      splitPicker: !!document.querySelector('#splitPickerDialog'),
+      materialSidebarControl: !!document.querySelector('#collapseMaterialSidebar svg rect'),
+      splitApis: ['setSplitView', 'setSplitRatio', 'focusSplitPane', 'closeSplitView'].every(key => typeof window.creatorAPI[key] === 'function') }));
     assert.ok(ui.removedTrayEntryAndAPI && ui.projectButton && ui.allTabsButton, '旧托盘必须已移除且两个菜单按钮存在');
+    if (['1.3.6', '1.3.7'].includes(options.version)) assert.ok(ui.splitButton && ui.splitPicker && ui.splitApis, '正式包必须同时包含双拼按钮、选择器与原生 API');
+    if (options.version === '1.3.7') assert.ok(ui.materialSidebarControl, '正式包必须包含创作材料侧栏收起按钮');
     evidence.runtime = { ...runtime, bundleId: options.bundleId, origin, uiPort, listenerPidConfirmed: true,
       defaultProfileConfirmed: true, environmentOverridesApplied: false, candidate: false };
     evidence.ui = ui;
@@ -430,9 +445,21 @@ async function run(options) {
           error: frame.contentDocument?.querySelector('#assetGrid .asset-state.error')?.textContent,
           status: frame.contentDocument?.querySelector('#assetStatus')?.textContent,
           summary: frame.contentDocument?.querySelector('#librarySummary')?.textContent,
-          cards: frame.contentDocument?.querySelectorAll('#assetGrid .asset-card').length
+          cards: frame.contentDocument?.querySelectorAll('#assetGrid .asset-card').length,
+          nativeApi: typeof frame.contentWindow?.assetAPI,
+          resourceTimings: frame.contentWindow?.performance.getEntriesByType('resource').map(item => ({
+            path:new URL(item.name).pathname, duration:item.duration, responseEnd:item.responseEnd
+          }))
         }))
       }))()`);
+      evidence.assetEntryApiProbe = await mainRead(`(async () => {
+        const start=performance.now();
+        try {
+          const projects=await fetch('/api/creative-projects',{signal:AbortSignal.timeout(5000)}).then(r=>r.json());
+          const assets=await fetch('/api/creative-assets?project='+encodeURIComponent(projects.activeProjectId),{signal:AbortSignal.timeout(5000)}).then(r=>r.json());
+          return {ok:assets.available,files:assets.stats?.files,elapsedMs:performance.now()-start};
+        } catch(error) { return {error:error.message,elapsedMs:performance.now()-start}; }
+      })()`);
       throw error;
     }
     const entryReadyMs = Date.now() - entryStarted;

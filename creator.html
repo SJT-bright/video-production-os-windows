@@ -15,6 +15,7 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
   <title>创作浏览器｜视频制作 OS</title>
   <link rel="icon" type="image/png" href="assets/ui/creator/studio-3d-v1.png">
   <link rel="stylesheet" href="creator.css">
+  <link rel="stylesheet" href="assets/ui/app-support.css">
   <link rel="stylesheet" href="assets/ui/voice-clips.css">
   <link rel="stylesheet" href="assets/ui/creator/ui-icons.css">
 </head>
@@ -40,6 +41,10 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
         </div>
 
         <div class="header-actions">
+          <div class="app-support-controls" aria-label="软件更新与支持作者">
+            <a class="app-support-button" data-app-star href="https://github.com/SJT-bright/video-production-os" target="_blank" rel="noopener noreferrer" title="打开GitHub，点击Star支持作者"><span aria-hidden="true">☆</span><span class="app-support-label">Star</span></a>
+            <button class="app-support-button" data-app-update type="button" title="检查GitHub正式版更新"><span aria-hidden="true">↻</span><span data-app-update-label>检查更新</span></button>
+          </div>
           <span class="download-badge hidden" id="downloadBadge" role="status">⬇ 正在下载 0 项</span>
           <button class="project-chip" id="currentProject" type="button" title="切换剧本" aria-label="切换当前剧本" aria-haspopup="menu" aria-expanded="false">当前剧本</button>
           <button class="asset-toggle" id="toggleAssets" type="button" aria-pressed="true" title="打开或关闭创作资产库">
@@ -170,8 +175,10 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
             </div>
             <div class="asset-quick-tools" id="quickTools" hidden>
               <span class="quick-sel-info" id="quickSelInfo" aria-live="polite"></span>
+              <button class="text-action quick-sel-delete" id="quickSelDelete" type="button" hidden title="把选中的创作资产移到废纸篓">删除所选</button>
               <button class="text-action" id="quickSelClear" type="button" hidden>清空选择</button>
             </div>
+            <div class="quick-view-notice" id="quickViewNotice" role="status" hidden></div>
             <div class="asset-drop-zone" id="assetDropZone" tabindex="0" role="button" aria-label="拖入网页图片或本地图片、视频、音频">
               <span class="asset-drop-copy">
                 <span class="asset-drop-icon" data-ui-icon="import" aria-hidden="true"></span>
@@ -392,11 +399,13 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
 
   <script src="assets/ui/creator/ui-icons.js"></script>
   <script src="assets/ui/asset-order.js"></script>
+  <script src="assets/ui/generated-video-layout.js"></script>
   <script src="assets/ui/folder-editor.js"></script>
   <script src="assets/ui/video-disposition.js"></script>
   <script src="assets/ui/prompt-template-store.js"></script>
   <script src="assets/ui/voice-clips.js"></script>
 <script src="creator.js"></script>
 <script src="creator-automation-ui.js"></script>
+<script src="assets/ui/app-support.js"></script>
 </body>
 </html>

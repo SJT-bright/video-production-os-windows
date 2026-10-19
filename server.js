@@ -33,7 +33,8 @@ const {
   resolveCreativeAsset,
 } = require('./creative-assets.cjs');
 const { ProductionStore } = require('./production-store.cjs');
-const { createAssetWorkflowStore } = require('./asset-workflow.cjs');
+const { createAssetWorkflowStore, generatedVideoLocation } = require('./asset-workflow.cjs');
+const { MEDIA_KINDS, DOWNLOAD_EPISODE_CATEGORIES, episodeLabel, createDownloadEpisodeStore, downloadEpisodeBatch } = require('./electron/download-episodes.cjs');
 const { createCreativeProjectStore } = require('./creative-projects.cjs');
 const { createEditorExportMonitor } = require('./editor-exports.cjs');
 const { createVoiceClipService } = require('./voice-clips.cjs');
@@ -93,6 +94,80 @@ const creativeProjectStore = createCreativeProjectStore({
   assetRoot: CREATIVE_ASSET_DIR,
   onWarning: message => console.warn(`[creative-projects] ${message}`),
 });
+const downloadEpisodeStore = createDownloadEpisodeStore({ filePath: path.join(DATA_DIR, 'download-episodes.json') });
+const BUILTIN_ARCHIVE_SERVICES = Object.freeze([
+  ['gpt', 'GPT'], ['gemini', 'Gemini'], ['grok', 'Grok'], ['midjourney', 'Midjourney'],
+  ['updream', 'Updream'], ['xiaoyunque', '小云雀'], ['hehui', '核绘'], ['libtv', 'LibTV'],
+].map(([id, label]) => Object.freeze({ id, label })));
+let downloadEpisodeServiceProvider = () => BUILTIN_ARCHIVE_SERVICES;
+let assetMutationGuard = () => {};
+const downloadEpisodeListeners = new Set();
+
+function existingDownloadEpisodes(platformPath) {
+  const folder = resolveCreativeAsset(CREATIVE_ASSET_DIR, platformPath, 'folder');
+  if (!folder) return [];
+  return fs.readdirSync(folder.abs, { withFileTypes: true }).filter(entry => entry.isDirectory() && !entry.isSymbolicLink()
+    && /^第[1-9]\d{0,5}集$/.test(entry.name) && resolveCreativeAsset(CREATIVE_ASSET_DIR, `${platformPath}/${entry.name}`, 'folder'))
+    .map(entry => Number(entry.name.slice(1, -1))).sort((a, b) => a - b);
+}
+
+function downloadEpisodesFor(project = creativeProjectStore.active()) {
+  return downloadEpisodeBatch({ project, store: downloadEpisodeStore, services: downloadEpisodeServiceProvider(), existingEpisodes: existingDownloadEpisodes });
+}
+
+function downloadEpisodeScope(payload) {
+  const project = creativeProjectStore.active();
+  if (!project?.available || payload?.projectId !== project.id) throw httpError('当前剧本已切换，请重新选择下载集', 409);
+  const serviceId = String(payload.serviceId || ''), kind = payload.kind;
+  if (!MEDIA_KINDS.has(kind)) throw httpError('下载媒体类型无效', 400);
+  const service = downloadEpisodeServiceProvider().find(service => service.id === serviceId);
+  const persisted = downloadEpisodeStore.list(project.id).find(state => state.serviceId === serviceId && state.kind === kind);
+  if (!service && !persisted) throw httpError('下载网站未登记，请重新选择', 400);
+  const category = project.categories?.find(item => item.id === DOWNLOAD_EPISODE_CATEGORIES[kind]);
+  if (!category?.available || !resolveCreativeAsset(CREATIVE_ASSET_DIR, category.path, 'folder')) throw httpError('下载素材分类不可用', 404);
+  return { project, category, info: { projectId: project.id, serviceId, kind, serviceLabel: service?.label || persisted.platformFolder,
+    expectedEpisode: payload.expectedEpisode, episode: payload.episode } };
+}
+
+function ensureRealProjectFolder(project, relative, created = []) {
+  const normalized = requireProjectAssetPath(project, relative, { allowProjectRoot: false });
+  let current = project.folder;
+  if (!resolveCreativeAsset(CREATIVE_ASSET_DIR, current, 'folder')) throw httpError('剧本目录不可用', 404);
+  for (const part of normalized.slice(project.folder.length + 1).split('/')) {
+    current += `/${part}`;
+    const absolute = path.join(CREATIVE_ASSET_DIR, ...current.split('/'));
+    if (!fs.existsSync(absolute)) { fs.mkdirSync(absolute); created.push(absolute); }
+    if (!resolveCreativeAsset(CREATIVE_ASSET_DIR, current, 'folder')) throw httpError('目标目录不是可用真实文件夹', 400);
+  }
+  return resolveCreativeAsset(CREATIVE_ASSET_DIR, current, 'folder');
+}
+
+function publishDownloadEpisodes(project) {
+  const batch = downloadEpisodesFor(project);
+  broadcastEvent('download-episodes', batch);
+  for (const listener of downloadEpisodeListeners) {
+    try { listener(batch); } catch (error) { console.error(`下载分集通知失败：${error.message}`); }
+  }
+  return batch;
+}
+
+function advanceDownloadEpisode(payload) {
+  const { project, category, info } = downloadEpisodeScope(payload);
+  const result = downloadEpisodeStore.advance(info, { create(snapshot) {
+    ensureRealProjectFolder(project, `${category.path}/${snapshot.platformFolder}/${episodeLabel(snapshot.episode)}`);
+  } });
+  const batch = result.advanced ? publishDownloadEpisodes(project) : downloadEpisodesFor(project);
+  if (result.advanced) broadcastCreativeAssets();
+  return { ...batch, ...result };
+}
+
+function selectDownloadEpisode(payload) {
+  const { project, category, info } = downloadEpisodeScope(payload);
+  const result = downloadEpisodeStore.select(info, { exists(snapshot) {
+    return !!resolveCreativeAsset(CREATIVE_ASSET_DIR, `${category.path}/${snapshot.platformFolder}/${episodeLabel(snapshot.episode)}`, 'folder');
+  } });
+  return { ...(result.selected ? publishDownloadEpisodes(project) : downloadEpisodesFor(project)), ...result };
+}
 
 const editorExports = createEditorExportMonitor({
   assetRoot: CREATIVE_ASSET_DIR,
@@ -1059,6 +1134,49 @@ function renameAssetEverywhere(oldAbs, newAbs, capturedProject = null) {
   }
 }
 
+function changeCreativeAssetDisposition(project, requestedPath, disposition) {
+  if (!['editable', 'processing'].includes(disposition)) throw httpError('请选择可剪辑或待处理', 400);
+  if (!project?.available || creativeProjectStore.active()?.id !== project.id) throw httpError('剧本已切换，请重新选择素材', 409);
+  const relative = requireProjectAssetPath(project, requestedPath, { allowProjectRoot: false });
+  const entry = resolveCreativeAsset(CREATIVE_ASSET_DIR, relative, 'file');
+  if (!entry || classifyCreativeAsset(entry.rel) !== 'video') throw httpError('只能调整当前剧本中的真实视频文件', 400);
+  const location = generatedVideoLocation(project, entry.rel);
+  if (!location?.episode || location.legacy) throw httpError('未分集素材请先移入指定网站的第N集，再调整处理状态', 400);
+  const platformPath = `${location.videoRoot}/${location.platformFolder}`;
+  if (!downloadEpisodesFor(project).states.some(state => state.kind === 'video' && state.platformPath === platformPath)) {
+    throw httpError('素材所属网站尚未登记，请先移入已登记网站的第N集', 400);
+  }
+  assetMutationGuard({ projectId: project.id, path: entry.rel, absolutePath: entry.abs });
+  const before = assetWorkflowInfo(project, entry.rel);
+  const status = disposition === 'processing' ? '待处理' : '可剪辑';
+  const folderPath = `${platformPath}/${episodeLabel(location.episode)}/${status}${location.subfolders.length ? '/' + location.subfolders.join('/') : ''}`;
+  const created = [];
+  let targetPath = entry.rel;
+  try {
+    const folder = ensureRealProjectFolder(project, folderPath, created);
+    if (path.dirname(entry.abs) !== folder.abs) {
+      const target = uniquePath(path.join(folder.abs, path.basename(entry.rel)));
+      renameAssetEverywhere(entry.abs, target, project);
+      targetPath = toPosixRelative(CREATIVE_ASSET_DIR, target);
+    } else if (before.videoDisposition !== disposition || before.assetRole !== 'material') {
+      const snapshot = assetWorkflow.snapshot();
+      try {
+        assetWorkflow.ensure(project, entry.rel, 'video', { videoDisposition: disposition, assetRole: 'material' });
+        assetWorkflow.flush();
+      } catch (error) { assetWorkflow.restore(snapshot); throw error; }
+      broadcastCreativeAssets({ changed: [{ path: entry.rel, assetId: before.assetId }] });
+    }
+  } catch (error) {
+    // Remove only empty directories created by this failed operation. Never
+    // remove an existing state directory or another operation's new contents.
+    for (const directory of created.reverse()) { try { fs.rmdirSync(directory); } catch {} }
+    throw error;
+  }
+  return { ok: true, projectId: project.id, oldPath: entry.rel, path: targetPath, folder: folderPath,
+    changed: targetPath !== entry.rel || before.videoDisposition !== disposition || before.assetRole !== 'material',
+    ...assetWorkflowInfo(project, targetPath), disposition };
+}
+
 function renameCreativeFolder(projectId, relative, name) {
   const entry = resolveCreativeAsset(CREATIVE_ASSET_DIR, relative, 'folder');
   if (!entry) throw new Error('文件夹不存在');
@@ -1402,6 +1520,24 @@ const server = http.createServer(async (req, res) => {
         const conflict = error.code === 'PROJECT_EXISTS' || /同名|已经存在/.test(String(error.message || ''));
         sendJson(res, conflict ? 409 : (error.statusCode || 400), { error: error.message || '剧本操作失败', code: error.code || 'INVALID_PROJECT' });
       }
+      return;
+    }
+
+    if (p === '/api/download-episodes' || p === '/api/download-episodes/select' || p === '/api/download-episodes/advance') {
+      const action = p.endsWith('/select') ? 'select' : p.endsWith('/advance') ? 'advance' : 'read';
+      const writing = action !== 'read';
+      const method = writing ? 'POST' : 'GET';
+      if (req.method !== method) { sendJson(res, 405, { error: '方法不允许' }, { Allow: method }); return; }
+      try {
+        if (!isTrustedLocalUiRequest(req)) throw httpError('拒绝跨站请求', 403);
+        if (writing) requireTrustedJsonWrite(req);
+        const body = writing ? await readBody(req) : null;
+        const project = creativeProjectForRequest(url);
+        if (writing && body?.projectId && body.projectId !== project.id) throw httpError('剧本已切换，请重新选择下载集', 409);
+        const payload = writing ? { ...body, projectId: project.id } : null;
+        sendJson(res, 200, action === 'select' ? selectDownloadEpisode(payload)
+          : action === 'advance' ? advanceDownloadEpisode(payload) : downloadEpisodesFor(project));
+      } catch (error) { sendJson(res, error.statusCode || 400, { error: error.message || '下载分集操作失败' }); }
       return;
     }
 
@@ -1850,6 +1986,18 @@ const server = http.createServer(async (req, res) => {
         const conflict = String(error.message || '').includes('同名文件');
         sendJson(res, conflict ? 409 : (error.statusCode || 400), { error: error.message || '重命名失败' });
       }
+      return;
+    }
+
+    if (p === '/api/creative-assets/disposition') {
+      if (req.method !== 'POST') { sendJson(res, 405, { error: '方法不允许' }, { Allow: 'POST' }); return; }
+      try {
+        requireTrustedJsonWrite(req);
+        const body = await readBody(req);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw httpError('请求内容格式错误', 400);
+        const project = creativeProjectForRequest(url);
+        sendJson(res, 200, changeCreativeAssetDisposition(project, String(body.path || ''), body.disposition));
+      } catch (error) { sendJson(res, error.statusCode || 400, { error: error.message || '素材状态调整失败' }); }
       return;
     }
 
@@ -2331,6 +2479,20 @@ module.exports = {
   productionStore,
   productionStoreError,
   creativeProjectStore,
+  downloadEpisodeStore,
+  downloadEpisodesFor,
+  advanceDownloadEpisode,
+  selectDownloadEpisode,
+  changeCreativeAssetDisposition,
+  setDownloadEpisodeServiceProvider(provider) {
+    if (typeof provider !== 'function') throw new Error('下载网站身份配置无效');
+    downloadEpisodeServiceProvider = provider;
+  },
+  onDownloadEpisodesChanged(handler) { downloadEpisodeListeners.add(handler); return () => downloadEpisodeListeners.delete(handler); },
+  setAssetMutationGuard(guard) {
+    if (typeof guard !== 'function') throw new Error('素材写入保护配置无效');
+    assetMutationGuard = guard;
+  },
   editorExports,
   mediaSourceStore,
   mediaSourceWatcher,

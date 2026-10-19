@@ -145,6 +145,14 @@ body[data-audio-mode="true"] #normalizeNames, body[data-audio-mode="true"] #newS
 .library-meta { flex: none; display: flex; align-items: center; gap: 7px; }
 .library-meta > span { color: var(--faint); font-size: 9.5px; font-variant-numeric: tabular-nums; }
 .library-meta select { height: 27px; max-width: 88px; padding: 0 22px 0 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--muted); font-size: 9.5px; }
+.folder-scope-note { flex-shrink: 0; margin: 0; padding: 5px 9px; border-bottom: 1px solid var(--line); color: var(--muted); background: var(--accent-soft); font-size: 10px; line-height: 1.5; }
+.folder-scope-note[hidden] { display: none; }
+.folder-archive-note { flex: none; padding: 0 3px; color: var(--muted); font-size: 8px; }
+.library-episode-control { grid-column: 2 / -1; grid-row: 2; justify-self: end; display: inline-flex; align-items: center; gap: 2px; margin-top: -2px; }
+.library-episode-select { width: 61px; height: 23px; min-height: 0; padding: 0 13px 0 2px; border: 0; background: transparent; color: var(--accent); font-size: 9px; }
+.library-episode-advance { width: 23px; height: 23px; min-height: 0; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--accent); font-size: 17px; }
+.library-episode-advance:hover { background: var(--accent-soft); }
+.library-episode-control :disabled { opacity: .5; cursor: wait; }
 
 .folder-tree { min-height: 0; flex: 1; overflow: auto; padding: 7px 7px 5px; }
 .folder-tree.collapsed { display: none; }

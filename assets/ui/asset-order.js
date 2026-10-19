@@ -64,6 +64,17 @@
   // 普通分类仍使用手动顺序；分集按数字 1→2→10，历史日期保持倒序兼容。
   function orderFolders(entries, savedOrder) {
     const node = entry => entry.node || entry;
+    if (entries.length && entries.every(entry => entry.generatedVideoGroup && entry.fixedOrder)) {
+      return [...entries].sort((a, b) => {
+        const left = node(a).name, right = node(b).name;
+        const leftEpisode = episodeFolderKey(left), rightEpisode = episodeFolderKey(right);
+        if (leftEpisode || rightEpisode) return leftEpisode && rightEpisode ? leftEpisode - rightEpisode : leftEpisode ? -1 : 1;
+        if (left === '未分集历史素材' || right === '未分集历史素材') return left === right ? 0 : left === '未分集历史素材' ? 1 : -1;
+        const statuses = ['可剪辑', '待处理'];
+        if (statuses.includes(left) && statuses.includes(right)) return statuses.indexOf(left) - statuses.indexOf(right);
+        return 0;
+      });
+    }
     const isDate = entry => Boolean(dateFolderKey(node(entry).name));
     const isEpisode = entry => Boolean(episodeFolderKey(node(entry).name));
     const ranks = new Map((Array.isArray(savedOrder) ? savedOrder : []).map((path, index) => [path, index]));

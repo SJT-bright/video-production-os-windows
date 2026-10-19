@@ -48,6 +48,13 @@ const TREE = {
   },
 };
 
+async function mockDownloadEpisodes(page) {
+  await page.route('**/api/download-episodes?*', route => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({ projectId: PROJECT.id, states: [] }),
+  }));
+}
+
 async function run() {
   const consoleErrors = [];
   const pageErrors = [];
@@ -62,6 +69,7 @@ async function run() {
       if (route.request().method() !== 'GET') return route.abort('blockedbyclient');
       return route.continue();
     });
+    await mockDownloadEpisodes(page);
     await page.route('**/api/creative-assets?*', route => route.fulfill({
       status: 200, contentType: 'application/json', body: JSON.stringify(TREE),
     }));
@@ -121,7 +129,8 @@ async function run() {
           categories: [{ id: 'frames', label: '首帧与尾帧', path: '校园心动/首帧与尾帧', children: [
             { label: '首帧', path: '校园心动/首帧与尾帧/首帧' }, { label: '尾帧', path: '校园心动/首帧与尾帧/尾帧' },
           ] }],
-        }, rootName: '校园心动', rootPath: '/mock/创作资产库/校园心动', creativeAssetAvailable: true }),
+        }, downloadEpisodes: { projectId: 'project-11111111-1111-4111-8111-111111111111', states: [] },
+        rootName: '校园心动', rootPath: '/mock/创作资产库/校园心动', creativeAssetAvailable: true }),
         setPanelState: async patch => {
           panel = { ...panel, ...patch };
           window.__assetTest.states.push({ ...panel });
@@ -140,6 +149,10 @@ async function run() {
         copyImage: async assetPath => { window.__assetTest.copied.push(assetPath); return true; },
         showItem: async assetPath => { window.__assetTest.shown.push(assetPath); return true; },
         deleteItem: async assetPath => { window.__assetTest.deleted.push(assetPath); return true; },
+        deleteItems: async ({ projectId, paths }) => {
+          window.__assetTest.deleted.push(...paths);
+          return { projectId, requested: paths.length, cancelled: false, deleted: paths, failed: [] };
+        },
         openLibrary: async () => { window.__assetTest.opened += 1; return true; },
         showProjectPicker: async () => { window.__assetTest.projectPickers += 1; return true; },
         onPanelState: callback => { listeners.panel.push(callback); return () => {}; },
@@ -242,7 +255,7 @@ async function run() {
     // （资产被删除导致的失效收缩走同一交集分支：不在新树中的路径被剔除并 toast
     // 「已自动移除 N 个失效选项」，此处以“全部存活”为主证，收缩路径由交集逻辑同源覆盖。）
     await page.evaluate(() => scheduleLibraryReload());
-    await page.waitForFunction(() => /选中分类即可导入/.test(document.querySelector('#assetStatus')?.textContent || ''), null, { timeout: 5000 });
+    await page.waitForFunction(() => /选择本地文件保留原名/.test(document.querySelector('#assetStatus')?.textContent || ''), null, { timeout: 5000 });
     assert.match(await page.locator('#selectionCount').textContent(), /已选 2 项/, '后台刷新不得清空多选');
     assert.equal(await page.locator('#selectionBar').isVisible(), true, '保留选择后批量操作栏应保持可见');
     assert.equal(await page.locator('.asset-card.selected', { hasText: '女主正脸.png' }).count(), 1, '刷新后卡片选中态应保留');
@@ -300,9 +313,10 @@ async function run() {
     await page.locator('.asset-card', { hasText: '女主正脸.png' }).hover();
     await page.locator('.asset-card', { hasText: '女主正脸.png' }).locator('.asset-check').click();
     assert.match(await page.locator('#selectionCount').textContent(), /已选 2 项/);
-    page.once('dialog', dialog => dialog.accept());
     await page.locator('#batchDelete').click();
     await page.waitForFunction(() => window.__assetTest.deleted.length === 3);
+    // The native bridge records its receipt before the one final tree refresh.
+    await page.waitForFunction(() => !state.batchDeleteBusy);
     assert.deepEqual(await page.evaluate(() => window.__assetTest.deleted.slice(1)), [
       '校园心动/人物资产/校服三视图.jpg', '校园心动/人物资产/女主正脸.png',
     ]);
@@ -441,6 +455,7 @@ async function run() {
     await page.screenshot({ path: path.join(artifactDir, `creator-assets-library-${process.pid}-${Date.now()}.png`), fullPage: true });
 
     const browserOnlyPage = await browser.newPage({ viewport: { width: 720, height: 760 } });
+    await mockDownloadEpisodes(browserOnlyPage);
     await browserOnlyPage.route('**/api/creative-projects', route => route.fulfill({
       status: 200, contentType: 'application/json', body: JSON.stringify({ activeProjectId: PROJECT.id, projects: [PROJECT] }),
     }));
@@ -457,6 +472,7 @@ async function run() {
     await browserOnlyPage.close();
 
     const librarySurfacePage = await browser.newPage({ viewport: { width: 1180, height: 760 }, colorScheme: 'dark' });
+    await mockDownloadEpisodes(librarySurfacePage);
     await librarySurfacePage.route('**/api/creative-projects', route => route.fulfill({
       status: 200, contentType: 'application/json', body: JSON.stringify({ activeProjectId: PROJECT.id, projects: [PROJECT] }),
     }));
@@ -481,6 +497,7 @@ async function run() {
     // 负例自检：route 层运行时剥除产品 video-review toggle（零生产文件改动），
     // 展开审核防护断言必须随之失效——证明该断言可失败、回归会被抓住。
     const negativePage = await browser.newPage({ viewport: { width: 720, height: 860 } });
+    await mockDownloadEpisodes(negativePage);
     const toggleLine = "el.previewDialog.classList.toggle('video-review', item.type === 'video');";
     const sourceJs = fs.readFileSync(path.join(__dirname, 'creator-assets.js'), 'utf8');
     assert.ok(sourceJs.includes(toggleLine), '负例前置：产品源码应包含 video-review toggle');
@@ -504,6 +521,7 @@ async function run() {
 
     // 视频封面懒加载：预加载区（视口外扩 200px）外的卡片不挂 src、不发请求；滚动进入后才加载。
     const lazyPage = await browser.newPage({ viewport: { width: 720, height: 860 } });
+    await mockDownloadEpisodes(lazyPage);
     const lazyVideos = Array.from({ length: 40 }, (_, i) => ({
       kind: 'file', type: 'video', name: `懒加载视频-${String(i + 1).padStart(2, '0')}.mp4`,
       path: `校园心动/人物资产/懒加载视频-${String(i + 1).padStart(2, '0')}.mp4`,

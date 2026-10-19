@@ -1,6 +1,6 @@
 {
   "name": "video-production-os",
-  "version": "1.3.8",
+  "version": "1.3.11",
   "private": true,
   "description": "本地视频制作、分集资产整理与创作浏览器工作台",
   "main": "electron/main.cjs",
@@ -31,6 +31,8 @@
     "test:media-sources": "node test_media_sources.cjs",
     "test:creator-assets": "node test_creator_assets.cjs http://127.0.0.1:3750",
     "test:creator-assets-history": "node test_creator_assets_history.cjs",
+    "test:asset-batch-delete": "node test_asset_batch_delete.cjs",
+    "test:github-updates": "node test_github_updates.cjs",
     "test:creative-projects": "node test_creative_projects.cjs",
     "test:prompt-templates": "node test_prompt_template_store.cjs && node test_prompt_template_migration_native.cjs",
     "test:editor-exports": "node test_editor_exports.cjs",

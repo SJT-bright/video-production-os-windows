@@ -6,10 +6,10 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const suites = ['test_browser_session.cjs', 'test_browser_retention.cjs', 'test_creator_sidebar_state.cjs',
   'test_creator_file_access.cjs', 'test_prompt_template_store.cjs', 'test_download_router.cjs',
-  'test_download_episodes.cjs', 'test_download_review.cjs', 'test_editor_exports.cjs', 'test_asset_linkage.cjs',
-  'test_creative_projects.cjs', 'test_build_manifest.cjs', 'test_project_documents.cjs', 'test_asset_workflow.cjs',
-  'test_voice_clips.cjs', 'test_folder_management.cjs', 'test_media_import.cjs', 'test_media_sources.cjs', 'test_production_store.cjs',
-  'test_split_view_state.cjs'];
+  'test_download_episodes.cjs', 'test_download_review.cjs', 'test_generated_video_layout.cjs', 'test_asset_order.cjs', 'test_editor_exports.cjs', 'test_asset_linkage.cjs',
+  'test_creative_projects.cjs', 'test_build_manifest.cjs', 'test_project_documents.cjs', 'test_asset_workflow.cjs', 'test_asset_workflow_revision.cjs',
+  'test_voice_clips.cjs', 'test_folder_management.cjs', 'test_asset_batch_delete.cjs', 'test_media_import.cjs', 'test_media_sources.cjs', 'test_production_store.cjs',
+  'test_split_view_state.cjs', 'test_github_updates.cjs'];
 const checks = [['--check', 'project-documents.cjs'], ['--check', 'prepare-media-tools.cjs'], ...suites.map(file => [file])];
 const failed = [];
 for (const args of checks) {

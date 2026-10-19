@@ -110,7 +110,7 @@ async function main() {
         paths:[...document.querySelectorAll('#assetGrid .asset-card')].map(card=>card.dataset.path),
         dateRows:[...document.querySelectorAll('.folder-row')].map(row=>row.dataset.folderPath).filter(token=>token.endsWith('/2026-09-10')) };
     })()`);
-    assert.equal(history.name, '未分集历史素材'); assert.equal(history.grip, 0);
+    assert.equal(history.name, '未分集素材'); assert.equal(history.grip, 0);
     assert.deepEqual(history.disabled, [true, true, true]); assert.deepEqual(history.paths, [oldToken]);
     assert.ok(!history.dateRows.includes(`${platformPath}/2026-09-10`));
     assert.ok(history.dateRows.includes(`${alpha.folder}/场景资产/2026-09-10`), 'Ordinary custom date folders stay real folders');

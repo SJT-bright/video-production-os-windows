@@ -145,15 +145,18 @@ async function checkRendererTransitions() {
   ].join('\n');
   const a = { id: 'a', folder: '甲', name: '甲' }, b = { id: 'b', folder: '乙', name: '乙' };
   const timers = new Map(); let next = 0, refreshes = 0;
-  const context = { state: { config: { project: a }, knownFolders: new Set(), collapsedFolders: new Set() },
+  const context = { state: { config: { project: a }, projectGeneration: 0, selectedPaths: new Set(['甲/旧选项.png']),
+    folders: [], knownFolders: new Set(), collapsedFolders: new Set() },
     el: { previewDialog: { open: false }, folderTree: { replaceChildren() {}, addEventListener() {} }, assetGrid: { replaceChildren() {}, addEventListener() {} }, librarySummary: {} },
-    window: {}, saveAssetView() {}, restoreAssetView() {},
+    window: {}, saveAssetView() {}, restoreAssetView() {}, updateSelectionBar() {},
     setTimeout: callback => { timers.set(++next, callback); return next; }, clearTimeout: id => timers.delete(id),
     API: { getConfig: async () => ({ project: b }) }, loadLibrary: async () => { refreshes++; }, showToast: message => { throw Error(message); } };
   vm.createContext(context); vm.runInContext(definitions, context);
   context.scheduleLibraryReload(true); context.scheduleLibraryReload(false);
   for (const callback of timers.values()) await callback();
   assert.equal(context.state.config.project.id, 'b'); assert.equal(context.state.selectedFolder, '乙'); assert.equal(refreshes, 1);
+  assert.equal(context.state.projectGeneration, 1, '切换项目必须失效旧请求世代');
+  assert.equal(context.state.selectedPaths.size, 0, '旧项目多选不得带入新项目');
   const uploads = [];
   Object.assign(context, { Array, encodeURIComponent, activeProjectId: () => context.state.config.project.id,
     libraryPaneEl: { classList: { contains: () => false } }, folderLabel: () => '甲',
@@ -162,11 +165,18 @@ async function checkRendererTransitions() {
   Object.assign(context.el, { importAssets: {}, assetStatus: {}, assetFileInput: {} });
   context.state.selectedFolder = '乙/生成图片';
   context.showToast = () => {};
+  // Run the actual import-target helpers. This fixture uses ordinary folders;
+  // real website/episode creation is exercised in the workflow UI/native suites.
+  const targetStart = source.indexOf('function libraryActionBusy(');
+  assert.ok(targetStart >= 0, '导入目标解析函数必须存在');
+  vm.runInContext(source.slice(targetStart, source.indexOf('function applyLibraryDownloadBatch(', targetStart)), context);
   const importStart = source.indexOf('async function importFiles(');
   assert.ok(importStart >= 0, '批量导入函数必须存在');
   vm.runInContext(source.slice(importStart, source.indexOf('function bindEvents()', importStart)), context);
   await context.importFiles([{ name: '一.png' }, { name: '二.png' }]);
+  assert.equal(uploads.length, 2, '两项导入都必须真正发出请求，不能以空请求集合通过');
   assert.ok(uploads.every(url => url.searchParams.get('folder') === '乙/生成图片'), '批量导入固定开始时的目录');
+  assert.ok(uploads.every(url => url.searchParams.get('naming') === 'original'), '文件选择导入必须保留原名');
   uploads.length = 0; context.state.config.project = a; context.state.selectedFolder = '甲/生成图片';
   context.fetch = async url => { uploads.push(url); context.state.config.project = b; return { ok: true, json: async () => ({}) }; };
   await context.importFiles([{ name: '一.png' }, { name: '二.png' }]);

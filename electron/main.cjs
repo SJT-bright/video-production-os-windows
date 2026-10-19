@@ -36,10 +36,12 @@ const { createBrowserSessionStore } = require('./browser-session.cjs');
 const { createCreatorFileReadPolicy, authorizeSelectedCreatorFileRead, observeCreatorUploadFailures } = require('./creator-file-access.cjs');
 const { buildCreatorContextMenuTemplate } = require('./creator-context-menu.cjs');
 const { classifyDownload, resolveDownloadTarget, deleteBrowserDownloadFile, sanitizeFilename, uniquePath } = require('./download-router.cjs');
-const { MEDIA_KINDS, episodeLabel, normalizeSnapshot: normalizeEpisodeSnapshot, createDownloadEpisodeStore } = require('./download-episodes.cjs');
+const { MEDIA_KINDS, DOWNLOAD_EPISODE_CATEGORIES, episodeLabel, normalizeSnapshot: normalizeEpisodeSnapshot } = require('./download-episodes.cjs');
 const { createDownloadReview } = require('./download-review.cjs');
 const { createDownloadReviewUI } = require('./download-review-ui.cjs');
 const { createFloatPresentation } = require('./float-presentation.cjs');
+const { createAssetBatchDelete } = require('./asset-batch-delete.cjs');
+const { createGitHubUpdates } = require('./github-updates.cjs');
 const VideoDisposition = require('../assets/ui/video-disposition.js');
 const { classifyCreativeAsset, ensureCreativeAssetRoot, resolveCreativeAsset, buildCreativeAssetTree } = require('../creative-assets.cjs');
 const { createCreatorAutomation, serveAutomation } = require('./creator-automation.cjs');
@@ -122,6 +124,8 @@ const creativeProjectStore = serverModule.creativeProjectStore;
 const START_PORT = Number(process.env.VIDEO_OS_PORT || 3750) || 3750;
 let creatorAutomation = null;
 let creatorAutomationServer = null;
+let githubUpdates = null;
+let appUpdatePrompt = null;
 const COMPATIBILITY_MODE = process.env.VIDEO_OS_ENABLE_GPU !== '1'
   && (process.env.VIDEO_OS_COMPAT_MODE === '1' || RUNTIME_CONFIG.compatibilityMode === true);
 if (process.env.VIDEO_OS_DISABLE_GPU === '1' || COMPATIBILITY_MODE) {
@@ -233,10 +237,20 @@ const downloadOwners = new WeakMap();
 const configuredSessions = new Set();
 const recentDownloads = [];
 const activeDownloadItems = new Map();
+// Invalidate a pending batch even if the user switches away and back before
+// confirmation returns. HTTP project activation may precede creator IPC.
+let assetDeleteProjectEpoch = 0;
+serverModule.server.prependListener('request', request => {
+  if (request.method !== 'POST') return;
+  try {
+    if (new URL(request.url, 'http://localhost').pathname === '/api/creative-projects') assetDeleteProjectEpoch++;
+  } catch {}
+});
 let downloadReviewUI = null;
 let appQuitting = false;
 let recoveringVideoDownloads = false;
-const downloadEpisodeStore = createDownloadEpisodeStore({ filePath: path.join(process.env.VIDEO_OS_DATA_DIR, 'download-episodes.json') });
+const downloadEpisodeStore = serverModule.downloadEpisodeStore;
+serverModule.setDownloadEpisodeServiceProvider(publicServices);
 function validateVideoDownloadTarget(entry, destination) {
   const project = creativeProjectStore.get(entry.projectId);
   if (!project?.available || !['editable', 'processing'].includes(entry.choice)) throw new Error('下载所属剧本目录不可用');
@@ -443,22 +457,8 @@ function directoriesForProject(project) {
     audio: directory('audio'), downloads: directory('browser-downloads') };
 }
 
-const DOWNLOAD_EPISODE_CATEGORIES = Object.freeze({ image: 'generated-images', video: 'generated-videos', audio: 'audio' });
-
 function publicDownloadEpisodes(project = creativeProjectStore.active()) {
-  if (!project) return { projectId: '', states: [] };
-  const states = [];
-  for (const service of publicServices()) {
-    for (const kind of MEDIA_KINDS) {
-      const state = downloadEpisodeStore.get({ projectId: project.id, serviceId: service.id, kind, serviceLabel: service.label });
-      const category = project.categories?.find(item => item.id === DOWNLOAD_EPISODE_CATEGORIES[kind]);
-      const platformPath = category ? `${category.path}/${state.platformFolder}` : '';
-      states.push({ ...state, serviceLabel: service.label, label: episodeLabel(state.episode),
-        platformPath, episodePath: platformPath ? `${platformPath}/${episodeLabel(state.episode)}` : '',
-        available: !!(project.available && category?.available), legacy: false });
-    }
-  }
-  return { projectId: project.id, states };
+  return serverModule.downloadEpisodesFor(project);
 }
 
 function sendDownloadEpisodes(project = creativeProjectStore.active()) {
@@ -484,14 +484,10 @@ function relocateDownloadEpisodePlatform(oldPath, newPath) {
   const project = creativeProjectStore.list().find(item => oldPath.startsWith(`${item.folder}/`));
   if (!project) return;
   let changed = false;
-  for (const service of publicServices()) {
-    for (const kind of MEDIA_KINDS) {
-      const category = project.categories?.find(item => item.id === DOWNLOAD_EPISODE_CATEGORIES[kind]);
-      const state = downloadEpisodeStore.get({ projectId: project.id, serviceId: service.id, kind, serviceLabel: service.label });
-      if (category && oldPath === `${category.path}/${state.platformFolder}`) {
-        downloadEpisodeStore.renamePlatform(state, path.posix.basename(newPath));
-        changed = true;
-      }
+  for (const state of publicDownloadEpisodes(project).states) {
+    if (oldPath === state.platformPath) {
+      downloadEpisodeStore.renamePlatform(state, path.posix.basename(newPath));
+      changed = true;
     }
   }
   if (changed && project.id === creativeProjectStore.active()?.id) sendDownloadEpisodes(creativeProjectStore.get(project.id));
@@ -1488,13 +1484,15 @@ async function saveRemoteImageBuffer(buffer, sourceUrl, mimeType, archiveContext
 }
 
 async function importDroppedCreativeAssets(payload = {}) {
+  if (payload.naming !== undefined && !['original', 'sequential'].includes(payload.naming)) throw new Error('导入命名方式无效');
+  if (payload.projectId !== undefined && payload.projectId !== creativeProjectStore.active()?.id) throw new Error('剧本已切换，请重新选择导入素材');
   const paths = Array.isArray(payload.paths) ? payload.paths.map(value => String(value || '')).filter(Boolean).slice(0, 100) : [];
   const urls = Array.isArray(payload.urls) ? payload.urls.map(value => String(value || '')).filter(Boolean).slice(0, 20) : [];
   let remoteContext, remoteContextError;
   if (urls.length) {
     try { remoteContext = captureRemoteImageContext(); } catch (error) { remoteContextError = error; }
   }
-  const local = await archiveExternalPaths(paths, new Set(['image', 'video', 'audio']), { renameSequentially: true });
+  const local = await archiveExternalPaths(paths, new Set(['image', 'video', 'audio']), { renameSequentially: payload.naming !== 'original' });
   const failed = [...local.failed];
   let imported = local.imported;
   for (const url of urls) {
@@ -2140,13 +2138,49 @@ function enableRendererRecovery(win, scope) {
   });
 }
 
+async function showAppUpdateNotice(state, manual = false) {
+  const owner = creatorWindow && !creatorWindow.isDestroyed() ? creatorWindow : mainWindow;
+  if (!owner || owner.isDestroyed() || (!manual && (!owner.isVisible() || !owner.isFocused()))) return false;
+  if (appUpdatePrompt) return appUpdatePrompt;
+  if (!manual && (!state.available || state.promptedVersion === state.release.version)) return false;
+  appUpdatePrompt = (async () => {
+    const available = state.available;
+    if (available) await githubUpdates.notePrompted(state.release.version);
+    if (owner.isDestroyed() || appQuitting) return false;
+    const result = await dialog.showMessageBox(owner, {
+      type: available ? 'info' : state.status === 'error' ? 'warning' : 'info',
+      title: available ? '视频制作 OS 有新版本' : '检查更新',
+      message: available ? `发现新版 v${state.release.version}（当前 v${state.currentVersion}）`
+        : state.status === 'error' ? '暂时无法检查更新' : state.supported ? '当前版本无需更新' : '当前系统架构暂无自动更新检查',
+      detail: available ? `${state.release.name}\n${state.release.notes.slice(0, 600)}\n\n点击后打开官方GitHub下载页，不自动退出或覆盖软件，素材和网页登录保持不变。`
+        : state.status === 'error' ? `${state.error}\n可以稍后重试，或直接打开官方最新版下载页。`
+          : `当前版本：v${state.currentVersion}${state.release ? `\nGitHub正式版：v${state.release.version}` : ''}\n正式版发布后，软件会自动检查并提示；仅推送代码不会触发更新。`,
+      buttons: available ? ['稍后', '查看更新'] : state.status === 'error' ? ['关闭', '打开下载页'] : ['确定'],
+      defaultId: 0, cancelId: 0, noLink: true,
+    });
+    if (result.response === 1) await shell.openExternal(available ? state.release.url : state.latestUrl);
+    return true;
+  })().finally(() => { appUpdatePrompt = null; });
+  return appUpdatePrompt;
+}
+
+async function checkAppUpdates() {
+  if (!githubUpdates) return null;
+  const state = await githubUpdates.check({ manual: true });
+  await showAppUpdateNotice(state, true);
+  return state;
+}
+
 function configureApplicationMenu() {
   if (process.platform !== 'darwin') {
     Menu.setApplicationMenu(null);
     return;
   }
   Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { type: 'separator' }, { role: 'quit' }] },
+    { label: app.name, submenu: [{ role: 'about' },
+      { label: '检查更新…', click: () => checkAppUpdates().catch(error => logDiagnostic('update-check', error)) },
+      { label: 'GitHub Star · 支持作者', click: () => { if (githubUpdates) shell.openExternal(githubUpdates.snapshot().starUrl).catch(error => logDiagnostic('github-star', error)); } },
+      { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { type: 'separator' }, { role: 'quit' }] },
     { role: 'editMenu' },
     { role: 'windowMenu' },
   ]));
@@ -2380,6 +2414,7 @@ async function createCreatorWindow(initialRequest = 'image') {
   // The HTTP create/activate endpoint can update the store before this IPC.
   // Compare with the project shown by the creator, not the already-updated store.
   const previousProjectId = creatorProjectId || creativeProjectStore.active()?.id || '';
+  if (requestedProjectId && requestedProjectId !== creativeProjectStore.active()?.id) assetDeleteProjectEpoch++;
   const project = requestedProjectId ? creativeProjectStore.activate(requestedProjectId) : creativeProjectStore.active();
   if (!project) throw new Error('请先选择一个剧本或灵感工作区');
   creatorProjectId = project.id;
@@ -3305,6 +3340,67 @@ function openFloatVideoWindow(payload) {
 }
 
 function registerIpc() {
+  const requireSupportSender = event => {
+    if ((!isTrustedMainSender(event) && !isTrustedCreatorSender(event))
+      || event.senderFrame !== event.sender.mainFrame || !isLocalAppUrl(event.senderFrame.url)) throw new Error('拒绝未经授权的更新操作');
+    if (!githubUpdates) throw new Error('更新检查尚未就绪');
+  };
+  ipcMain.handle('support:get-state', event => { requireSupportSender(event); return githubUpdates.snapshot(); });
+  ipcMain.handle('support:check-updates', event => { requireSupportSender(event); return checkAppUpdates(); });
+  ipcMain.handle('support:open-star', async event => {
+    requireSupportSender(event); const url = githubUpdates.snapshot().starUrl; await shell.openExternal(url); return { url };
+  });
+  ipcMain.handle('support:open-release', async event => {
+    requireSupportSender(event); const state = githubUpdates.snapshot();
+    const url = state.available ? state.release.url : state.latestUrl;
+    await shell.openExternal(url); return { url };
+  });
+  serverModule.onDownloadEpisodesChanged(state => {
+    if (state.projectId !== creativeProjectStore.active()?.id) return;
+    sendCreator('creator:download-episodes-changed', state);
+    if (assetView && !assetView.webContents.isDestroyed()) assetView.webContents.send('asset:download-episodes-changed', state);
+  });
+  serverModule.setAssetMutationGuard(({ absolutePath }) => {
+    const occupied = [...activeDownloadItems.values()].some(({ record }) => record?.savePath && (
+      path.resolve(record.savePath) === absolutePath || (fs.existsSync(record.savePath) && fs.realpathSync.native(record.savePath) === absolutePath)));
+    const reserved = videoDownloadReview.list().some(entry => entry.finalPath && path.resolve(entry.finalPath) === absolutePath);
+    if (occupied || reserved) throw new Error('文件仍在下载或归档，请完成或取消后再调整状态');
+  });
+  const batchDelete = createAssetBatchDelete({
+    libraryRoot: CREATIVE_ASSET_DIR,
+    getActiveProject: () => creativeProjectStore.active(),
+    getProjectEpoch: () => assetDeleteProjectEpoch,
+    getProtectedPaths: () => [
+      ...[...activeDownloadItems.values()].flatMap(({ record }) => record?.savePath ? [record.savePath] : []),
+      ...videoDownloadReview.list().flatMap(entry => [entry.stagePath, entry.finalPath].filter(Boolean)),
+    ],
+    trash: absolutePath => shell.trashItem(absolutePath),
+    onDeleted: ({ projectId, path: relativePath }) => {
+      if (floatVideoState?.projectId === projectId && floatVideoState.path === relativePath) closeFloatVideoWindow('asset-deleted');
+    },
+    broadcast: payload => serverModule.broadcastCreativeAssets?.(payload),
+    onWarning: error => logDiagnostic('asset-batch-delete', error),
+  });
+  const deleteAssetBatch = async (event, payload, surface) => {
+    requireTrusted(event, surface);
+    const owner = creatorWindow && !creatorWindow.isDestroyed() ? creatorWindow : mainWindow;
+    if (!owner || owner.isDestroyed()) throw new Error('工作窗口已关闭，未执行删除');
+    return batchDelete.deleteItems(payload, {
+      isAlive: () => !owner.isDestroyed() && !event.sender.isDestroyed()
+        && (surface === 'asset' ? isTrustedAssetSender(event) : isTrustedCreatorSender(event)),
+      confirm: async ({ count, paths: selected, projectName }) => {
+        const names = selected.slice(0, 6).map(relative => path.basename(relative)).join('\n');
+        const { response } = await dialog.showMessageBox(owner, {
+          type: 'warning', title: '批量删除素材', message: `删除「${projectName}」中选中的 ${count} 个素材？`,
+          detail: `选中的文件将移入系统废纸篓，可从废纸篓恢复。未选中的文件和文件夹不会删除。\n\n${names}${selected.length > 6 ? '\n…' : ''}`,
+          buttons: ['取消', `删除 ${count} 项`], defaultId: 0, cancelId: 0, noLink: true,
+        });
+        return response === 1;
+      },
+    });
+  };
+  ipcMain.handle('creator:delete-creative-assets', (event, payload) => deleteAssetBatch(event, payload, 'creator'));
+  ipcMain.handle('asset:delete-items', (event, payload) => deleteAssetBatch(event, payload, 'asset'));
   ipcMain.on('creator:selected-file-read', authorizeSelectedCreatorFileRead);
   downloadReviewUI = createDownloadReviewUI({ BrowserWindow, ipcMain,
     parent: () => creatorWindow, url: () => `${localServerInfo.url}/assets/ui/download-review.html`,
@@ -3470,24 +3566,25 @@ function registerIpc() {
     requireTrusted(event, 'creator');
     return publicDownloadEpisodes();
   });
+  ipcMain.handle('asset:get-download-episodes', event => {
+    requireTrusted(event, 'asset');
+    return publicDownloadEpisodes();
+  });
 
   ipcMain.handle('creator:advance-download-episode', (event, payload = {}) => {
     requireTrusted(event, 'creator');
-    const project = creativeProjectStore.active();
-    if (!project?.available || String(payload.projectId || '') !== project.id) throw new Error('当前剧本已切换，请重试下一集');
-    const serviceId = String(payload.serviceId || ''), kind = String(payload.kind || '');
-    const service = serviceById(serviceId);
-    if (!service || !MEDIA_KINDS.has(kind)) throw new Error('下载所属网站或媒体类型无效');
-    const category = creativeProjectStore.category(project.id, DOWNLOAD_EPISODE_CATEGORIES[kind]);
-    const directoryFor = snapshot => path.join(category.absolutePath, snapshot.platformFolder, episodeLabel(snapshot.episode));
-    const result = downloadEpisodeStore.advance({ projectId: project.id, serviceId, kind,
-      serviceLabel: service.label, expectedEpisode: payload.expectedEpisode }, {
-      create(snapshot) { ensureArchiveDirectory(category.absolutePath, directoryFor(snapshot)); },
-    });
-    const states = sendDownloadEpisodes(project);
-    if (result.advanced) serverModule.broadcastCreativeAssets?.();
-    return { ...states, advanced: result.advanced, state: result.state };
+    return serverModule.advanceDownloadEpisode(payload);
   });
+  ipcMain.handle('asset:advance-download-episode', (event, payload = {}) => {
+    requireTrusted(event, 'asset');
+    return serverModule.advanceDownloadEpisode(payload);
+  });
+  const selectExistingEpisode = (event, payload, surface) => {
+    requireTrusted(event, surface);
+    return serverModule.selectDownloadEpisode(payload);
+  };
+  ipcMain.handle('creator:select-download-episode', (event, payload = {}) => selectExistingEpisode(event, payload, 'creator'));
+  ipcMain.handle('asset:select-download-episode', (event, payload = {}) => selectExistingEpisode(event, payload, 'asset'));
 
   ipcMain.handle('creator:add-custom-service', (event, payload = {}) => {
     requireTrusted(event, 'creator');
@@ -4368,6 +4465,17 @@ if (!gotSingleInstanceLock) {
     configureApplicationMenu();
     registerIpc();
     localServerInfo = await serverModule.startServer(START_PORT, 8, { open: false });
+    githubUpdates = createGitHubUpdates({ version: app.getVersion(), platform: process.platform, arch: process.arch,
+      fetch: (url, options) => net.fetch(url, options), cacheFile: path.join(app.getPath('userData'), 'github-release-state.json') });
+    githubUpdates.onState(state => { sendCreator('support:update-state', state); sendMain('support:update-state', state); });
+    githubUpdates.onAvailable(state => showAppUpdateNotice(state).catch(error => logDiagnostic('update-notice', error)));
+    if (app.isPackaged && !TEST_MODE && !SMOKE_TEST) {
+      githubUpdates.start();
+      app.on('browser-window-focus', () => {
+        const state = githubUpdates.snapshot();
+        if (state.available) showAppUpdateNotice(state).catch(error => logDiagnostic('update-focus', error));
+      });
+    }
     if (CANDIDATE_MODE) {
       const { migrateCandidateLocalStorage } = require('./candidate-workspace.cjs');
       await migrateCandidateLocalStorage({ sourceOrigin: 'http://localhost:3750', targetOrigin: localServerInfo.url, userData: app.getPath('userData') });
@@ -5033,6 +5141,7 @@ app.on('activate', () => {
 
 app.on('before-quit', () => {
   appQuitting = true;
+  githubUpdates?.stop();
   downloadReviewUI?.stop();
   persistBrowserSession();
   creatorAutomationServer?.close();

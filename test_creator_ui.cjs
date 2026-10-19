@@ -914,11 +914,12 @@ async function main() {
   assert.equal(await page.locator('#promptAccordion').getAttribute('open'), null, '没有模板和草稿时提示词板块应默认折叠');
   assert.equal(await page.locator('#assetAccordion').getAttribute('open'), '', '资产图片板块应默认展开');
   const characterCards = page.locator('.quick-folder-row:has-text("人物图片") + .quick-children');
-  assert.equal(await characterCards.locator('.asset-image-card').count(), 3, '创作资产板块没有同时显示图片与视频');
-  assert.equal(await characterCards.locator('.asset-video-preview').count(), 1, '本地视频没有显示为视频资产');
+  assert.equal(await characterCards.locator('.asset-image-card').count(), 0, '收起的目录不应预建隐藏媒体卡');
   // 快捷分类树：展开「人物图片」后图片嵌在树下，导入目标同步为该分类
   await page.locator('.quick-folder-name', { hasText: '人物图片' }).click();
   await page.waitForFunction(() => document.querySelectorAll('.quick-children:not(.collapsed)').length >= 2, null, { timeout: 5000 });
+  assert.equal(await characterCards.locator('.asset-image-card').count(), 3, '展开创作资产分类后应同时显示图片与视频');
+  assert.equal(await characterCards.locator('.asset-video-preview').count(), 1, '本地视频没有显示为视频资产');
   assert.match(await page.locator('#quickDropTarget').textContent(), /人物图片/, '展开分类后拖放目标没有更新');
   // 框选模式：开关 → 点卡片按顺序选入 → 拖动选中卡整批多文件拖出
   assert.equal(await page.locator('#quickMultiSelect').count(), 1, '快捷面板应有框选模式开关');
@@ -1003,10 +1004,16 @@ async function main() {
   assert.equal(await page.locator('#savePromptTemplate').count(), 0, '存为固定提示词按钮应已移除');
   assert.equal(await page.locator('#promptHistory').count(), 0, '历史按钮应已移除');
   const createAction = async (name, body) => {
+    const before = await page.locator('.saved-template-item').count();
     await page.locator('#templateCreate').click();
+    // 打开动作在下一动画帧聚焦名称；等其完成再向正文输入，避免测试键盘被异步抢焦点。
+    await page.waitForFunction(() => document.activeElement === document.getElementById('templateCreateName'));
     await page.locator('#templateCreateName').fill(name);
     await page.locator('#templateCreateBody').fill(body);
+    assert.equal(await page.locator('#templateCreateName').inputValue(), name);
+    assert.equal(await page.locator('#templateCreateBody').inputValue(), body);
     await page.locator('#templateCreateForm button[type="submit"]').click();
+    await page.waitForFunction(count => document.querySelectorAll('.saved-template-item').length === count + 1, before);
   };
   await createAction('我的动作模板', 'VIDEO-ONLY-DRAFT');
   await createAction('人物四视图', '自行填写的四视图固定提示词内容');
@@ -1169,8 +1176,10 @@ async function main() {
   await page.locator('[data-delete-asset]').first().click();
   await page.waitForFunction(() => (window.__assetDeleted || []).length === 2);
   assert.equal((await page.evaluate(() => window.__assetDeleted))[1], '校园心动/人物图片/女主正脸.png', '删除按钮没有调用删除');
+  // 桥接的删除回执不等于列表已刷新、删除锁已释放；下一次导入不应与该批次竞争。
+  await page.waitForFunction(() => !quickAssetDeletionBusy() && !quickAssetMutationDepth);
 
-  // 快捷分类树：此前导入用例已展开「人物图片」，目标应保持；收起后目标回到上级
+  // 快捷分类树：此前导入用例已展开「人物图片」，目标应保持；普通目录收起时才回到上级。
   assert.match(await page.locator('#quickDropTarget').textContent(), /人物图片/, '展开分类后拖放目标没有更新');
     const importCountBefore = quickImportRequests.length;
   await page.locator('.quick-folder-row', { hasText: '人物图片' }).evaluate(row => {
@@ -1185,7 +1194,12 @@ async function main() {
 
   // 资产缩略图拖到分类行 = 移动：第一张卡在「人物图片」里，拖到上一级「校园心动」
   await page.locator('.quick-folder-name', { hasText: '全部资产' }).click();
-  await page.waitForTimeout(200);
+  // 懒构建不再保留隐藏卡片；通过实际展开动作准备可见卡后验证原生路径。
+  const rootDisclosure = page.locator('.quick-folder-row[data-folder-path="校园心动"] > .quick-folder-chevron-wrap');
+  if (await rootDisclosure.getAttribute('aria-expanded') === 'false') await rootDisclosure.click();
+  const characterDisclosure = page.locator('.quick-folder-row[data-folder-path="校园心动/人物图片"] > .quick-folder-chevron-wrap');
+  if (await characterDisclosure.getAttribute('aria-expanded') === 'false') await characterDisclosure.click();
+  await characterCards.locator('.asset-image-card.image').first().waitFor({ state: 'visible' });
   const firstCardPath = await page.locator('.asset-card-wrap [data-copy-asset]').first().getAttribute('data-copy-asset');
   await page.locator('.asset-card-wrap').first().evaluate(el => {
     const transfer = new DataTransfer();

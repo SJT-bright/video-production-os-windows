@@ -49,10 +49,11 @@ try {
   for (const key of ['candidate', 'candidateId', 'candidateUserData', 'candidateVersion', 'dataLocation']) {
     assert.throws(() => assertFormalRuntimeConfig({ ...config, [key]: false }, target), /candidate\/portable/);
   }
-  assert.equal(require('./package.json').version, '1.3.0');
+  const version = require('./package.json').version;
+  assert.match(version, /^\d+\.\d+\.\d+$/);
   const lock = require('./package-lock.json');
-  assert.equal(lock.version, '1.3.0');
-  assert.equal(lock.packages[''].version, '1.3.0');
+  assert.equal(lock.version, version);
+  assert.equal(lock.packages[''].version, version);
   assert.equal(DEFAULT_CANDIDATE_VERSION, '1.3.0-rc.2');
   console.log('FORMAL_DEPLOYMENT_CONTRACT_PASS defaultUnchanged=true signedTargetRequired=true isolatedStaging=true candidateDefaultUnchanged=true');
 } finally { fs.rmSync(fixture, { recursive: true, force: true }); }

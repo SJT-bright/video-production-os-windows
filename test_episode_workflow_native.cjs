@@ -218,7 +218,7 @@ async function main() {
       if (await website.getAttribute('aria-expanded') === 'false') await website.click();
       const history = creator.locator(`.quick-legacy-row[data-legacy-parent="${site.platformPath}"]`);
       await until(() => history.count().then(count => count === 1), 'readonly legacy summary');
-      assert.equal(await history.getAttribute('data-folder-path'), null, 'Summary must not masquerade as a writable folder');
+      assert.match(await history.getAttribute('data-folder-path'), /^videoOS-history:\/\//, 'Summary must use a non-filesystem URI, never a writable folder path');
       assert.equal(await history.locator('.quick-folder-grip').count(), 0);
       assert.equal(await history.locator('.quick-episode-advance').count(), 0);
       assert.equal(await creator.locator(`.quick-folder-row[data-folder-path="${site.platformPath}/2026-09-10"]`).count(), 0,

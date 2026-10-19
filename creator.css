@@ -609,6 +609,13 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .asset-quick-tools { display: flex; align-items: center; gap: 5px; padding: 4px 0 0; }
 .asset-quick-tools:has(#quickSelClear[hidden]) { display: none; }
 .asset-quick-tools[hidden] { display: none; }
+.asset-quick-tools button { flex: none; padding: 4px 5px; font-size: 10px; white-space: nowrap; }
+.asset-quick-tools .quick-sel-delete { color: #c9312c; }
+.asset-quick-tools .quick-sel-delete:disabled { opacity: .5; cursor: wait; }
+.quick-view-notice { margin-top: 6px; padding: 6px 8px; border-radius: 8px; color: var(--text); background: var(--fill); font-size: 11px; line-height: 1.5; }
+.quick-view-notice[hidden] { display: none; }
+.quick-view-badge { flex: none; font-size: 9px; padding: 1px 4px; border-radius: 4px; color: var(--muted); background: var(--fill); }
+.quick-folder-row.view-selected { box-shadow: inset 2px 0 0 var(--mode); }
 .asset-quick-actions .multi-toggle[aria-pressed="true"] { background: var(--mode, #3d6fe0); color: #fff; border-color: transparent; }
 .quick-sel-info { flex: 1; min-width: 0; color: var(--muted); font-size: 9.5px; }
 .quick-folder-tree.select-mode .asset-image-card { cursor: crosshair; }
@@ -1096,6 +1103,10 @@ body.prompt-collapsed .prompt-panel::before { display: none; }
 }
 .quick-folder-count { flex: none; color: var(--faint); font-size: 9px; font-variant-numeric: tabular-nums; }
 .quick-episode-current { flex: none; color: var(--mode); font-size: 9px; white-space: nowrap; margin-left: 3px; }
+button.quick-episode-current { padding: 3px 4px; border: 0; border-radius: 5px; background: transparent; cursor: pointer; }
+button.quick-episode-current:hover { background: var(--mode-soft); }
+button.quick-episode-current:focus-visible { outline: 2px solid var(--mode); outline-offset: 1px; }
+button.quick-episode-current:disabled { opacity: .5; cursor: progress; }
 .quick-episode-advance {
   flex: none; display: grid; place-items: center; width: 23px; height: 23px;
   padding: 3px; border: 0; border-radius: 6px; background: transparent; color: var(--mode); cursor: pointer;
@@ -1115,7 +1126,7 @@ body.prompt-collapsed .prompt-panel::before { display: none; }
 .quick-children-inner { min-height: 0; overflow: hidden; margin-left: 13px; padding-left: 3px; border-left: 1px solid var(--line); }
 .folder-create-row { min-height: 34px; margin: 3px 0; }
 .asset-context-menu {
-  position: fixed; z-index: 10000; min-width: 136px; padding: 5px;
+  position: fixed; z-index: 10000; min-width: 136px; max-height: min(320px, calc(100vh - 12px)); overflow-y: auto; padding: 5px;
   border: 1px solid var(--line); border-radius: 10px; background: var(--surface, #fff);
   box-shadow: 0 10px 30px rgba(0,0,0,.18);
 }

@@ -111,7 +111,42 @@ function createDownloadEpisodeStore({ filePath } = {}) {
       const next = new Map(entries); next.set(scopeKey(nextSnapshot), nextSnapshot); persist(next);
       return { state: { ...nextSnapshot }, advanced: true };
     },
+    select(info, { exists } = {}) {
+      if (typeof exists !== 'function') throw new Error('已有集文件夹检查配置无效');
+      const current = get(info);
+      if (info.expectedEpisode !== undefined && episodeNumber(info.expectedEpisode) !== current.episode) {
+        return { state: current, selected: false };
+      }
+      const chosen = normalizeSnapshot({ ...current, episode: episodeNumber(info.episode) });
+      if (!exists(chosen)) throw new Error('所选集文件夹不存在或不是可用真实目录');
+      if (chosen.episode === current.episode) return { state: current, selected: false };
+      const next = new Map(entries); next.set(scopeKey(chosen), chosen); persist(next);
+      return { state: { ...chosen }, selected: true };
+    },
   });
 }
 
-module.exports = { MEDIA_KINDS, MAX_EPISODE, episodeNumber, episodeLabel, normalizeSnapshot, createDownloadEpisodeStore };
+const DOWNLOAD_EPISODE_CATEGORIES = Object.freeze({ image: 'generated-images', video: 'generated-videos', audio: 'audio' });
+function downloadEpisodeBatch({ project, store, services, existingEpisodes = () => [] }) {
+  if (!project) return { projectId: '', states: [] };
+  const catalog = new Map((services || []).map(service => [service.id, service]));
+  const scopes = new Map();
+  for (const service of catalog.values()) for (const kind of MEDIA_KINDS) {
+    scopes.set(scopeKey({ projectId: project.id, serviceId: service.id, kind }), { projectId: project.id, serviceId: service.id, kind, serviceLabel: service.label });
+  }
+  for (const saved of store.list(project.id)) scopes.set(scopeKey(saved), saved);
+  const states = [...scopes.values()].map(scope => {
+    const service = catalog.get(scope.serviceId), state = store.get(scope);
+    const category = project.categories?.find(item => item.id === DOWNLOAD_EPISODE_CATEGORIES[scope.kind]);
+    const platformPath = category ? `${category.path}/${state.platformFolder}` : '';
+    return { ...state, serviceLabel: service?.label || state.platformFolder, label: episodeLabel(state.episode), platformPath,
+      episodePath: platformPath ? `${platformPath}/${episodeLabel(state.episode)}` : '',
+      available: !!(project.available && category?.available), legacy: false,
+      archived: !service, hidden: !!service?.hidden, downloadable: !!service && !service.hidden,
+      archiveOnly: !service || !!service.hidden,
+      existingEpisodes: platformPath ? existingEpisodes(platformPath) : [] };
+  });
+  return { projectId: project.id, states };
+}
+
+module.exports = { MEDIA_KINDS, MAX_EPISODE, DOWNLOAD_EPISODE_CATEGORIES, episodeNumber, episodeLabel, normalizeSnapshot, createDownloadEpisodeStore, downloadEpisodeBatch };

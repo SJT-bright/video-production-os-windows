@@ -5,6 +5,11 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 // 两个工作页面共用宿主窗口，IPC 在主进程按当前页面校验。
 contextBridge.exposeInMainWorld('desktopOS', Object.freeze({
   isElectron: true,
+  getAppReleaseState: () => ipcRenderer.invoke('support:get-state'),
+  checkAppUpdates: () => ipcRenderer.invoke('support:check-updates'),
+  openGitHubStar: () => ipcRenderer.invoke('support:open-star'),
+  openAppRelease: () => ipcRenderer.invoke('support:open-release'),
+  onAppReleaseState: callback => subscribe('support:update-state', callback),
   openCreatorBrowser: request => ipcRenderer.invoke('os:open-creator', request),
   addMediaSource: kind => ipcRenderer.invoke('os:add-media-source', kind),
   removeMediaSource: sourceId => ipcRenderer.invoke('os:remove-media-source', sourceId),
@@ -24,6 +29,7 @@ contextBridge.exposeInMainWorld('creatorAPI', Object.freeze({
   getConfig: () => ipcRenderer.invoke('creator:get-config'),
   getDownloadEpisodes: () => ipcRenderer.invoke('creator:get-download-episodes'),
   advanceDownloadEpisode: payload => ipcRenderer.invoke('creator:advance-download-episode', payload),
+  selectDownloadEpisode: payload => ipcRenderer.invoke('creator:select-download-episode', payload),
   onDownloadEpisodesChanged: callback => subscribe('creator:download-episodes-changed', callback),
   addCustomService: service => ipcRenderer.invoke('creator:add-custom-service', service),
   renameService: (serviceId, name) => ipcRenderer.invoke('creator:rename-service', { serviceId, name }),
@@ -74,6 +80,7 @@ contextBridge.exposeInMainWorld('creatorAPI', Object.freeze({
   floatVideoAsset: relativePath => ipcRenderer.invoke('creator:float-video', relativePath && typeof relativePath === 'object' ? relativePath : { path: relativePath }),
   onFloatVideoClosed: callback => subscribe('creator:float-video-closed', callback),
   deleteAsset: assetPath => ipcRenderer.invoke('creator:delete-creative-asset', { path: assetPath }),
+  deleteAssets: payload => ipcRenderer.invoke('creator:delete-creative-assets', payload),
   showFolderMenu: payload => ipcRenderer.invoke('asset:folder-menu', payload),
   renameFolder: payload => ipcRenderer.invoke('asset:rename-folder', payload),
   deleteBrowserDownload: assetPath => ipcRenderer.invoke('creator:delete-browser-download', { path: assetPath }),
