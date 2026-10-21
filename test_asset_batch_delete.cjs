@@ -22,7 +22,7 @@ function fixture() {
     fs.mkdirSync(path.join(libraryRoot, project.folder));
     for (const directory of ['人物资产', '生成视频', '浏览器下载']) fs.mkdirSync(path.join(libraryRoot, project.folder, directory));
   }
-  let active = a, epoch = 0, protectedPaths = [], failPath = '', trashHook = null, alive = true;
+  let active = a, epoch = 0, protectedPaths = [], failPath = '', trashHook = null, alive = true, currentTime = 0;
   const deleted = [], broadcasts = [], closed = [], warnings = [], confirmations = [];
   const absolute = relative => path.join(libraryRoot, ...relative.split('/'));
   const write = (relative, content = `bytes:${relative}`) => {
@@ -31,6 +31,7 @@ function fixture() {
   };
   const manager = createAssetBatchDelete({
     libraryRoot, getActiveProject: () => active, getProjectEpoch: () => epoch,
+    now: () => currentTime,
     getProtectedPaths: () => protectedPaths,
     trash: async filename => {
       if (filename === failPath) throw new Error('fixture system Trash failure');
@@ -40,12 +41,13 @@ function fixture() {
     },
     onDeleted: item => closed.push(item.path), broadcast: payload => broadcasts.push(payload), onWarning: error => warnings.push(error.message),
   });
-  const invoke = (paths, confirm = () => true, projectId = a.id) => manager.deleteItems({ projectId, paths }, {
-    isAlive: () => alive,
+  const invoke = (paths, confirm = () => true, projectId = a.id, options = {}) => manager.deleteItems({ projectId, paths }, {
+    isAlive: options.isAlive || (() => alive),
     confirm: info => { confirmations.push(info); return confirm(info); },
   });
   return { libraryRoot, recoveryRoot, absolute, write, a, b, invoke, deleted, broadcasts, closed, warnings, confirmations,
-    setActive: project => { active = project; epoch++; }, setProtected: paths => { protectedPaths = paths; },
+    setActive: (project, bumpEpoch = true) => { active = project; if (bumpEpoch) epoch++; }, setProtected: paths => { protectedPaths = paths; },
+    setTime: time => { currentTime = time; },
     fail: relative => { failPath = absolute(relative); }, afterTrash: callback => { trashHook = callback; }, close: () => { alive = false; } };
 }
 const record = (name, result = {}) => receipts.push({ name, ...result });
@@ -167,6 +169,136 @@ async function main() {
     await assert.rejects(f.invoke([file], () => { throw new Error('fixture dialog failure'); }), /dialog failure/);
     assert.equal(fs.existsSync(f.absolute(file)), true); assert.deepEqual((await f.invoke([file])).deleted, [file]);
     record('confirmation-error-releases-lock');
+  }
+  {
+    const f = fixture(), file = '剧本A/人物资产/strict-consent.png'; f.write(file);
+    const malformed = [undefined, null, false, 1, 'true', {}, [], { approved: 1 }, { approved: 'true' },
+      { approved: false, skipConfirmationForFiveMinutes: true }];
+    for (const answer of malformed) {
+      const result = await f.invoke([file], () => answer);
+      assert.equal(result.cancelled, true); assert.deepEqual(result.deleted, []);
+      assert.equal(fs.existsSync(f.absolute(file)), true);
+    }
+    assert.equal(f.confirmations.length, malformed.length);
+    assert.deepEqual((await f.invoke([file], () => ({ approved: true }))).deleted, [file]);
+    record('strict-boolean-or-object-approval-rejects-malformed-consent', { denied: malformed.length });
+  }
+  {
+    const f = fixture(), files = ['剧本A/人物资产/cancel-checked.png', '剧本A/人物资产/after-cancel.png'];
+    for (const relative of files) f.write(relative);
+    const cancelled = await f.invoke([files[0]], () => ({ approved: false, skipConfirmationForFiveMinutes: true }));
+    assert.equal(cancelled.cancelled, true); assert.equal(fs.existsSync(f.absolute(files[0])), true);
+    await f.invoke([files[1]], () => ({ approved: true, skipConfirmationForFiveMinutes: false }));
+    await f.invoke([files[0]], () => true);
+    assert.equal(f.confirmations.length, 3); record('cancel-checked-does-not-arm-five-minute-skip');
+  }
+  {
+    const f = fixture(), files = ['grant', 'inside', 'boundary', 'unchecked'].map(name => `剧本A/人物资产/${name}.png`);
+    for (const relative of files) f.write(relative);
+    f.setTime(12345);
+    await f.invoke([files[0]], () => ({ approved: true, skipConfirmationForFiveMinutes: true }));
+    f.setTime(12345 + 299999);
+    await f.invoke([files[1]], () => { throw new Error('must skip within grant'); });
+    assert.equal(f.confirmations.length, 1);
+    f.setTime(12345 + 300000);
+    await f.invoke([files[2]], () => ({ approved: true, skipConfirmationForFiveMinutes: 'true' }));
+    await f.invoke([files[3]], () => true);
+    assert.equal(f.confirmations.length, 3);
+    record('five-minute-exact-boundary-skip-never-renews-nonboolean-checkbox-ignored');
+  }
+  {
+    const f = fixture(), files = ['first', 'after-aba'].map(name => `剧本A/人物资产/${name}.png`);
+    for (const relative of files) f.write(relative);
+    await f.invoke([files[0]], () => ({ approved: true, skipConfirmationForFiveMinutes: true }));
+    f.setActive(f.b); f.setActive(f.a);
+    await f.invoke([files[1]], () => true);
+    assert.equal(f.confirmations.length, 2); record('five-minute-grant-invalid-after-project-away-and-back');
+  }
+  {
+    const f = fixture(), files = ['剧本A/人物资产/first.png', '剧本B/人物资产/other.png', '剧本A/人物资产/back.png'];
+    for (const relative of files) f.write(relative);
+    await f.invoke([files[0]], () => ({ approved: true, skipConfirmationForFiveMinutes: true }));
+    // Even an accidental reused epoch cannot carry consent into another folder.
+    f.setActive({ ...f.b, id: f.a.id }, false);
+    await f.invoke([files[1]], () => true);
+    f.setActive(f.a, false);
+    await f.invoke([files[2]], () => true);
+    assert.equal(f.confirmations.length, 3); record('five-minute-grant-is-folder-scoped-and-not-revived');
+  }
+  {
+    const f = fixture(), files = ['剧本A/人物资产/first.png', '剧本B/人物资产/other.png'];
+    for (const relative of files) f.write(relative);
+    await f.invoke([files[0]], () => ({ approved: true, skipConfirmationForFiveMinutes: true }));
+    f.setActive(f.b, false);
+    await f.invoke([files[1]], () => true, f.b.id);
+    assert.equal(f.confirmations.length, 2); record('five-minute-grant-is-project-id-scoped');
+  }
+  {
+    const f = fixture(), files = ['first', 'after-origin-closed'].map(name => `剧本A/人物资产/${name}.png`);
+    for (const relative of files) f.write(relative);
+    await f.invoke([files[0]], () => ({ approved: true, skipConfirmationForFiveMinutes: true }));
+    f.close();
+    await f.invoke([files[1]], () => true, f.a.id, { isAlive: () => true });
+    assert.equal(f.confirmations.length, 2); record('five-minute-grant-revoked-when-approving-window-closes');
+  }
+  {
+    const f = fixture(), files = ['switched', 'after-switch'].map(name => `剧本A/人物资产/${name}.png`);
+    for (const relative of files) f.write(relative);
+    const first = await f.invoke([files[0]], () => {
+      f.setActive(f.b); f.setActive(f.a);
+      return { approved: true, skipConfirmationForFiveMinutes: true };
+    });
+    assert.equal(first.cancelled, true); assert.deepEqual(first.deleted, []);
+    await f.invoke([files[1]], () => true);
+    assert.equal(f.confirmations.length, 2); record('checked-consent-after-project-switch-cannot-arm-skip');
+  }
+  {
+    const f = fixture(), files = ['closed', 'after-close'].map(name => `剧本A/人物资产/${name}.png`);
+    for (const relative of files) f.write(relative);
+    const first = await f.invoke([files[0]], () => {
+      f.close(); return { approved: true, skipConfirmationForFiveMinutes: true };
+    });
+    assert.equal(first.cancelled, true); assert.deepEqual(first.deleted, []);
+    await f.invoke([files[1]], () => true, f.a.id, { isAlive: () => true });
+    assert.equal(f.confirmations.length, 2); record('checked-consent-after-window-close-cannot-arm-skip');
+  }
+  {
+    const f = fixture(), grant = '剧本A/人物资产/grant.png', protectedFile = '剧本A/生成视频/download.mp4',
+      other = '剧本B/人物资产/other.png', virtual = 'videoOS-generated://fake', download = '剧本A/浏览器下载/a.pdf';
+    for (const relative of [grant, protectedFile, other, download]) f.write(relative);
+    await f.invoke([grant], () => ({ approved: true, skipConfirmationForFiveMinutes: true }));
+    f.setProtected([f.absolute(protectedFile)]);
+    const invalid = await f.invoke([protectedFile, other, virtual, download, '剧本A/人物资产']);
+    assert.deepEqual(invalid.deleted, []); assert.equal(invalid.failed.length, 5); assert.equal(f.confirmations.length, 1);
+    for (const relative of [protectedFile, other, download]) assert.equal(fs.existsSync(f.absolute(relative)), true);
+    f.setProtected([]);
+    await f.invoke([protectedFile], () => { throw new Error('valid file should still use original grant'); });
+    assert.equal(f.confirmations.length, 1); record('skip-does-not-bypass-file-project-download-or-directory-validation');
+  }
+  {
+    const f = fixture(), files = ['grant', 'surface-a', 'surface-b'].map(name => `剧本A/人物资产/${name}.png`);
+    for (const relative of files) f.write(relative);
+    await f.invoke([files[0]], () => ({ approved: true, skipConfirmationForFiveMinutes: true }));
+    let releaseTrash;
+    f.afterTrash(() => new Promise(resolve => { releaseTrash = resolve; }));
+    const firstSurface = f.invoke([files[1]], () => { throw new Error('surface A should skip'); });
+    await assert.rejects(f.invoke([files[2]], () => { throw new Error('surface B should not confirm while busy'); }), /已有批量删除/);
+    assert.equal(f.confirmations.length, 1); releaseTrash(); await firstSurface;
+    f.afterTrash(null);
+    await f.invoke([files[2]], () => { throw new Error('surface B should share active grant'); }, f.a.id, { isAlive: () => true });
+    assert.equal(f.confirmations.length, 1); assert.equal(f.deleted.length, 3);
+    record('two-surfaces-share-skip-and-global-delete-lock');
+  }
+  {
+    const f = fixture(), files = ['grant', 'backward', 'invalid-clock'].map(name => `剧本A/人物资产/${name}.png`);
+    for (const relative of files) f.write(relative);
+    f.setTime(100);
+    await f.invoke([files[0]], () => ({ approved: true, skipConfirmationForFiveMinutes: true }));
+    f.setTime(99);
+    await f.invoke([files[1]], () => ({ approved: true, skipConfirmationForFiveMinutes: true }));
+    f.setTime(NaN);
+    await f.invoke([files[2]], () => true);
+    assert.equal(f.confirmations.length, 3); record('backward-or-invalid-clock-falls-back-to-confirmation');
   }
   {
     const f = fixture(), files = Array.from({ length: MAX_BATCH_DELETE }, (_, index) => `剧本A/人物资产/limit-${index}.png`);

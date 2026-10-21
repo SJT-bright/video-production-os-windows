@@ -2,10 +2,12 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { performance } = require('node:perf_hooks');
 const { setImmediate: yieldToMainLoop } = require('node:timers/promises');
 const { normalizeRelativePath, resolveCreativeAsset } = require('../creative-assets.cjs');
 
 const MAX_BATCH_DELETE = 1000;
+const CONFIRMATION_SKIP_MS = 5 * 60 * 1000;
 const within = (root, target) => {
   const relative = path.relative(root, target);
   return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
@@ -17,12 +19,34 @@ const fileIdentity = stat => [stat.dev, stat.ino, stat.mode, stat.size, stat.mti
 // injected so cancellation, project switches and partial OS failures can be
 // exercised using temporary files, without touching an installed application.
 function createAssetBatchDelete({ libraryRoot, getActiveProject, getProjectEpoch = () => 0,
-  getProtectedPaths = () => [], trash, onDeleted = () => {}, broadcast = () => {}, onWarning = () => {} }) {
-  if (!path.isAbsolute(libraryRoot || '') || typeof getActiveProject !== 'function' || typeof trash !== 'function') {
+  getProtectedPaths = () => [], trash, onDeleted = () => {}, broadcast = () => {}, onWarning = () => {},
+  now = () => performance.now() }) {
+  if (!path.isAbsolute(libraryRoot || '') || typeof getActiveProject !== 'function' || typeof trash !== 'function'
+    || typeof now !== 'function') {
     throw new Error('批量删除配置无效');
   }
   let busy = false;
+  // Consent is never persisted or supplied by a renderer. The epoch prevents
+  // a project switch away and back from reviving a previous five-minute grant.
+  let confirmationSkip = null;
   const warn = error => { try { onWarning(error); } catch {} };
+  const clock = () => {
+    const value = now();
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  };
+  const canSkipConfirmation = (project, epoch) => {
+    if (!confirmationSkip) return false;
+    const currentTime = clock();
+    let originAlive = false;
+    try { originAlive = !!confirmationSkip.isAlive(); } catch {}
+    if (!originAlive || currentTime === null || currentTime < confirmationSkip.startedAt
+      || currentTime >= confirmationSkip.expiresAt || confirmationSkip.projectId !== project.id
+      || confirmationSkip.folder !== project.folder || confirmationSkip.epoch !== epoch) {
+      confirmationSkip = null;
+      return false;
+    }
+    return true;
+  };
 
   const inspect = (relative, project, baseline = null) => {
     if (!relative || relative !== normalizeRelativePath(relative) || !relative.startsWith(`${project.folder}/`)) {
@@ -114,9 +138,23 @@ function createAssetBatchDelete({ libraryRoot, getActiveProject, getProjectEpoch
         }
         if (!items.length) return result;
         if (!stillCurrent()) { remainingCancelled(items, '剧本或窗口已切换，已停止删除'); return result; }
-        const approved = await confirm({ projectId: projectSnapshot.id, projectName: projectSnapshot.name || '',
-          count: items.length, paths: items.map(item => item.path) });
-        if (!approved) { result.cancelled = true; return result; }
+        if (!canSkipConfirmation(projectSnapshot, epoch)) {
+          const confirmation = await confirm({ projectId: projectSnapshot.id, projectName: projectSnapshot.name || '',
+            count: items.length, paths: items.map(item => item.path) });
+          // Preserve true/false callers, but do not treat arbitrary objects,
+          // numbers or strings as consent merely because they are truthy.
+          const approved = confirmation === true || (!!confirmation && !Array.isArray(confirmation)
+            && typeof confirmation === 'object' && confirmation.approved === true);
+          if (!approved) { result.cancelled = true; return result; }
+          if (!stillCurrent()) { remainingCancelled(items, '剧本或窗口已切换，已停止删除'); return result; }
+          if (confirmation !== true && confirmation.skipConfirmationForFiveMinutes === true) {
+            const currentTime = clock();
+            if (currentTime !== null && Number.isFinite(currentTime + CONFIRMATION_SKIP_MS)) {
+              confirmationSkip = { projectId: projectSnapshot.id, folder: projectSnapshot.folder, epoch,
+                startedAt: currentTime, expiresAt: currentTime + CONFIRMATION_SKIP_MS, isAlive };
+            }
+          }
+        }
         for (let index = 0; index < items.length; index++) {
           if (!stillCurrent()) {
             remainingCancelled(items.slice(index), '剧本或窗口已切换，已停止剩余删除'); break;

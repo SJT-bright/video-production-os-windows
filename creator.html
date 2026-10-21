@@ -171,11 +171,12 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
             <div class="asset-quick-actions">
               <button class="primary-action" id="importLocalAssets" type="button" title="添加本地素材">＋ 素材</button>
               <button class="secondary-action" id="openAssetLibrary" type="button" title="打开完整资产库">资产库</button>
-              <button class="secondary-action multi-toggle" id="quickMultiSelect" type="button" aria-pressed="false" title="框选模式：点卡片选入，或按住拖动画框">框选：关</button>
+              <button class="secondary-action multi-toggle" id="quickMultiSelect" type="button" aria-pressed="false" aria-controls="quickTools" title="批量勾选素材后，一次删除或整批拖出">批量选择</button>
             </div>
             <div class="asset-quick-tools" id="quickTools" hidden>
               <span class="quick-sel-info" id="quickSelInfo" aria-live="polite"></span>
-              <button class="text-action quick-sel-delete" id="quickSelDelete" type="button" hidden title="把选中的创作资产移到废纸篓">删除所选</button>
+              <button class="text-action" id="quickSelAll" type="button" title="只选择左侧当前展开、已显示的创作素材；不含浏览器下载或尚未显示的素材">全选当前</button>
+              <button class="text-action quick-sel-delete" id="quickSelDelete" type="button" disabled title="把选中的创作资产移到废纸篓">删除所选（0）</button>
               <button class="text-action" id="quickSelClear" type="button" hidden>清空选择</button>
             </div>
             <div class="quick-view-notice" id="quickViewNotice" role="status" hidden></div>

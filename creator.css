@@ -605,20 +605,30 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 /* 创作资产快格 */
 .asset-quick-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding-top: 6px; }
 .asset-quick-actions button { min-width: 0; min-height: 28px; padding: 4px 3px; font-size: 10px; white-space: nowrap; }
-/* 框选与多文件拖动：框选模式开关 + 顺序徽标 + 拉框层 */
-.asset-quick-tools { display: flex; align-items: center; gap: 5px; padding: 4px 0 0; }
-.asset-quick-tools:has(#quickSelClear[hidden]) { display: none; }
+/* 批量选择：开启即显示操作，避免必须先猜到逐卡选择才能发现批删。 */
+.asset-quick-tools { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 3px 5px; padding: 5px 0 0; }
 .asset-quick-tools[hidden] { display: none; }
 .asset-quick-tools button { flex: none; padding: 4px 5px; font-size: 10px; white-space: nowrap; }
+.asset-quick-tools button[hidden] { display: none; }
 .asset-quick-tools .quick-sel-delete { color: #c9312c; }
-.asset-quick-tools .quick-sel-delete:disabled { opacity: .5; cursor: wait; }
+.asset-quick-tools button:disabled { opacity: .5; cursor: default; }
 .quick-view-notice { margin-top: 6px; padding: 6px 8px; border-radius: 8px; color: var(--text); background: var(--fill); font-size: 11px; line-height: 1.5; }
 .quick-view-notice[hidden] { display: none; }
 .quick-view-badge { flex: none; font-size: 9px; padding: 1px 4px; border-radius: 4px; color: var(--muted); background: var(--fill); }
 .quick-folder-row.view-selected { box-shadow: inset 2px 0 0 var(--mode); }
 .asset-quick-actions .multi-toggle[aria-pressed="true"] { background: var(--mode, #3d6fe0); color: #fff; border-color: transparent; }
-.quick-sel-info { flex: 1; min-width: 0; color: var(--muted); font-size: 9.5px; }
+.quick-sel-info { grid-column: 1 / -1; min-width: 0; color: var(--muted); font-size: 9.5px; line-height: 1.4; }
 .quick-folder-tree.select-mode .asset-image-card { cursor: crosshair; }
+.quick-folder-tree.select-mode .asset-copy-button { display: none; }
+.quick-folder-tree.select-mode [data-asset-path]::before {
+  content: ''; position: absolute; top: 5px; left: 5px; z-index: 4;
+  width: 18px; height: 18px; box-sizing: border-box; border: 1.5px solid rgba(60,60,67,.55);
+  border-radius: 5px; background: rgba(255,255,255,.94); pointer-events: none;
+}
+.quick-folder-tree.select-mode [data-asset-path].sel-on::before {
+  content: '✓'; display: grid; place-items: center; border-color: var(--mode, #3d6fe0);
+  background: var(--mode, #3d6fe0); color: #fff; font-size: 13px; font-weight: 750;
+}
 .quick-folder-tree [data-asset-path].sel-on .asset-image-card,
 .quick-folder-tree [data-asset-path].sel-on { outline: 2px solid var(--mode, #3d6fe0); outline-offset: 1px; }
 .quick-folder-tree [data-asset-path] { position: relative; }

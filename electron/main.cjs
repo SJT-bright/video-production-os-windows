@@ -3390,12 +3390,13 @@ function registerIpc() {
         && (surface === 'asset' ? isTrustedAssetSender(event) : isTrustedCreatorSender(event)),
       confirm: async ({ count, paths: selected, projectName }) => {
         const names = selected.slice(0, 6).map(relative => path.basename(relative)).join('\n');
-        const { response } = await dialog.showMessageBox(owner, {
-          type: 'warning', title: '批量删除素材', message: `删除「${projectName}」中选中的 ${count} 个素材？`,
+        const { response, checkboxChecked } = await dialog.showMessageBox(owner, {
+          type: 'warning', title: count === 1 ? '删除素材' : '批量删除素材', message: `删除「${projectName}」中选中的 ${count} 个素材？`,
           detail: `选中的文件将移入系统废纸篓，可从废纸篓恢复。未选中的文件和文件夹不会删除。\n\n${names}${selected.length > 6 ? '\n…' : ''}`,
           buttons: ['取消', `删除 ${count} 项`], defaultId: 0, cancelId: 0, noLink: true,
+          checkboxLabel: '5 分钟内不再询问（仅当前剧本的素材）', checkboxChecked: false,
         });
-        return response === 1;
+        return { approved: response === 1, skipConfirmationForFiveMinutes: response === 1 && checkboxChecked === true };
       },
     });
   };

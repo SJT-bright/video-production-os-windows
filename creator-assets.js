@@ -1118,20 +1118,8 @@ async function showItem(item) {
 }
 
 async function deleteItem(item) {
-  if (libraryActionBusy()) { showToast('素材正在处理，请稍候'); return; }
-  if (typeof API.deleteItem !== 'function') {
-    showToast('删除需要最新版桌面软件');
-    return;
-  }
-  if (!confirm(`删除「${item.name}」？文件会移到废纸篓，可随时恢复。`)) return;
-  try {
-    await API.deleteItem(item.path);
-    if (state.preview && state.preview.path === item.path) closePreviewNow();
-    showToast(`已移到废纸篓：${item.name}`);
-    await loadLibrary({ select: state.selectedFolder });
-  } catch (error) {
-    showToast(`删除失败：${error.message}`);
-  }
+  // 单张与批量共用原生确认；不改变其他已经勾选的素材。
+  return deleteLibraryItems([item.path], { singleName: item.name });
 }
 
 async function postAssetAction(action, body, projectId = activeProjectId()) {
@@ -1306,19 +1294,21 @@ function libraryCreativeSelection(paths = state.selectedPaths) {
 function updateSelectionBar() {
   const count = state.selectedPaths.size;
   const deletable = libraryCreativeSelection().length;
-  el.selectionBar.hidden = count === 0;
-  el.selectionCount.textContent = `已选 ${count} 项${deletable !== count ? ` · 可删 ${deletable} 项` : ''}`;
+  el.selectionBar.hidden = !!state.audioKind;
+  el.selectionCount.textContent = count ? `已选 ${count} 项${deletable !== count ? ` · 可删 ${deletable} 项` : ''}` : '勾选素材后批量操作';
   el.batchDelete.disabled = libraryActionBusy() || deletable === 0;
   el.batchDelete.title = deletable !== count ? '只删除创作资产；浏览器下载请使用专用删除' : '将选中素材移到废纸篓';
   el.batchDelete.textContent = state.batchDeleteBusy ? '正在删除…' : '批量删除';
-  el.batchMove.disabled = libraryActionBusy();
-  el.clearSelection.disabled = libraryActionBusy();
-  el.selectVisible.disabled = libraryActionBusy();
+  el.batchMove.disabled = libraryActionBusy() || count === 0;
+  el.clearSelection.disabled = libraryActionBusy() || count === 0;
+  el.selectVisible.disabled = libraryActionBusy() || document.querySelectorAll('#assetGrid .asset-card').length === 0;
   document.querySelectorAll('.asset-card').forEach(card => {
     card.classList.toggle('selected', state.selectedPaths.has(card.dataset.path));
   });
   document.querySelectorAll('.asset-check').forEach(button => {
-    button.classList.toggle('checked', state.selectedPaths.has(button.dataset.checkPath));
+    const checked = state.selectedPaths.has(button.dataset.checkPath);
+    button.classList.toggle('checked', checked);
+    button.setAttribute('aria-pressed', String(checked));
     button.disabled = libraryActionBusy();
   });
   document.querySelectorAll('.asset-delete-button').forEach(button => { button.disabled = libraryActionBusy(); });
@@ -1367,10 +1357,14 @@ async function normalizeNames() {
 }
 
 async function batchDeleteSelected() {
+  return deleteLibraryItems([...state.selectedPaths]);
+}
+
+async function deleteLibraryItems(requestedPaths, { singleName = '' } = {}) {
   if (libraryActionBusy()) return;
-  const paths = libraryCreativeSelection();
-  if (!paths.length) { showToast('请先选择创作资产；浏览器下载不参与普通素材批量删除'); return; }
-  if (typeof API.deleteItems !== 'function') { showToast('批量删除需要最新版桌面软件'); return; }
+  const paths = libraryCreativeSelection(requestedPaths);
+  if (!paths.length) { showToast('请选择创作资产；浏览器下载请使用专用删除'); return; }
+  if (typeof API.deleteItems !== 'function') { showToast('删除需要最新版桌面软件'); return; }
   const projectId = activeProjectId(), generation = state.projectGeneration;
   const stillCurrent = () => projectId === activeProjectId() && generation === state.projectGeneration && !projectRefreshNeeded;
   state.batchDeleteBusy = true;
@@ -1379,17 +1373,18 @@ async function batchDeleteSelected() {
   libraryRequestId++;
   updateSelectionBar(); updateFolderActions();
   try {
-    // 原生层一次确认并绑定本次剧本；不逐项调用无项目快照的旧接口。
+    // 原生层统一控制单张/批量确认及限时免确认，并绑定本次剧本。
     const result = await API.deleteItems({ projectId, paths });
     if (!stillCurrent()) return;
     if (result?.projectId !== projectId || !Array.isArray(result.deleted) || !Array.isArray(result.failed)
-      || result.deleted.some(path => !paths.includes(path))) throw new Error('批量删除回执不完整，请刷新核对');
+      || result.deleted.some(path => !paths.includes(path))
+      || result.failed.some(item => !paths.includes(item?.path))) throw new Error('删除回执不完整，请刷新核对');
     if (result.cancelled && result.deleted.length === 0) { showToast('已取消删除，选择保留'); return; }
     const deleted = new Set(result.deleted);
     deleted.forEach(path => libraryRecentDeletes.set(`${projectId}\n${path}`, Date.now()));
     applyLibraryAssetDeletions([...deleted], projectId);
     const failed = result.failed;
-    const summary = `已移到废纸篓 ${deleted.size} 项${result.cancelled ? '；已停止后续删除' : ''}${failed.length
+    const summary = `${singleName && deleted.size === 1 ? `已移到废纸篓：${singleName}` : `已移到废纸篓 ${deleted.size} 项`}${result.cancelled ? '；已停止后续删除' : ''}${failed.length
       ? `；失败 ${failed.length} 项，仍存在的失败项保留选中；${failed[0].error || '请重试'}` : ''}`;
     try { await loadLibrary({ select: state.selectedFolder }); }
     catch (error) {
@@ -1399,7 +1394,7 @@ async function batchDeleteSelected() {
     if (!stillCurrent()) return;
     showToast(summary);
   } catch (error) {
-    if (stillCurrent()) showToast(`批量删除失败，选择保留：${error.message}`);
+    if (stillCurrent()) showToast(`删除失败，选择保留：${error.message}`);
   } finally {
     state.batchDeleteBusy = false;
     libraryMutationDepth--;
@@ -1729,6 +1724,7 @@ function renderAssets({ preserveScroll = false } = {}) {
         : '还没有预存资产。<br>选择左侧分类后导入图片、音频和视频。';
     el.assetGrid.appendChild(empty);
     el.assetGrid.scrollTop = 0;
+    updateSelectionBar();
     return;
   }
 
@@ -1747,6 +1743,7 @@ function renderAssets({ preserveScroll = false } = {}) {
     el.assetGrid.appendChild(more);
   }
   el.assetGrid.scrollTop = preserveScroll ? previousScrollTop : 0;
+  updateSelectionBar();
   scheduleViewSave();
 }
 
@@ -2320,13 +2317,17 @@ function bindEvents() {
   // 多选批量操作栏
   el.selectVisible.addEventListener('click', () => {
     if (libraryActionBusy()) return;
-    document.querySelectorAll('.asset-card').forEach(card => state.selectedPaths.add(card.dataset.path));
+    const rendered = [...el.assetGrid.querySelectorAll('.asset-card')];
+    const paths = libraryCreativeSelection(rendered.map(card => card.dataset.path));
+    if (paths.length > 1000) { showToast('每次最多选择 1000 项，请缩小当前显示范围'); return; }
+    // 全选当前显示替换旧选择，不能夹带其他分类中已经不可见的素材。
+    state.selectedPaths = new Set(paths);
     updateSelectionBar();
     // 网格有 120 项渲染上限：库更大时「全选」只覆盖已渲染部分，必须说清楚，避免误以为全库都已选中
-    const rendered = document.querySelectorAll('.asset-card').length;
-    if (state.assets.length > rendered) {
-      showToast(`已选中当前显示的 ${rendered} 项；库共 ${state.assets.length} 项，可用搜索缩小范围后再全选`);
-    }
+    const total = visibleAssets().length;
+    showToast(total > rendered.length
+      ? `已选中当前显示的 ${paths.length} 项；当前范围共 ${total} 项，可用搜索缩小范围后再全选`
+      : `已选中当前显示的 ${paths.length} 项创作素材（不含浏览器下载）`);
   });
   // 批量导入剪映 = 多选后直接拖动任一选中卡（多文件原生拖动），见 dragstart 逻辑
   el.batchDelete.addEventListener('click', () => batchDeleteSelected().catch(error => showToast(error.message)));

@@ -142,7 +142,11 @@ async function run() {
         setPanelState: async patch => ({ ...window.__mockConfig.panel, ...patch }),
         startDrag: realPath => { window.__historyTest.drags.push(realPath); },
         showFolderMenu: async payload => { window.__historyTest.menus.push(payload); return null; },
-        deleteItem: async realPath => { window.__historyTest.deleted.push(realPath); return true; },
+        deleteItems: async payload => {
+          if (payload.projectId !== project.id) throw new Error('Unexpected fixture project');
+          window.__historyTest.deleted.push(...payload.paths);
+          return { projectId: payload.projectId, requested: payload.paths.length, cancelled: false, deleted: [...payload.paths], failed: [] };
+        },
         copyImage: async () => true, showItem: async () => true, openLibrary: async () => true,
         onPanelState: () => () => {}, onDragResult: () => () => {},
         onDownloadEpisodesChanged: callback => { window.__historyTest.episodes.push(callback); return () => {}; },

@@ -1,18 +1,25 @@
-# 视频制作 OS · v1.3.11
+# 视频制作 OS · v1.3.12
 
 把图片／视频创作网页、剧本、固定提示词、分集资产和人物音频整理到一个本地工作台。作者：[SJT-bright](https://github.com/SJT-bright)。应用使用 Electron、Node.js、原生 HTML/CSS/JavaScript 和 SQLite；生成仍在使用者自己的第三方网站账号中完成。
 
 ## 下载最新版
 
-- [Mac 最新版](https://github.com/SJT-bright/video-production-os/releases/latest)：v1.3.11包名为 `VideoProductionOS-Mac-v1.3.11-Universal.zip`，解压后打开 App。包含 Apple Silicon 和 Intel 架构；本地 ad-hoc 签名，未经过 Apple 公证。
-- [Windows 最新版](https://github.com/SJT-bright/video-production-os-windows/releases/latest)：v1.3.11包名为 `VideoProductionOS-Windows-v1.3.11-x64.zip`，完整解压后双击 `视频制作OS.exe`，不能只移动 EXE。
+- [Mac 最新版](https://github.com/SJT-bright/video-production-os/releases/latest)：v1.3.12包名为 `VideoProductionOS-Mac-v1.3.12-Universal.zip`，解压后打开 App。包含 Apple Silicon 和 Intel 架构；本地 ad-hoc 签名，未经过 Apple 公证。
+- [Windows 最新版](https://github.com/SJT-bright/video-production-os-windows/releases/latest)：v1.3.12包名为 `VideoProductionOS-Windows-v1.3.12-x64.zip`，完整解压后双击 `视频制作OS.exe`，不能只移动 EXE。
 - [Mac 源码](https://github.com/SJT-bright/video-production-os) · [Windows 源码](https://github.com/SJT-bright/video-production-os-windows) · [更新说明](RELEASE-NOTES.md)
 
 GitHub 自动生成的 Source code ZIP 是源码，不是可直接运行的 App。安装包无个人剧本、素材、数据库或网站登录配置。新用户会建立自己的工作区；升级时只替换软件，不删除用户数据目录。
 
 本软件使用 FFmpeg（LGPL-2.1-or-later）进行人物音轨提取，每个 Release 都附带对应的完整组件源码及许可说明：[第三方组件](THIRD-PARTY-NOTICES.md)。
 
-## v1.3.11：Star、更新提示与资产整理
+## v1.3.12：明显的批量选择入口与限时免确认
+
+- 左侧资产新增“批量选择”，进入后直接显示勾选框、“全选当前”和“删除所选(N)”；完整资产库同步支持，不必逐个点击删除。
+- 删除确认提供可选的“5分钟内不再询问（仅当前剧本的素材）”。默认仍询问，只有勾选并确认删除后生效；取消不生效，连续删除不会延长这5分钟。
+- 免确认只用于当前剧本的普通素材，切换剧本或重启后失效。普通素材进系统废纸篓，失败项保留选择；浏览器下载的永久删除继续单独确认。
+- 修复完整库折叠后遗留空白操作栏、再次展开不恢复选择入口的问题。“全选当前”只选择当前范围，避免把其他目录的旧选择带入删除。
+
+## 保留的 v1.3.11：Star、更新提示与资产整理
 
 - 创作浏览器和制作OS工具栏都有“☆ Star”，首页作者入口同样可用；Mac和Windows打开各自的公开开源仓库。打开后由用户在GitHub点击Star，不会代替用户自动操作账号。
 - 首次手动升到1.3.11后，软件在启动约15秒及运行中每6小时检查本端GitHub正式Release。有新版就弹出提示，并在工具栏显示“更新 vX”；同一版本自动提示一次，也可随时点击版本按钮检查。

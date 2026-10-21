@@ -261,7 +261,8 @@ async function run() {
     assert.equal(await page.locator('.asset-card.selected', { hasText: '女主正脸.png' }).count(), 1, '刷新后卡片选中态应保留');
     // 清空选择，避免影响后续批量删除用例对“已选 2 项”的精确断言
     await page.locator('#clearSelection').click();
-    assert.equal(await page.locator('#selectionBar').isHidden(), true);
+    assert.equal(await page.locator('#selectionBar').isVisible(), true, '未选择时保留批量操作入口');
+    assert.equal(await page.locator('#batchDelete').isDisabled(), true);
     await heroCard.locator('.asset-preview-button').click();
     assert.equal(await page.locator('#previewDialog.video-review').count(), 0, '图片预览不得进入视频展开审核形态');
     await page.locator('#zoomIn').click();
@@ -274,7 +275,6 @@ async function run() {
 
     // 资产卡右上角删除：确认后移入废纸篓并刷新列表
     await page.waitForFunction(() => !document.querySelector('#previewDialog').open);
-    page.once('dialog', dialog => dialog.accept());
     await heroCard.hover();
     await heroCard.locator('.asset-delete-button').click();
     await page.waitForFunction(() => window.__assetTest.deleted.length === 1);
@@ -320,7 +320,8 @@ async function run() {
     assert.deepEqual(await page.evaluate(() => window.__assetTest.deleted.slice(1)), [
       '校园心动/人物资产/校服三视图.jpg', '校园心动/人物资产/女主正脸.png',
     ]);
-    assert.equal(await page.locator('#selectionBar').isHidden(), true, '批量删除后操作栏应收起');
+    assert.equal(await page.locator('#selectionBar').isVisible(), true, '批量删除后仍可发现全选与批删入口');
+    assert.equal(await page.locator('#batchDelete').isDisabled(), true, '删除后未选中时批删不可提交');
 
     // 整理文件名：确认后对当前分类发起 normalize 请求
     page.once('dialog', dialog => dialog.accept());

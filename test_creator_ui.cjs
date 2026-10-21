@@ -540,6 +540,10 @@ async function main() {
         (window.__assetDeleted = window.__assetDeleted || []).push(assetPath);
         return true;
       },
+      deleteAssets: async ({ projectId, paths }) => {
+        (window.__assetDeleted = window.__assetDeleted || []).push(...paths);
+        return { projectId, requested: paths.length, cancelled: false, deleted: [...paths], failed: [] };
+      },
       deleteBrowserDownload: async assetPath => {
         (window.__browserDownloadDeleted = window.__browserDownloadDeleted || []).push(assetPath);
         return true;
@@ -925,7 +929,7 @@ async function main() {
   assert.equal(await page.locator('#quickMultiSelect').count(), 1, '快捷面板应有框选模式开关');
   await page.locator('#quickMultiSelect').click();
   assert.equal(await page.locator('#quickMultiSelect').getAttribute('aria-pressed'), 'true', '框选模式应开启');
-  assert.equal(await page.locator('#quickSelInfo').textContent(), '点卡片选入，或按住拖动画框', '开启后应有选入引导');
+  assert.match(await page.locator('#quickSelInfo').textContent(), /点.*卡片|全选当前/, '开启后应有选入引导');
   const visibleImageCards = page.locator('.quick-folder-row:has-text("人物图片") + .quick-children .asset-image-card.image:visible');
   const cardCount = await visibleImageCards.count();
   assert.ok(cardCount >= 2, `框选断言前置：可见图片卡应 ≥2，实际 ${cardCount}`);
@@ -938,7 +942,6 @@ async function main() {
   await page.waitForFunction(() => (window.__creatorTest.selectionDrags || []).length === 1, null, { timeout: 5000 });
   assert.equal((await page.evaluate(() => window.__creatorTest.selectionDrags))[0].length, 2, '整批拖出应携带全部选中资产');
   // 删除已选资产：框选序列自动剔除该项（删除流程调用 updateQuickSelectionUI，已选计数递减）
-  page.once('dialog', dialog => dialog.accept());
   await characterCards.locator('.asset-image-card.image').first().hover();
   await page.locator('.asset-quick-delete').first().click();
   await page.waitForFunction(() => (window.__assetDeleted || []).length === 1, null, { timeout: 5000 });
@@ -1172,7 +1175,6 @@ async function main() {
   await page.locator('[data-copy-asset]').first().click();
   assert.deepEqual(await page.evaluate(() => window.__assetCopied), ['校园心动/人物图片/女主正脸.png'], '复制按钮没有调用复制图片');
   assert.equal(await page.locator('#quickFolderTree [data-delete-asset]').count(), 3, '全部资产卡都应提供删除按钮');
-  page.once('dialog', dialog => dialog.accept());
   await page.locator('[data-delete-asset]').first().click();
   await page.waitForFunction(() => (window.__assetDeleted || []).length === 2);
   assert.equal((await page.evaluate(() => window.__assetDeleted))[1], '校园心动/人物图片/女主正脸.png', '删除按钮没有调用删除');

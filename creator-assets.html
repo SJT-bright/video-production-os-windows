@@ -118,13 +118,13 @@
         <div class="asset-grid" id="assetGrid">
           <div class="asset-state">正在读取图片、音频和视频…</div>
         </div>
-        <div class="selection-bar" id="selectionBar" hidden>
-          <strong id="selectionCount">已选 0 项</strong>
+        <div class="selection-bar" id="selectionBar" aria-label="素材批量操作">
+          <strong id="selectionCount" role="status" aria-live="polite">勾选素材后批量操作</strong>
           <span class="selection-bar-actions">
-            <button class="quiet-button" id="selectVisible" type="button">全选</button>
-            <button class="quiet-button" id="batchMove" type="button">批量移动…</button>
-            <button class="quiet-button danger" id="batchDelete" type="button">批量删除</button>
-            <button class="quiet-button" id="clearSelection" type="button">取消</button>
+            <button class="quiet-button" id="selectVisible" type="button" title="选中当前已显示的素材">全选当前显示</button>
+            <button class="quiet-button" id="batchMove" type="button" disabled>批量移动…</button>
+            <button class="quiet-button danger" id="batchDelete" type="button" disabled>批量删除</button>
+            <button class="quiet-button" id="clearSelection" type="button" disabled>取消选择</button>
           </span>
         </div>
       </section>

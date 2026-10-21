@@ -74,7 +74,7 @@ const el = Object.fromEntries([
   'quickFolderTree', 'quickDropTarget', 'quickDropTargetHint', 'quickViewNotice', 'quickFileInput',
   'quickMoveDialog', 'quickMoveDialogTitle', 'quickMoveDialogHint', 'quickMoveFolderList', 'quickCancelMove', 'quickCancelMoveTop',
   'importLocalAssets', 'openAssetLibrary', 'assetDropZone',
-  'quickTools', 'quickMultiSelect', 'quickSelInfo', 'quickSelDelete', 'quickSelClear',
+  'quickTools', 'quickMultiSelect', 'quickSelInfo', 'quickSelAll', 'quickSelDelete', 'quickSelClear',
   'downloadSummary', 'downloadList', 'openModeFolder', 'browserStage', 'platformBackdrop', 'platformBackdropLayer', 'platformBackdropPrimary', 'addressService',
   'browserPlaceholderTitle', 'reconnectBrowser',
   'addressForm', 'addressInput', 'addressGo', 'loadDot', 'openExternal', 'togglePrompt', 'collapseMaterialSidebar', 'showMainWindow', 'creatorToast',
@@ -242,6 +242,7 @@ function resetProjectWorkspace() {
   expandedScriptGroups.clear(); expandedScriptItems.clear();
   // 框选导入序列属于旧剧本：整体清空，防止把旧项目资产拖进新项目上下文。
   state.quickSelectionOrder.length = 0;
+  state.quickSelectMode = false;
   // 浮出角标同样按剧本隔离：切换后旧路径不再匹配新剧本卡片，直接清空防止假状态。
   state.floatedVideoPaths.clear();
 }
@@ -2604,7 +2605,8 @@ async function deleteQuickSelectedAssets(paths = state.quickSelectionOrder) {
     showToast('素材正在处理，请稍后删除'); return;
   }
   const selected = quickCreativeSelection(paths);
-  if (!selected.length) { showToast('请先框选创作资产；浏览器下载不参与批量删除'); return; }
+  if (!selected.length) { showToast('请先点击“批量选择”勾选素材；浏览器下载不参与批量删除'); return; }
+  if (selected.length > QUICK_SELECTION_LIMIT) { showToast(`每次最多删除 ${QUICK_SELECTION_LIMIT} 项，请缩小选择范围`); return; }
   if (typeof API.deleteAssets !== 'function') { showToast('批量删除需要更新桌面程序后使用'); return; }
   const operation = { projectId: state.projectId, epoch: quickProjectViewEpoch, paths: selected };
   const stillCurrent = () => operation.projectId === state.projectId && operation.epoch === quickProjectViewEpoch;
@@ -2772,7 +2774,13 @@ function showQuickFileMenu(item, event) {
       { label: `改为待处理${suffix}`, run: () => changeQuickVideoDisposition(videos, 'processing') });
   }
   const deletable = quickCreativeSelection(selected);
-  if (deletable.length > 1) items.push({ label: `删除所选（${deletable.length} 项）`, run: () => deleteQuickSelectedAssets(deletable) });
+  if (deletable.length) {
+    const projectId = state.projectId, epoch = quickProjectViewEpoch;
+    items.push({ label: deletable.length > 1 ? `删除所选（${deletable.length} 项）` : '删除（移到废纸篓）', run: () => {
+      if (projectId !== state.projectId || epoch !== quickProjectViewEpoch) { showToast('剧本已切换，请重新选择素材'); return; }
+      return deleteQuickSelectedAssets(deletable);
+    } });
+  }
   if (selected.length === 1) items.push({ label: '在完整库中查看', run: () => API.focusAssetInLibrary?.(item.path, state.projectId) });
   FolderEditor.menu(event, items, el.quickFolderTree);
 }
@@ -3338,7 +3346,7 @@ function buildQuickFileCard(item) {
     });
     wrapper.appendChild(copyButton);
   }
-  const deleteAsset = item.browserDownload ? API.deleteBrowserDownload : API.deleteAsset;
+  const deleteAsset = item.browserDownload ? API.deleteBrowserDownload : API.deleteAssets;
   if (item.path && item.downloadState !== 'progressing' && item.downloadState !== 'paused' && typeof deleteAsset === 'function') {
     const deleteButton = document.createElement('button');
     deleteButton.type = 'button';
@@ -3351,13 +3359,14 @@ function buildQuickFileCard(item) {
     deleteButton.addEventListener('click', async event => {
       event.stopPropagation();
       if (quickAssetDeletionBusy() || quickAssetMutationDepth) { showToast('素材正在处理，请稍后删除'); return; }
+      // 单张和批量共用主进程确认（包括临时免确认）；不要修改其他已选素材。
+      if (!item.browserDownload) { await deleteQuickSelectedAssets([item.path]); return; }
       const projectId = state.projectId;
       const epoch = quickProjectViewEpoch;
       const stillCurrent = () => projectId === state.projectId && epoch === quickProjectViewEpoch;
       let refreshed = false;
-      const prompt = item.browserDownload
-        ? `永久删除「${item.name}」？此操作不会移到废纸篓，无法撤销。`
-        : `删除「${item.name}」？文件会移到废纸篓，可随时恢复。`;
+      // 浏览器下载永久删除始终单独询问，不复用创作素材的临时免确认。
+      const prompt = `永久删除「${item.name}」？此操作不会移到废纸篓，无法撤销。`;
       if (!confirm(prompt)) return;
       if (!stillCurrent() || quickAssetDeletionBusy()) return;
       quickSingleDeleteDepth++;
@@ -4045,10 +4054,35 @@ function buildQuickFolderGrip(row, folder) {
 /* ---------- 快捷面板框选与多文件拖动 ---------- */
 // 框选模式：点卡片按点击顺序选入；在树容器空白处按住拖动画框，相交卡片全部选入（按位置排序）。
 // 拖动任一选中卡 = 整批按选入顺序原生拖出（剪映等多文件拖放目标直接接收）。
+const QUICK_SELECTION_LIMIT = 1000;
+
+function quickVisibleCreativePaths() {
+  // 展开的树可能只加载了前 30 项；只取已显示卡片，不暗中选中折叠/未加载文件。
+  const paths = [...el.quickFolderTree.querySelectorAll('[data-asset-path]')]
+    .filter(node => !node.closest('.quick-children.collapsed') && node.getClientRects().length > 0)
+    .map(node => node.dataset.assetPath);
+  return quickCreativeSelection(paths);
+}
+
+function selectAllQuickAssets() {
+  if (quickAssetDeletionBusy()) return;
+  const paths = quickVisibleCreativePaths();
+  if (paths.length > QUICK_SELECTION_LIMIT) {
+    showToast(`当前显示 ${paths.length} 项，每次最多选择 ${QUICK_SELECTION_LIMIT} 项；请先收起部分分类`);
+    return;
+  }
+  state.quickSelectionOrder = paths;
+  updateQuickSelectionUI();
+  showToast(paths.length ? `已选当前显示的 ${paths.length} 项素材（不含浏览器下载或尚未显示的素材）` : '请先展开分类，显示要选择的素材');
+}
+
 function toggleQuickSelection(assetPath) {
   if (quickAssetDeletionBusy()) return;
   const idx = state.quickSelectionOrder.indexOf(assetPath);
-  if (idx === -1) state.quickSelectionOrder.push(assetPath);
+  if (idx === -1) {
+    if (state.quickSelectionOrder.length >= QUICK_SELECTION_LIMIT) { showToast(`每次最多选择 ${QUICK_SELECTION_LIMIT} 项`); return; }
+    state.quickSelectionOrder.push(assetPath);
+  }
   else state.quickSelectionOrder.splice(idx, 1);
   updateQuickSelectionUI();
 }
@@ -4057,35 +4091,47 @@ function updateQuickSelectionUI() {
   const count = state.quickSelectionOrder.length;
   const deletable = quickCreativeSelection();
   const busy = quickAssetDeletionBusy();
+  el.quickTools.hidden = !state.quickSelectMode && count === 0;
   el.quickSelInfo.textContent = busy ? '正在处理删除，请稍候…'
-    : count ? `已选 ${count} 项${deletable.length !== count ? ` · 可删 ${deletable.length} 项` : ''} · 可整批拖出` : '点卡片选入，或按住拖动画框';
+    : count ? `已选 ${count} 项${deletable.length !== count ? ` · 可删 ${deletable.length} 项` : ''} · 可整批拖出` : '点卡片勾选，或右键拖动画框；全选仅当前显示';
+  // 点击全选时才计算可见矩形，逐卡勾选不反复触发布局读取。
+  el.quickSelAll.disabled = busy || !el.quickFolderTree.querySelector('[data-asset-path]');
   el.quickSelClear.hidden = count === 0;
   el.quickSelClear.disabled = busy;
   el.quickMultiSelect.disabled = busy;
-  el.quickSelDelete.hidden = deletable.length === 0;
-  el.quickSelDelete.disabled = busy;
+  el.quickMultiSelect.setAttribute('aria-pressed', String(state.quickSelectMode));
+  el.quickMultiSelect.textContent = state.quickSelectMode ? '退出选择' : '批量选择';
+  el.quickMultiSelect.title = state.quickSelectMode ? '退出批量选择并清空选择' : '批量勾选素材后，一次删除或整批拖出';
+  el.quickFolderTree.classList.toggle('select-mode', state.quickSelectMode);
+  el.quickSelDelete.hidden = false;
+  el.quickSelDelete.disabled = busy || deletable.length === 0;
   el.quickSelDelete.textContent = quickDeleteOperation ? '正在删除…' : `删除所选（${deletable.length}）`;
   el.quickSelDelete.setAttribute('aria-busy', String(!!quickDeleteOperation));
   document.querySelectorAll('.asset-quick-delete').forEach(button => { button.disabled = busy; });
+  const selectionIndexes = new Map(state.quickSelectionOrder.map((path, index) => [path, index]));
   el.quickFolderTree.querySelectorAll('[data-asset-path]').forEach(node => {
     const path = node.dataset.assetPath;
-    const order = state.quickSelectionOrder.indexOf(path);
-    node.classList.toggle('sel-on', order !== -1);
-    node.dataset.selOrder = order === -1 ? '' : String(order + 1);
+    const order = selectionIndexes.get(path);
+    node.classList.toggle('sel-on', order !== undefined);
+    node.dataset.selOrder = order === undefined ? '' : String(order + 1);
+    const card = node.querySelector('.asset-image-card');
+    if (state.quickSelectMode) {
+      card?.setAttribute('aria-pressed', String(order !== undefined));
+      card?.setAttribute('aria-description', order === undefined ? '未选择，点击勾选' : `已选择，第 ${order + 1} 项，点击取消勾选`);
+    } else {
+      card?.removeAttribute('aria-pressed');
+      card?.removeAttribute('aria-description');
+    }
   });
 }
 
 function setQuickSelectMode(on) {
   if (quickAssetDeletionBusy()) return;
   state.quickSelectMode = !!on;
-  el.quickMultiSelect.setAttribute('aria-pressed', String(state.quickSelectMode));
-  el.quickMultiSelect.textContent = `框选：${state.quickSelectMode ? '开' : '关'}`;
-  el.quickTools.hidden = false;
   if (!state.quickSelectMode) {
     state.quickSelectionOrder.length = 0;
   }
   updateQuickSelectionUI();
-  el.quickFolderTree.classList.toggle('select-mode', state.quickSelectMode);
 }
 
 /* ---------- 视频卡右键浮出（置顶小窗拖进剪映） ---------- */
@@ -4155,6 +4201,7 @@ function setupQuickMarquee() {
   let marquee = null;
   let origin = null;
   const cardRects = () => [...container.querySelectorAll('[data-asset-path]')]
+    .filter(node => !node.closest('.quick-children.collapsed') && node.getClientRects().length > 0)
     .map(node => ({ node, rect: node.getBoundingClientRect() }));
   container.addEventListener('contextmenu', event => {
     // 右键拖动画框：与卡片拖拽/单击互不冲突
@@ -4167,6 +4214,7 @@ function setupQuickMarquee() {
     marquee.style.left = `${origin.x}px`;
     marquee.style.top = `${origin.y}px`;
     document.body.appendChild(marquee);
+    let limitNotified = false;
     const onMove = moveEvent => {
       if (!origin || quickAssetDeletionBusy()) return;
       const x = Math.min(origin.x, moveEvent.clientX);
@@ -4184,8 +4232,14 @@ function setupQuickMarquee() {
         const hit = rect.left < box.right && rect.right > box.left && rect.top < box.bottom && rect.bottom > box.top;
         if (hit) hits.push(node.dataset.assetPath);
       });
-      state.quickSelectionOrder.length = 0;
-      hits.forEach(path => state.quickSelectionOrder.push(path));
+      const uniqueHits = [...new Set(hits)];
+      if (uniqueHits.length > QUICK_SELECTION_LIMIT) {
+        if (!limitNotified) showToast(`每次最多选择 ${QUICK_SELECTION_LIMIT} 项，请缩小框选范围`);
+        limitNotified = true;
+        return;
+      }
+      limitNotified = false;
+      state.quickSelectionOrder = uniqueHits;
       updateQuickSelectionUI();
     };
     const onUp = () => {
@@ -4209,7 +4263,6 @@ function renderQuickFolderTree() {
   refreshBrowserDownloadCards();
   setupQuickMarquee();
   updateQuickSelectionUI();
-  if (el.quickTools) el.quickTools.hidden = false;  // 有资产分类即提供框选导入入口
 }
 
 
@@ -6072,6 +6125,7 @@ function bindEvents() {
     document.querySelector('.asset-quick-actions')?.appendChild(floatHint);
   }
   el.quickMultiSelect.addEventListener('click', () => setQuickSelectMode(!state.quickSelectMode));
+  el.quickSelAll.addEventListener('click', selectAllQuickAssets);
   el.quickSelClear.addEventListener('click', () => {
     if (quickAssetDeletionBusy()) return;
     state.quickSelectionOrder.length = 0;
