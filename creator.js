@@ -1146,8 +1146,8 @@ function renderPlatforms() {
     button.type = 'button';
     button.dataset.tabId = tab.id;
     button.dataset.service = tab.serviceId;
-    // 固定标签对标浏览器：收缩为单字小钉位，悬停提示完整名称
-    button.textContent = tab.pinned ? label.slice(0, 1) : label;
+    // 固定只影响排序/关闭入口，不截断名称。
+    button.textContent = label;
     if (tab.pinned) button.setAttribute('aria-label', `${label}（已固定）`);
     button.title = tab.pinned
       ? `${label}｜已固定，拖动可调整顺序；右键可改名、复制或删除`

@@ -125,18 +125,18 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .mode-button[aria-pressed="true"] span { color: var(--mode); }
 .mode-button span { margin-right: 5px; color: var(--faint); }
 
-/* 平台（已打开网页）标签：第二排独占整行，空间不足时先按比例收紧再滚动 */
+/* 网页名称完整显示，标签不收缩；超出一行时由标签条横向滚动。 */
 .platform-strip { min-width: 0; display: flex; align-items: center; gap: 4px; }
 .clear-browser-tabs { flex: none; min-height: 26px; padding: 2px 7px; font-size: 11px; white-space: nowrap; }
 .platform-tabs { flex: 1; display: flex; align-items: center; gap: 1px; min-width: 0; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
 .platform-tabs::-webkit-scrollbar { display: none; }
-.platform-tab-wrap { position: relative; flex: 0 1 auto; min-width: 44px; max-width: 124px; display: inline-flex; align-items: center; border-radius: 8px; }
+.platform-tab-wrap { position: relative; flex: 0 0 auto; min-width: 44px; max-width: none; display: inline-flex; align-items: center; border-radius: 8px; }
 .platform-tab-wrap.pinned { min-width: 0; }
-.platform-tab-wrap:has(> .platform-tab.active) { max-width: 168px; }
+.platform-tab-wrap:has(> .platform-tab.active) { max-width: none; }
 .platform-tab-wrap:has(> .platform-tab.active) .platform-tab { padding-left: 9px; }
 .platform-tab-wrap.closable:hover, .platform-tab-wrap.closable:focus-within { background: var(--fill); }
 .platform-tab {
-  position: relative; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; min-height: 26px; padding: 0 6px; border: 0; border-radius: 8px;
+  position: relative; flex: 0 0 auto; min-width: max-content; overflow: visible; text-overflow: clip; min-height: 26px; padding: 0 6px; border: 0; border-radius: 8px;
   background: transparent; color: var(--muted); cursor: pointer; white-space: nowrap; font-size: 10.5px; font-weight: 600;
 }
 .platform-tab:hover { color: var(--text); background: rgba(255,255,255,.55); }
@@ -1297,12 +1297,10 @@ body.tab-dragging-cursor, body.tab-dragging-cursor .platform-tab-wrap { cursor: 
   .platform-tab-wrap.drop-swap, .platform-tab-wrap.flip-pop { animation: none; }
 }
 
-/* 固定标签（对标浏览器 pin）：收缩为单字钉位，无关闭/复制按钮，靠右键菜单或取消固定恢复 */
-.platform-tab-wrap.pinned { max-width: 34px; }
-/* 出声的固定标签要容纳声音角标，避免 34px 上限把角标挤出裁掉 */
-.platform-tab-wrap.pinned:has(.platform-tab-audio) { max-width: 58px; }
+/* 固定标签保留完整名称和钉位标记，不限制宽度。 */
+.platform-tab-wrap.pinned, .platform-tab-wrap.pinned:has(.platform-tab-audio) { max-width: none; }
 .platform-tab-wrap.pinned .platform-tab {
-  width: 30px; min-width: 30px; padding: 0; justify-content: center;
+  width: auto; min-width: max-content; padding: 0 12px 0 6px; justify-content: center;
   font-size: 11px; text-align: center;
 }
 .platform-tab-wrap.pinned .platform-tab::before {

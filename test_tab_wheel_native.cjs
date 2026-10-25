@@ -25,7 +25,17 @@ async function main(){
     receipt.results=await app.renderer(()=>{
       const tabs=document.querySelector('#platformTabs');
       tabs.style.cssText='flex:none;width:500px;overflow-x:auto;scroll-behavior:auto';
-      tabs.replaceChildren();const fixture=document.createElement('div');fixture.style.cssText='flex:0 0 2400px;height:35px';tabs.append(fixture);
+      tabs.replaceChildren();
+      const longName='这是一个需要完整显示不能压缩或省略的很长网页标签名称 GPT 项目素材整理';
+      const labelChecks=[];
+      for(const className of ['platform-tab-wrap closable','platform-tab-wrap closable','platform-tab-wrap pinned']){
+        const wrap=document.createElement('span');wrap.className=className;
+        const button=document.createElement('button');button.className='platform-tab'+(labelChecks.length===1?' active':'');button.textContent=longName;wrap.append(button);tabs.append(wrap);
+        const css=getComputedStyle(button),rect=button.getBoundingClientRect();
+        if(button.scrollWidth>button.clientWidth+1 || getComputedStyle(wrap).flexShrink!=='0' || css.textOverflow==='ellipsis' || rect.width<200)throw Error('long tab name compressed');
+        labelChecks.push({active:button.classList.contains('active'),pinned:wrap.classList.contains('pinned'),width:rect.width,fullNameVisible:true});
+      }
+      const fixture=document.createElement('div');fixture.style.cssText='flex:0 0 2400px;height:35px';tabs.append(fixture);
       const reports=[];
       const test=(name,init,delta,cancelled)=>{tabs.scrollLeft=400;const before=tabs.scrollLeft;
         const e=new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:80,...init});fixture.dispatchEvent(e);
@@ -37,8 +47,8 @@ async function main(){
       test('ctrl-zoom-pass-through',{ctrlKey:true},0,false);test('meta-pass-through',{metaKey:true},0,false);test('shift-native-pass-through',{shiftKey:true},0,false);
       tabs.scrollLeft=0;let e=new WheelEvent('wheel',{cancelable:true,deltaY:-100});tabs.dispatchEvent(e);if(tabs.scrollLeft!==0)throw Error('left boundary');
       tabs.scrollLeft=tabs.scrollWidth;const max=tabs.scrollLeft;e=new WheelEvent('wheel',{cancelable:true,deltaY:100});tabs.dispatchEvent(e);if(tabs.scrollLeft!==max)throw Error('right boundary');
-      fixture.style.flexBasis='100px';tabs.scrollLeft=0;e=new WheelEvent('wheel',{cancelable:true,deltaY:100});tabs.dispatchEvent(e);if(e.defaultPrevented)throw Error('no overflow intercepted');
-      return {cases:reports,boundaries:true,noOverflowPassThrough:true};
+      tabs.querySelectorAll('.platform-tab-wrap').forEach(w=>w.remove());fixture.style.flexBasis='100px';tabs.scrollLeft=0;e=new WheelEvent('wheel',{cancelable:true,deltaY:100});tabs.dispatchEvent(e);if(e.defaultPrevented)throw Error('no overflow intercepted');
+      return {cases:reports,labelChecks,boundaries:true,noOverflowPassThrough:true};
     });receipt.status='passed';
   }finally{
     if(app){await app.close();assert.notEqual(app.process().exitCode,null);receipt.processExited=true;}
