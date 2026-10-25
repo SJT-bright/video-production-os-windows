@@ -38,5 +38,7 @@ for (const key of ['realChooserAndTwoSecureNativeViews', 'ratioAndNonOverlapping
 assert.ok(split.processes.every(p => p.exited), 'All owned App processes must exit');
 run('test_tab_wheel_native.cjs', { WHEEL_TEST_EXECUTABLE: executable,
   WHEEL_TEST_EVIDENCE: path.join(evidence, 'tab-wheel') });
+run('test_download_delete_native.cjs', { DOWNLOAD_DELETE_EXECUTABLE: executable,
+  DOWNLOAD_DELETE_EVIDENCE: path.join(evidence, 'download-delete') });
 console.log('DESKTOP_LATEST_NATIVE_PASS version=' + version + ' platform=' + process.platform
   + ' imageRename=true splitLayout=true sidebar=true physicalOsDragTested=false');

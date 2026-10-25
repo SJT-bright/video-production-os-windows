@@ -12,6 +12,7 @@ const {
   uniquePath,
   resolveDownloadTarget,
   deleteBrowserDownloadFile,
+  createBrowserDownloadDeletion,
 } = require('./electron/download-router.cjs');
 
 const fixedNow = new Date('2026-08-22T03:04:05.000Z');
@@ -221,6 +222,50 @@ await deleteBrowserDownloadFile({ libraryRoot, downloadsRoot: downloadRoot, rela
 assert.equal(fs.existsSync(archivePath), false, '永久删除后文件不得留在原目录');
 assert.equal(buildCreativeAssetTree(libraryRoot, { scopePath: '校园心动/浏览器下载' }).stats.files, countBeforeDelete - 1, '扫描计数应只减掉实际删除的一个文件');
 assert.equal(fs.existsSync(downloadRoot), true, '删除单个文件不得删除下载目录');
+
+// Permanent downloads have a separate, monotonic, non-renewing five-minute grant.
+let clock = 0, epoch = 0, alive = true, prompts = 0;
+let consent = { approved: false, skipConfirmationForFiveMinutes: true };
+const downloadContext = () => ({ projectId: 'fixture-a', folder: '校园心动', downloadsRoot: downloadRoot, epoch });
+const removeDownload = createBrowserDownloadDeletion({ libraryRoot, getContext: downloadContext, now: () => clock });
+const confirmDownload = async () => { prompts++; return consent; };
+let fixtureIndex = 0;
+const documentFixture = () => {
+  const name = `免确认-${++fixtureIndex}.txt`;
+  fs.writeFileSync(path.join(downloadRoot, name), 'only disposable fixture');
+  return '校园心动/浏览器下载/' + name;
+};
+const removeFixture = name => removeDownload(name, { confirm: confirmDownload, isAlive: () => alive });
+const cancelledDocument = documentFixture();
+assert.equal(await removeFixture(cancelledDocument), false);
+assert.ok(fs.existsSync(path.join(libraryRoot, cancelledDocument)), 'checked cancellation must keep file');
+consent = { approved: true, skipConfirmationForFiveMinutes: false };
+await removeFixture(documentFixture()); assert.equal(prompts, 2, 'cancel must not grant');
+await removeFixture(documentFixture()); assert.equal(prompts, 3, 'unchecked confirmation must not grant');
+consent = { approved: true, skipConfirmationForFiveMinutes: true };
+clock = 100; await removeFixture(documentFixture()); assert.equal(prompts, 4);
+clock = 299999; await removeFixture(documentFixture()); assert.equal(prompts, 4);
+clock = 300100; await removeFixture(documentFixture()); assert.equal(prompts, 5, 'expires at exact boundary; previous deletes do not renew');
+epoch++; await removeFixture(documentFixture()); assert.equal(prompts, 6, 'switch epoch revokes consent');
+clock = -1; await removeFixture(documentFixture()); assert.equal(prompts, 7, 'backward clock requires confirmation');
+alive = false;
+await assert.rejects(removeFixture(documentFixture()), /窗口已切换/);
+alive = true; epoch++;
+const switched = documentFixture();
+await assert.rejects(removeDownload(switched, { isAlive: () => true, confirm: async () => { epoch++; return consent; } }), /窗口已切换/);
+assert.ok(fs.existsSync(path.join(libraryRoot, switched)));
+const replaced = documentFixture();
+await assert.rejects(removeDownload(replaced, { confirm: async () => {
+  fs.writeFileSync(path.join(libraryRoot, replaced), 'replacement has a different size'); return consent;
+} }), /文件已变更/);
+await removeFixture(documentFixture()); assert.equal(prompts, 8, 'replaced file must not grant skip');
+await assert.rejects(removeFixture('校园心动/生成视频/说明.txt'), /只能永久删除/);
+await assert.rejects(removeFixture('校园心动/浏览器下载/旧视频.mp4'), /不属于浏览器下载文件/);
+epoch++; let releaseDialog;
+const held = removeDownload(documentFixture(), { confirm: () => new Promise(resolve => { releaseDialog = resolve; }) });
+await assert.rejects(removeFixture(documentFixture()), /正在执行/);
+releaseDialog({ approved: false }); assert.equal(await held, false);
+console.log('DOWNLOAD_DELETE_CONSENT_PASS cancel default opt-in exact-expiry no-renewal project-switch clock window identity scope media concurrency');
 
 for (const videoDisposition of ['editable', 'processing']) {
   const target = resolveDownloadTarget({ projectRoot, projectDirectories, serviceId: 'hehui', serviceLabel: '核绘',

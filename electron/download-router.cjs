@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { performance } = require('node:perf_hooks');
 const { resolveCreativeAsset } = require('../creative-assets.cjs');
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif', '.svg', '.heic', '.heif', '.tif', '.tiff', '.ico', '.psd', '.dng', '.cr2']);
@@ -118,7 +119,7 @@ function resolveDownloadTarget({
     platformFolder, episode: kind === 'file' || legacyDay ? null : episode, episodeLabel: legacyDay ? '' : episodeFolder };
 }
 
-async function deleteBrowserDownloadFile({ libraryRoot, downloadsRoot, relativePath }) {
+function inspectBrowserDownload({ libraryRoot, downloadsRoot, relativePath }) {
   const entry = resolveCreativeAsset(libraryRoot, relativePath, 'file');
   if (!entry || !entry.stat.isFile()) throw new Error('下载文件不存在');
   // Match the asset resolver's native spelling, including Windows TEMP's
@@ -131,8 +132,47 @@ async function deleteBrowserDownloadFile({ libraryRoot, downloadsRoot, relativeP
   if (classifyDownload({ filename: path.basename(entry.abs) }) !== 'file') {
     throw new Error('图片、视频和音频不属于浏览器下载文件');
   }
+  return entry;
+}
+
+const downloadIdentity = entry => [entry.abs, entry.stat.dev, entry.stat.ino, entry.stat.size, entry.stat.mtimeMs, entry.stat.ctimeMs].join(':');
+async function deleteBrowserDownloadFile(options) {
+  const entry = inspectBrowserDownload(options);
+  if (options.expectedIdentity && downloadIdentity(entry) !== options.expectedIdentity) throw new Error('确认期间文件已变更，未执行删除');
   await fs.promises.unlink(entry.abs);
   return entry.abs;
+}
+
+// Independent consent for permanent download deletion; never shares the Trash grant.
+function createBrowserDownloadDeletion({ libraryRoot, getContext, now = () => performance.now() }) {
+  let grant = null, busy = false;
+  const key = context => JSON.stringify([context.projectId, context.folder, context.downloadsRoot, context.epoch]);
+  return async function remove(relativePath, { confirm, isAlive = () => true } = {}) {
+    if (busy) throw new Error('已有下载删除正在执行，请稍后');
+    busy = true;
+    try {
+      const context = getContext(), scope = key(context);
+      if (!context.projectId || !context.downloadsRoot || !isAlive()) throw new Error('剧本或窗口已切换，未执行删除');
+      const options = { libraryRoot, downloadsRoot: context.downloadsRoot, relativePath };
+      const baseline = downloadIdentity(inspectBrowserDownload(options));
+      const current = () => isAlive() && key(getContext()) === scope;
+      const time = now();
+      if (grant && (!grant.isAlive() || grant.scope !== scope || !Number.isFinite(time)
+        || time < grant.start || time >= grant.end)) grant = null;
+      if (!grant) {
+        const result = await confirm({ name: path.basename(relativePath) });
+        if (result?.approved !== true) return false;
+        if (!current()) throw new Error('剧本或窗口已切换，未执行删除');
+        // Revalidate before arming the grant, including replacement during the dialog.
+        if (downloadIdentity(inspectBrowserDownload(options)) !== baseline) throw new Error('确认期间文件已变更，未执行删除');
+        const start = now();
+        if (result.skipConfirmationForFiveMinutes === true && Number.isFinite(start))
+          grant = { scope, start, end: start + 5 * 60 * 1000, isAlive };
+      }
+      if (!current()) throw new Error('剧本或窗口已切换，未执行删除');
+      return await deleteBrowserDownloadFile({ ...options, expectedIdentity: baseline });
+    } finally { busy = false; }
+  };
 }
 
 module.exports = {
@@ -142,4 +182,5 @@ module.exports = {
   uniquePath,
   resolveDownloadTarget,
   deleteBrowserDownloadFile,
+  createBrowserDownloadDeletion,
 };

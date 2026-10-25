@@ -1,6 +1,6 @@
-# Windows 源码复现 · v1.3.13
+# Windows 源码复现 · v1.3.14
 
-Windows 10/11 x64、Node.js 26.7.0；[固定源码](https://github.com/SJT-bright/video-production-os-windows/tree/v1.3.13) 与 Mac 同步核心功能，个人数据与登录不分发。
+Windows 10/11 x64、Node.js 26.7.0；[固定源码](https://github.com/SJT-bright/video-production-os-windows/tree/v1.3.14) 与 Mac 同步核心功能，个人数据与登录不分发。
 
 ```powershell
 npm ci

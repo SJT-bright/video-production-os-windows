@@ -1,18 +1,22 @@
-# 视频制作 OS · v1.3.13
+# 视频制作 OS · v1.3.14
 
 把图片／视频创作网页、剧本、固定提示词、分集资产和人物音频整理到一个本地工作台。作者：[SJT-bright](https://github.com/SJT-bright)。应用使用 Electron、Node.js、原生 HTML/CSS/JavaScript 和 SQLite；生成仍在使用者自己的第三方网站账号中完成。
 
 ## 下载最新版
 
-- [Mac 最新版](https://github.com/SJT-bright/video-production-os/releases/latest)：v1.3.13包名为 `VideoProductionOS-Mac-v1.3.13-Universal.zip`，解压后打开 App。包含 Apple Silicon 和 Intel 架构；本地 ad-hoc 签名，未经过 Apple 公证。
-- [Windows 最新版](https://github.com/SJT-bright/video-production-os-windows/releases/latest)：v1.3.13包名为 `VideoProductionOS-Windows-v1.3.13-x64.zip`，完整解压后双击 `视频制作OS.exe`，不能只移动 EXE。
+- [Mac 最新版](https://github.com/SJT-bright/video-production-os/releases/latest)：v1.3.14包名为 `VideoProductionOS-Mac-v1.3.14-Universal.zip`，解压后打开 App。包含 Apple Silicon 和 Intel 架构；本地 ad-hoc 签名，未经过 Apple 公证。
+- [Windows 最新版](https://github.com/SJT-bright/video-production-os-windows/releases/latest)：v1.3.14包名为 `VideoProductionOS-Windows-v1.3.14-x64.zip`，完整解压后双击 `视频制作OS.exe`，不能只移动 EXE。
 - [Mac 源码](https://github.com/SJT-bright/video-production-os) · [Windows 源码](https://github.com/SJT-bright/video-production-os-windows) · [更新说明](RELEASE-NOTES.md)
 
 GitHub 自动生成的 Source code ZIP 是源码，不是可直接运行的 App。安装包无个人剧本、素材、数据库或网站登录配置。新用户会建立自己的工作区；升级时只替换软件，不删除用户数据目录。
 
 本软件使用 FFmpeg（LGPL-2.1-or-later）进行人物音轨提取，每个 Release 都附带对应的完整组件源码及许可说明：[第三方组件](THIRD-PARTY-NOTICES.md)。
 
-## v1.3.13：标签栏鼠标滚轮横向移动
+## v1.3.14：浏览器下载永久删除可5分钟免询问
+
+永久删除确认提供默认关闭的“5分钟内不再询问（仅当前剧本的浏览器下载）”选项。勾选并确认才授权，取消不生效；固定5分钟不续期，切换剧本/目录或关闭授权窗口、重启后失效。与普通素材进废纸篓的授权独立，取消不减少计数。
+
+## 保留的 v1.3.13：标签栏鼠标滚轮横向移动
 
 网页标签按完整名称自然延长，不压缩、不用省略号截断；普通、选中和固定标签均保留名称，超出屏幕后横向滚动。
 
@@ -73,7 +77,7 @@ GitHub 自动生成的 Source code ZIP 是源码，不是可直接运行的 App�
 
 资产按剧本保存，人物、场景、物品、视频、图片、音频、BGM／音效和成片共享文件索引。可建立子文件夹、改名、移动、多选、复制复用和定位原文件；外部来源与 Obsidian 为索引，不擅自移动源文件。
 
-下载视频先选“可剪辑”或“待处理”，再归档到相应网站和集目录。普通“浏览器下载”仅保留文档、压缩包等非媒体文件，图片、视频、音频进入各自媒体分类。浏览器下载文件的永久删除明确确认后执行，计数根据实际文件刷新；其他资产删除保留系统可恢复处理，不混同两种操作。
+下载视频先选“可剪辑”或“待处理”，再归档到相应网站和集目录。普通“浏览器下载”仅保留文档、压缩包等非媒体文件，图片、视频、音频进入各自媒体分类。浏览器下载文件的永久删除默认确认，可主动选择当前剧本5分钟免询问，计数根据实际文件刷新；其他资产删除保留系统可恢复处理，不混同两种操作。
 
 ```text
 创作资产库/自己的剧本/

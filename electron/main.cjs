@@ -35,7 +35,7 @@ const { createCreatorPlatformStore } = require('./creator-platforms.cjs');
 const { createBrowserSessionStore } = require('./browser-session.cjs');
 const { createCreatorFileReadPolicy, authorizeSelectedCreatorFileRead, observeCreatorUploadFailures } = require('./creator-file-access.cjs');
 const { buildCreatorContextMenuTemplate } = require('./creator-context-menu.cjs');
-const { classifyDownload, resolveDownloadTarget, deleteBrowserDownloadFile, sanitizeFilename, uniquePath } = require('./download-router.cjs');
+const { classifyDownload, resolveDownloadTarget, createBrowserDownloadDeletion, sanitizeFilename, uniquePath } = require('./download-router.cjs');
 const { MEDIA_KINDS, DOWNLOAD_EPISODE_CATEGORIES, episodeLabel, normalizeSnapshot: normalizeEpisodeSnapshot } = require('./download-episodes.cjs');
 const { createDownloadReview } = require('./download-review.cjs');
 const { createDownloadReviewUI } = require('./download-review-ui.cjs');
@@ -3882,14 +3882,28 @@ function registerIpc() {
     return true;
   });
 
+  const deleteBrowserDownload = createBrowserDownloadDeletion({ libraryRoot: CREATIVE_ASSET_DIR,
+    getContext: () => ({ projectId: creativeProjectStore.active()?.id, folder: creativeProjectStore.active()?.folder,
+      downloadsRoot: creatorPaths().downloadRoot, epoch: assetDeleteProjectEpoch }),
+  });
   ipcMain.handle('creator:delete-browser-download', async (event, payload = {}) => {
     requireTrusted(event, 'creator');
     requireCreativeAsset(String(payload.path || ''));
-    const removedPath = await deleteBrowserDownloadFile({
-      libraryRoot: CREATIVE_ASSET_DIR,
-      downloadsRoot: creatorPaths().downloadRoot,
-      relativePath: String(payload.path || ''),
+    const owner = creatorWindow && !creatorWindow.isDestroyed() ? creatorWindow : mainWindow;
+    if (!owner || owner.isDestroyed()) throw new Error('工作窗口已关闭，未执行删除');
+    const removedPath = await deleteBrowserDownload(String(payload.path || ''), {
+      isAlive: () => !owner.isDestroyed() && !event.sender.isDestroyed() && isTrustedCreatorSender(event),
+      confirm: async ({ name }) => {
+        const { response, checkboxChecked } = await dialog.showMessageBox(owner, {
+          type: 'warning', title: '永久删除下载文件', message: `永久删除「${name}」？`,
+          detail: '此操作不会移到废纸篓，无法撤销。勾选后，当前剧本的浏览器下载文件在5分钟内直接删除；素材移入废纸篓的确认不受影响。',
+          buttons: ['取消', '永久删除'], defaultId: 0, cancelId: 0, noLink: true,
+          checkboxLabel: '5 分钟内不再询问（仅当前剧本的浏览器下载）', checkboxChecked: false,
+        });
+        return { approved: response === 1, skipConfirmationForFiveMinutes: response === 1 && checkboxChecked === true };
+      },
     });
+    if (!removedPath) return false;
     for (let index = recentDownloads.length - 1; index >= 0; index--) {
       if (recentDownloads[index].savePath === removedPath) recentDownloads.splice(index, 1);
     }

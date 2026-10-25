@@ -3365,9 +3365,7 @@ function buildQuickFileCard(item) {
       const epoch = quickProjectViewEpoch;
       const stillCurrent = () => projectId === state.projectId && epoch === quickProjectViewEpoch;
       let refreshed = false;
-      // 浏览器下载永久删除始终单独询问，不复用创作素材的临时免确认。
-      const prompt = `永久删除「${item.name}」？此操作不会移到废纸篓，无法撤销。`;
-      if (!confirm(prompt)) return;
+      // 专用主进程确认提供5分钟免确认，与普通素材移入废纸篓的授权独立。
       if (!stillCurrent() || quickAssetDeletionBusy()) return;
       quickSingleDeleteDepth++;
       quickAssetMutationDepth++;
@@ -3375,7 +3373,8 @@ function buildQuickFileCard(item) {
       assetItemsRequestId++;
       updateQuickSelectionUI();
       try {
-        await deleteAsset(item.path);
+        const deleted = await deleteAsset(item.path);
+        if (deleted === false) return;
         if (!stillCurrent()) return;
         quickRecentDeletes.set(`${projectId}\n${item.path}`, Date.now());
         applyQuickAssetDeletions([item.path], projectId);
