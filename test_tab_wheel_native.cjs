@@ -22,7 +22,7 @@ async function main(){
     app=await launchIsolatedElectron({executablePath,env});
     const runtime=await app.evaluate(({app})=>({version:app.getVersion(),packaged:app.isPackaged}));
     assert.equal(runtime.version,version);assert.equal(runtime.packaged,true);receipt.runtime=runtime;
-    receipt.results=await app.renderer(()=>{
+    receipt.results=await app.renderer(()=>{try{
       const tabs=document.querySelector('#platformTabs');
       tabs.style.cssText='flex:none;width:500px;overflow-x:auto;scroll-behavior:auto';
       tabs.replaceChildren();
@@ -46,10 +46,13 @@ async function main(){
       test('horizontal-pass-through',{deltaX:100,deltaY:10},0,false);
       test('ctrl-zoom-pass-through',{ctrlKey:true},0,false);test('meta-pass-through',{metaKey:true},0,false);test('shift-native-pass-through',{shiftKey:true},0,false);
       tabs.scrollLeft=0;let e=new WheelEvent('wheel',{cancelable:true,deltaY:-100});tabs.dispatchEvent(e);if(tabs.scrollLeft!==0)throw Error('left boundary');
-      tabs.scrollLeft=tabs.scrollWidth;const max=tabs.scrollLeft;e=new WheelEvent('wheel',{cancelable:true,deltaY:100});tabs.dispatchEvent(e);if(tabs.scrollLeft!==max)throw Error('right boundary');
+      tabs.scrollLeft=tabs.scrollWidth;const max=tabs.scrollLeft;e=new WheelEvent('wheel',{cancelable:true,deltaY:100});tabs.dispatchEvent(e);
+      // scrollLeft is subpixel; scrollWidth/clientWidth are rounded CSS pixels.
+      if(Math.abs(tabs.scrollLeft-max)>1)throw Error('right boundary');
       tabs.querySelectorAll('.platform-tab-wrap').forEach(w=>w.remove());fixture.style.flexBasis='100px';tabs.scrollLeft=0;e=new WheelEvent('wheel',{cancelable:true,deltaY:100});tabs.dispatchEvent(e);if(e.defaultPrevented)throw Error('no overflow intercepted');
       return {cases:reports,labelChecks,boundaries:true,noOverflowPassThrough:true};
-    });receipt.status='passed';
+      }catch(error){return {error:error.stack||String(error)};}
+    });assert.equal(receipt.results.error,undefined,receipt.results.error);receipt.status='passed';
   }finally{
     if(app){await app.close();assert.notEqual(app.process().exitCode,null);receipt.processExited=true;}
     fs.rmSync(temp,{recursive:true,force:true});receipt.fixtureCleaned=!fs.existsSync(temp);
