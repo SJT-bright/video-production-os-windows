@@ -1,6 +1,6 @@
-# Mac 源码复现 · v1.3.4
+# Mac 源码复现 · v1.3.13
 
-下载 [固定源码](https://github.com/SJT-bright/video-production-os/tree/v1.3.4)，使用 macOS、Node.js 26.7.0 与锁文件中的依赖；源码目录建议命名为 `视频制作OS`。
+下载 [固定源码](https://github.com/SJT-bright/video-production-os/tree/v1.3.13)，使用 macOS、Node.js 26.7.0 与锁文件中的依赖；源码目录建议命名为 `视频制作OS`。
 
 ```sh
 npm ci

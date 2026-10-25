@@ -36,5 +36,7 @@ for (const key of ['realChooserAndTwoSecureNativeViews', 'ratioAndNonOverlapping
   'sidebarCollapseReloadExpandKeepsNativePages', 'closePreservesBothDocumentsAndDrafts',
   'restartKeepsBothTabsAndCanSplitAgain']) assert.equal(split.checks[key], true, key);
 assert.ok(split.processes.every(p => p.exited), 'All owned App processes must exit');
+run('test_tab_wheel_native.cjs', { WHEEL_TEST_EXECUTABLE: executable,
+  WHEEL_TEST_EVIDENCE: path.join(evidence, 'tab-wheel') });
 console.log('DESKTOP_LATEST_NATIVE_PASS version=' + version + ' platform=' + process.platform
   + ' imageRename=true splitLayout=true sidebar=true physicalOsDragTested=false');

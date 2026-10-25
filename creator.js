@@ -5952,13 +5952,18 @@ function bindEvents() {
   el.clearBrowserTabs.addEventListener('click', clearBrowserTabs);
   // 「全部网页」弹层：约定 ID 缺失（creator.html 未就位）时内部自动停用
   wireAllTabs();
-  // 标签条滚轮横向滚动：鼠标滚轮纵向增量转成横向滚动（触屏横向平移与 shift+滚轮走原生 deltaX，不受影响），
-  // 解决网页标签超过一屏后，鼠标用户无法移动到右侧标签的问题。
+  // 悬停标签条时，将纵向滚轮转换成横向移动；横向触控板与缩放手势仍由浏览器处理。
   el.platformTabs.addEventListener('wheel', event => {
-    if (event.deltaY === 0) return;
-    if (el.platformTabs.scrollWidth <= el.platformTabs.clientWidth) return;
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.defaultPrevented) return;
+    if (!Number.isFinite(event.deltaY) || event.deltaY === 0) return;
+    if (Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+    const tabs = el.platformTabs;
+    const maximum = tabs.scrollWidth - tabs.clientWidth;
+    if (maximum <= 0) return;
+    // deltaMode: 0=像素，1=行，2=页。部分鼠标每格仅报告3行，不能当3像素处理。
+    const unit = event.deltaMode === 1 ? 32 : event.deltaMode === 2 ? tabs.clientWidth : 1;
     event.preventDefault();
-    el.platformTabs.scrollLeft += event.deltaY;
+    tabs.scrollLeft = Math.max(0, Math.min(maximum, tabs.scrollLeft + event.deltaY * unit));
   }, { passive: false });
   // —— 指针拖拽的全局接管 ——
   // move：未超阈值前只记录位置；超过阈值激活拖拽（拖影+压暗+自动横滚）并实时更新放置计划；
