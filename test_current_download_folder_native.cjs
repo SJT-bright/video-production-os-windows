@@ -33,7 +33,7 @@ async function main(){
     release();
     await wait(()=>app.evaluate(async({webContents})=>{const wc=webContents.getAllWebContents().find(w=>w.getURL().includes('/assets/ui/download-review.html'));if(!wc)return false;return wc.executeJavaScript(`(()=>{const b=document.querySelector('[data-choice="editable"]');if(!b)return false;b.click();return true;})()`);}), 'choice');
     const downloaded=await wait(()=>app.renderer(async()=>{const items=await window.creatorAPI.getDownloads();return items.find(d=>d.state==='completed'&&d.kind==='video');}),'archive completed');
-    const expected=path.join(assets,'生成视频/核绘/第14集/可剪辑');assert.equal(path.dirname(downloaded.savePath),expected);
+    const expected=path.join(assets,'生成视频/核绘/第14集/可剪辑');assert.equal(fs.realpathSync.native(path.dirname(downloaded.savePath)),fs.realpathSync.native(expected));
     assert.ok(fs.existsSync(downloaded.savePath));assert.equal(fs.readdirSync(path.join(assets,'生成视频/核绘/第60集')).length,0);
     receipt.status='passed';receipt.checks={currentImportLabelSyncsNativeTarget:true,downloadJournalCaptures14:true,laterSelection60DoesNotMoveInFlight:true,actualDownloadedFileUnder14:true,noFileUnder60:true};
   }finally{
