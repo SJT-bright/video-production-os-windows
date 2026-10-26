@@ -13,6 +13,7 @@ const {
   resolveDownloadTarget,
   deleteBrowserDownloadFile,
   createBrowserDownloadDeletion,
+  resolveSelectedDownloadDirectory,
 } = require('./electron/download-router.cjs');
 
 const fixedNow = new Date('2026-08-22T03:04:05.000Z');
@@ -205,6 +206,30 @@ assert.throws(() => resolveDownloadTarget({
 }), /图片归档目录/);
 
 const libraryRoot = path.join(projectRoot, '创作资产库');
+const selectedEpisode = path.join(libraryRoot, '校园心动/生成视频/核绘/第14集');
+fs.mkdirSync(selectedEpisode, { recursive: true });
+const selectedProject = { id: 'a', folder: '校园心动' };
+assert.equal(resolveSelectedDownloadDirectory(libraryRoot, selectedProject, '校园心动/生成视频/核绘/第14集'), fs.realpathSync.native(selectedEpisode));
+assert.equal(resolveSelectedDownloadDirectory(libraryRoot, selectedProject, ''), '');
+assert.throws(() => resolveSelectedDownloadDirectory(libraryRoot, selectedProject, '其他剧本/第14集'), /不属于/);
+assert.throws(() => resolveSelectedDownloadDirectory(libraryRoot, selectedProject, '校园心动/../别的剧本'), /不属于/);
+for (const choice of ['editable', 'processing']) {
+  const target = resolveDownloadTarget({ projectRoot, projectDirectories, filename: 'video.mp4', serviceId: 'hehui', serviceLabel: '核绘',
+    episode: 60, selectedDirectory: selectedEpisode, videoDisposition: choice });
+  assert.equal(target.directory, path.join(selectedEpisode, choice === 'editable' ? '可剪辑' : '待处理'));
+  assert.ok(!target.directory.includes('第60集'));
+}
+const directStatus = path.join(selectedEpisode, '待处理'); fs.mkdirSync(directStatus);
+assert.equal(resolveDownloadTarget({ projectRoot, projectDirectories, filename: 'video.mp4', episode: 60,
+  selectedDirectory: directStatus, videoDisposition: 'editable' }).directory, directStatus, 'explicit status directory wins without nesting another status');
+assert.equal(resolveDownloadTarget({ projectRoot, projectDirectories, filename: 'frame.png', episode: 60,
+  selectedDirectory: selectedEpisode }).directory, selectedEpisode);
+assert.equal(resolveDownloadTarget({ projectRoot, projectDirectories, filename: 'notes.txt',
+  selectedDirectory: selectedEpisode }).directory, selectedEpisode);
+const capturedDirectory = selectedEpisode;
+assert.equal(resolveDownloadTarget({ projectRoot, projectDirectories, filename: 'video.mp4', episode: 60,
+  selectedDirectory: capturedDirectory, videoDisposition: 'editable' }).directory,path.join(selectedEpisode,'可剪辑'));
+console.log('CURRENT_DOWNLOAD_FOLDER_PASS explicit14Overrides60 status image document projectScope capturedTarget');
 const downloadRoot = projectDirectories.downloads;
 const generatedRoot = path.join(libraryRoot, '校园心动', '生成视频');
 fs.mkdirSync(downloadRoot, { recursive: true });

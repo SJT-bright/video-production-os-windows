@@ -81,6 +81,7 @@ function resolveDownloadTarget({
   legacyDay = '',
   now = new Date(),
   exists,
+  selectedDirectory = '',
 }) {
   if (!projectRoot) throw new Error('项目下载目录尚未连接');
   const kind = classifyDownload({ filename, mimeType, mode, serviceId });
@@ -106,7 +107,8 @@ function resolveDownloadTarget({
   const dispositionFolder = videoDisposition === 'editable' ? '可剪辑' : '待处理';
   // Only unfinished downloads from an older journal retain a dated target.
   // New media is website / episode; documents stay directly under website.
-  const directory = legacyDay
+  const directory = selectedDirectory ? (kind === 'video' && videoDisposition && !['可剪辑', '待处理'].includes(path.basename(selectedDirectory))
+    ? path.join(selectedDirectory, dispositionFolder) : selectedDirectory) : legacyDay
     ? (kind === 'video' && videoDisposition
       ? path.join(base, dispositionFolder, platformFolder, legacyDay)
       : path.join(base, platformFolder, legacyDay))
@@ -117,6 +119,20 @@ function resolveDownloadTarget({
   const targetPath = uniquePath(path.join(directory, safeName), exists);
   return { kind, directory, targetPath, isImage, projectScoped: !!scopedDirectories,
     platformFolder, episode: kind === 'file' || legacyDay ? null : episode, episodeLabel: legacyDay ? '' : episodeFolder };
+}
+
+function resolveSelectedDownloadDirectory(libraryRoot, project, relative) {
+  if (!relative || relative === project.folder) return '';
+  if (typeof relative !== 'string' || relative.includes('\\') || relative.split('/').some(p => !p || p === '.' || p === '..')
+    || !relative.startsWith(project.folder + '/')) throw new Error('当前存入目录不属于当前剧本');
+  const root = fs.realpathSync.native(libraryRoot);
+  let current = root;
+  for (const part of relative.split('/')) {
+    current = path.join(current, part);
+    const stat = fs.lstatSync(current);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('当前存入必须是真实文件夹');
+  }
+  return current;
 }
 
 function inspectBrowserDownload({ libraryRoot, downloadsRoot, relativePath }) {
@@ -183,4 +199,5 @@ module.exports = {
   resolveDownloadTarget,
   deleteBrowserDownloadFile,
   createBrowserDownloadDeletion,
+  resolveSelectedDownloadDirectory,
 };

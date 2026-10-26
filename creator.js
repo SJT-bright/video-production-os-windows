@@ -2954,6 +2954,7 @@ function toggleQuickFolder(row, folder) {
 }
 
 function updateQuickDropLabel() {
+  syncQuickDownloadFolder();
   if (!el.quickDropTarget) return;
   const automatic = !state.quickAssetFolder || isProjectRootFolder(state.quickAssetFolder);
   const root = state.config?.project?.folder || '';
@@ -2984,6 +2985,21 @@ function updateQuickDropLabel() {
   }
   el.quickFolderTree.querySelectorAll('.quick-folder-row[data-folder-path]').forEach(row => {
     row.classList.toggle('view-selected', row.dataset.folderPath === state.quickViewFolder);
+  });
+}
+
+let quickDownloadFolderSynced = '';
+function syncQuickDownloadFolder() {
+  if (typeof API?.setDownloadFolder !== 'function' || !state.projectId) return;
+  const payload = { projectId: state.projectId, path: state.quickAssetFolder || '' };
+  const key = JSON.stringify(payload);
+  if (key === quickDownloadFolderSynced) return;
+  quickDownloadFolderSynced = key;
+  API.setDownloadFolder(payload).catch(error => {
+    if (quickDownloadFolderSynced === key) {
+      quickDownloadFolderSynced = '';
+      showToast(`下载目录同步失败：${error.message}，请重新选择“当前存入”`);
+    }
   });
 }
 
@@ -3107,6 +3123,10 @@ function bindBrowserDownloadDock() {
 }
 
 function refreshBrowserDownloadCards() {
+  return withQuickCardReuse(refreshBrowserDownloadCardsNow);
+}
+
+function refreshBrowserDownloadCardsNow() {
   bindBrowserDownloadDock();
   const grid = document.getElementById('browserDownloadGrid');
   if (!grid) return;
@@ -3180,8 +3200,32 @@ function updateQuickCounts() {
   el.assetAccordionCount.textContent = `${imageCount} 张图片${videoCount ? ` · ${videoCount} 个视频` : ''}${audioCount ? ` · ${audioCount} 条音频` : ''}${downloadCount ? ` · ${downloadCount} 个浏览器下载` : ''}`;
 }
 
+// A refresh may replace folder shells, but unchanged media keep their decoded
+// image/video nodes and event handlers. The pool lives only for this render.
+let quickCardReusePool = null;
+function withQuickCardReuse(render) {
+  if (quickCardReusePool) return render();
+  quickCardReusePool = new Map();
+  for (const node of document.querySelectorAll('.asset-card-wrap')) {
+    const key = node.__quickCardReuseKey;
+    if (!key) continue;
+    if (!quickCardReusePool.has(key)) quickCardReusePool.set(key, []);
+    quickCardReusePool.get(key).push(node);
+  }
+  try { return render(); } finally { quickCardReusePool = null; }
+}
+
 function buildQuickFileCard(item) {
+  const reuseKey = JSON.stringify([state.projectId, item]);
+  const reused = quickCardReusePool?.get(reuseKey)?.shift();
+  if (reused) {
+    for (const video of reused.querySelectorAll('video[data-cover-src]')) {
+      registerQuickCoverLazy(video, video.dataset.coverSrc);
+    }
+    return reused;
+  }
   const wrapper = document.createElement('span');
+  wrapper.__quickCardReuseKey = reuseKey;
   wrapper.className = 'asset-card-wrap';
   wrapper.draggable = true;
   const dragToken = downloadDragToken(item);
@@ -3381,7 +3425,7 @@ function buildQuickFileCard(item) {
         if (item.downloadId) state.downloads.delete(item.downloadId);
         showToast(`${item.browserDownload ? '已永久删除' : '已移到废纸篓'}：${item.name}`);
         refreshed = true;
-        await loadAssetItems();
+        await loadAssetItems({ preserveOnError: true, quiet: true });
       } catch (error) {
         if (stillCurrent()) showToast(error.message || '删除失败');
       } finally {
@@ -4253,6 +4297,10 @@ function setupQuickMarquee() {
 }
 
 function renderQuickFolderTree() {
+  return withQuickCardReuse(renderQuickFolderTreeNow);
+}
+
+function renderQuickFolderTreeNow() {
   rebuildQuickIndexes();
   updateQuickCounts();
   updateQuickDropLabel();
@@ -4268,6 +4316,8 @@ function renderQuickFolderTree() {
 
 // 请求代号守卫：快速切换剧本时后完成的旧响应不得写进新剧本视图（也不得误报失效选项提示）
 let assetItemsRequestId = 0;
+let lastQuickAssetTreeSignature = '';
+let lastQuickAssetItemsSignature = '';
 
 async function loadAssetItems({ preserveOnError = false, quiet = false } = {}) {
   const requestId = ++assetItemsRequestId;
@@ -4279,6 +4329,11 @@ async function loadAssetItems({ preserveOnError = false, quiet = false } = {}) {
     const data = await response.json().catch(() => ({}));
     if (requestId !== assetItemsRequestId || state.projectId !== requestProjectId) return false;
     if (!response.ok || !data.tree) throw new Error(data.error || `HTTP ${response.status}`);
+    const signature = JSON.stringify([requestProjectId, data.project, data.tree]);
+    if (signature === lastQuickAssetTreeSignature && JSON.stringify(state.assetItems) === lastQuickAssetItemsSignature) {
+      el.assetAccordionCount.removeAttribute('title');
+      return true;
+    }
     if (data.project) state.config.project = data.project;
     state.assetItems = collectAssetItems(data.tree);
     // 框选导入序列按现存资产过滤：已删除/已不存在的选项自动剔除并明确提示，避免整批拖出失败。
@@ -4290,14 +4345,16 @@ async function loadAssetItems({ preserveOnError = false, quiet = false } = {}) {
       if (removed > 0) showToast(`已自动移除 ${removed} 个失效选项`);
     }
     renderQuickFolderTree();
+    lastQuickAssetTreeSignature = signature;
+    lastQuickAssetItemsSignature = JSON.stringify(state.assetItems);
     el.assetAccordionCount.removeAttribute('title');
     return true;
   } catch (error) {
     // 请求代号或项目身份已变化：这是被取代的旧请求，其失败不得覆盖新项目的成功渲染
     if (requestId !== assetItemsRequestId || state.projectId !== requestProjectId) return false;
     if (cached) Object.assign(state, cached);
-    else state.assetItems = [];
-    renderQuickFolderTree();
+    else { state.assetItems = []; lastQuickAssetTreeSignature = ''; }
+    if (!cached) renderQuickFolderTree();
     if (cached) el.assetAccordionCount.title = '列表刷新失败，当前保留已读取的未删素材';
     else el.assetAccordionCount.textContent = '读取失败';
     if (!quiet) showToast(`创作资产读取失败：${error.message}`);

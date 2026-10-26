@@ -35,7 +35,7 @@ const { createCreatorPlatformStore } = require('./creator-platforms.cjs');
 const { createBrowserSessionStore } = require('./browser-session.cjs');
 const { createCreatorFileReadPolicy, authorizeSelectedCreatorFileRead, observeCreatorUploadFailures } = require('./creator-file-access.cjs');
 const { buildCreatorContextMenuTemplate } = require('./creator-context-menu.cjs');
-const { classifyDownload, resolveDownloadTarget, createBrowserDownloadDeletion, sanitizeFilename, uniquePath } = require('./download-router.cjs');
+const { classifyDownload, resolveDownloadTarget, createBrowserDownloadDeletion, resolveSelectedDownloadDirectory, sanitizeFilename, uniquePath } = require('./download-router.cjs');
 const { MEDIA_KINDS, DOWNLOAD_EPISODE_CATEGORIES, episodeLabel, normalizeSnapshot: normalizeEpisodeSnapshot } = require('./download-episodes.cjs');
 const { createDownloadReview } = require('./download-review.cjs');
 const { createDownloadReviewUI } = require('./download-review-ui.cjs');
@@ -250,6 +250,7 @@ let downloadReviewUI = null;
 let appQuitting = false;
 let recoveringVideoDownloads = false;
 const downloadEpisodeStore = serverModule.downloadEpisodeStore;
+const selectedDownloadFolders = new Map();
 serverModule.setDownloadEpisodeServiceProvider(publicServices);
 function validateVideoDownloadTarget(entry, destination) {
   const project = creativeProjectStore.get(entry.projectId);
@@ -260,7 +261,9 @@ function validateVideoDownloadTarget(entry, destination) {
     throw new Error('视频下载分集快照无效');
   }
   const dispositionFolder = entry.choice === 'processing' ? '待处理' : '可剪辑';
-  const allowed = snapshot
+  const chosen = entry.productionSnapshot?.selectedDownloadFolder;
+  const selectedDirectory = chosen ? resolveSelectedDownloadDirectory(CREATIVE_ASSET_DIR, project, chosen) : '';
+  const allowed = selectedDirectory ? (['可剪辑', '待处理'].includes(path.basename(selectedDirectory)) ? selectedDirectory : path.join(selectedDirectory, dispositionFolder)) : snapshot
     ? path.join(base, currentEpisodePlatform(snapshot), episodeLabel(snapshot.episode), dispositionFolder)
     : path.join(base, dispositionFolder);
   const relative = path.relative(allowed, destination);
@@ -282,6 +285,8 @@ const videoDownloadReview = createDownloadReview({
       projectRoot: PROJECT_ROOT, serviceId: entry.serviceId, serviceLabel: entry.serviceLabel,
       filename: entry.filename, mimeType: 'video/mp4', mode: 'video', videoDisposition: entry.choice,
       projectDirectories: { video: base },
+      selectedDirectory: entry.productionSnapshot?.selectedDownloadFolder
+        ? resolveSelectedDownloadDirectory(CREATIVE_ASSET_DIR, project, entry.productionSnapshot.selectedDownloadFolder) : '',
       ...(entry.episodeSnapshot ? { episode: entry.episodeSnapshot.episode, platformFolder: currentEpisodePlatform(entry.episodeSnapshot) }
         : { legacyDay: entry.day }),
     });
@@ -498,9 +503,13 @@ function captureArchiveContext(serviceId, mode, kind, project = creativeProjectS
   if (!service || !project?.available) throw new Error('下载所属剧本或网站不可用');
   const projectDirectories = directoriesForProject(project);
   const episodeSnapshot = captureDownloadEpisode(serviceId, kind, project.id);
-  return { projectDirectories, episodeSnapshot, serviceLabel: service.label,
+  const selectedFolder = selectedDownloadFolders.get(project.id) || '';
+  const selectedDirectory = selectedFolder
+    ? resolveSelectedDownloadDirectory(CREATIVE_ASSET_DIR, project, selectedFolder) : '';
+  return { projectDirectories, episodeSnapshot, selectedDirectory, serviceLabel: service.label,
     categoryLabel: project.categories?.find(item => item.id === DOWNLOAD_EPISODE_CATEGORIES[kind])?.label || '',
-    productionSnapshot: captureProductionContext(serviceId, mode, project) };
+    productionSnapshot: { ...captureProductionContext(serviceId, mode, project),
+      ...(selectedDirectory ? { selectedDownloadFolder: selectedFolder } : {}) } };
 }
 
 function episodeTargetOptions(snapshot) {
@@ -510,7 +519,7 @@ function episodeTargetOptions(snapshot) {
 function validateArchiveDirectory(categoryRoot, directory) {
   if (!path.isAbsolute(categoryRoot || '') || !path.isAbsolute(directory || '')) throw new Error('下载归档目录未连接');
   const categoryRelative = path.relative(CREATIVE_ASSET_DIR, categoryRoot).split(path.sep).join('/');
-  if (!resolveCreativeAsset(CREATIVE_ASSET_DIR, categoryRelative, 'folder')) throw new Error('下载所属剧本分类不可用');
+  if (categoryRoot !== CREATIVE_ASSET_DIR && !resolveCreativeAsset(CREATIVE_ASSET_DIR, categoryRelative, 'folder')) throw new Error('下载所属剧本分类不可用');
   const relative = path.relative(categoryRoot, directory);
   if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error('下载归档目录越界');
   for (let current = directory; current !== categoryRoot; current = path.dirname(current)) {
@@ -1127,6 +1136,7 @@ function configureSession(serviceId, ses) {
         mimeType: item.getMimeType(),
         projectDirectories: archiveContext.projectDirectories,
         ...episodeTargetOptions(archiveContext.episodeSnapshot),
+        selectedDirectory: archiveContext.selectedDirectory,
         exists: candidate => fs.existsSync(candidate) || [...activeDownloadItems.values()].some(transfer => transfer.record.savePath === candidate),
       });
       if (target.kind === 'video') {
@@ -1135,7 +1145,7 @@ function configureSession(serviceId, ses) {
           episodeSnapshot: archiveContext.episodeSnapshot, productionSnapshot: archiveContext.productionSnapshot });
         savePath = staged.stagePath;
       } else {
-        ensureArchiveDirectory(archiveContext.projectDirectories[target.kind === 'file' ? 'downloads' : target.kind], target.directory);
+        ensureArchiveDirectory(archiveContext.selectedDirectory ? CREATIVE_ASSET_DIR : archiveContext.projectDirectories[target.kind === 'file' ? 'downloads' : target.kind], target.directory);
         savePath = target.kind === 'image' ? sequentialImportTarget(target.directory, target.kind, originalName, archiveContext.categoryLabel) : target.targetPath;
       }
       item.setSavePath(savePath);
@@ -1309,8 +1319,9 @@ async function archiveExternalPaths(filePaths, allowedKinds, { renameSequentiall
         mimeType: '',
         projectDirectories: archiveContext.projectDirectories,
         ...episodeTargetOptions(archiveContext.episodeSnapshot),
+        selectedDirectory: archiveContext.selectedDirectory,
       });
-      ensureArchiveDirectory(archiveContext.projectDirectories[kind], target.directory);
+      ensureArchiveDirectory(archiveContext.selectedDirectory ? CREATIVE_ASSET_DIR : archiveContext.projectDirectories[kind], target.directory);
       const chooseTarget = () => renameSequentially
         ? sequentialImportTarget(target.directory, kind, filename, archiveContext.categoryLabel)
         : uniquePath(path.join(target.directory, sanitizeFilename(filename)));
@@ -1462,8 +1473,9 @@ async function saveRemoteImageBuffer(buffer, sourceUrl, mimeType, archiveContext
     serviceLabel: archiveContext.serviceLabel, mode: safeMode, filename, mimeType,
     projectDirectories: archiveContext.projectDirectories,
     ...episodeTargetOptions(archiveContext.episodeSnapshot),
+    selectedDirectory: archiveContext.selectedDirectory,
   });
-  ensureArchiveDirectory(archiveContext.projectDirectories.image, target.directory);
+  ensureArchiveDirectory(archiveContext.selectedDirectory ? CREATIVE_ASSET_DIR : archiveContext.projectDirectories.image, target.directory);
   const targetPath = sequentialImportTarget(target.directory, 'image', filename, archiveContext.categoryLabel);
   await fs.promises.writeFile(targetPath, buffer, { flag: 'wx' });
   const id = `drop-${Date.now()}-${++downloadSequence}`;
@@ -3566,6 +3578,21 @@ function registerIpc() {
   ipcMain.handle('creator:get-download-episodes', event => {
     requireTrusted(event, 'creator');
     return publicDownloadEpisodes();
+  });
+  ipcMain.handle('creator:set-download-folder', (event, payload = {}) => {
+    requireTrusted(event, 'creator');
+    const project = creativeProjectStore.active();
+    if (!project?.available || payload.projectId !== project.id) throw new Error('剧本已切换，未修改下载目录');
+    const folder = String(payload.path || '');
+    // Keep an invalid selection fail-closed instead of silently reusing an old episode.
+    selectedDownloadFolders.set(project.id, folder);
+    const pendingEpisode = publicDownloadEpisodes(project).states.find(entry => entry.episodePath === folder && entry.available);
+    if (pendingEpisode) {
+      const categoryRoot = directoriesForProject(project)[pendingEpisode.kind];
+      ensureArchiveDirectory(categoryRoot, path.join(CREATIVE_ASSET_DIR, ...folder.split('/')));
+    }
+    resolveSelectedDownloadDirectory(CREATIVE_ASSET_DIR, project, folder);
+    return { projectId: project.id, path: folder };
   });
   ipcMain.handle('asset:get-download-episodes', event => {
     requireTrusted(event, 'asset');

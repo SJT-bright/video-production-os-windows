@@ -1,8 +1,8 @@
 # Windows 发布
 
-[最新版 v1.3.14](https://github.com/SJT-bright/video-production-os-windows/releases/tag/v1.3.14) · [源码及构建说明](WINDOWS-REPRODUCE.md)。
+[最新版 v1.3.15](https://github.com/SJT-bright/video-production-os-windows/releases/tag/v1.3.15) · [源码及构建说明](WINDOWS-REPRODUCE.md)。
 
-完整解压 `VideoProductionOS-Windows-v1.3.14-x64.zip`，双击里面的 `视频制作OS.exe`。不要只提取或移动 EXE；软件运行需要同目录的 DLL、resources、locales 和音频组件。
+完整解压 `VideoProductionOS-Windows-v1.3.15-x64.zip`，双击里面的 `视频制作OS.exe`。不要只提取或移动 EXE；软件运行需要同目录的 DLL、resources、locales 和音频组件。
 
 升级时只替换软件文件夹，不删除 `%APPDATA%\视频制作 OS`，素材和登录不放在发布包内。源码运行与下载版工作区独立，不会自动导入作者的数据或源码开发数据。
 

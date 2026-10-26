@@ -6,7 +6,7 @@ on:
       tag:
         description: 'Verified release tag'
         required: true
-        default: 'v1.3.14'
+        default: 'v1.3.15'
 
 permissions:
   contents: write
@@ -55,6 +55,9 @@ jobs:
         run: node test_mac_release.cjs --arch universal
       - name: Verify packaged image rename, split layout and sidebar persistence
         run: node test_latest_release_native.cjs
+      - name: Verify current destination with a real packaged download
+        run: |
+          CURRENT_FOLDER_EXECUTABLE="$PWD/dist/public-release/视频制作 OS-darwin-universal/视频制作 OS.app/Contents/MacOS/VideoProductionOS" CURRENT_FOLDER_EVIDENCE="$PWD/test-artifacts/latest-release-native/current-download-folder" node test_current_download_folder_native.cjs
       - name: Verify packaged GitHub Star, version check and retained update state
         run: node test_github_updates_native.cjs
       - name: Preserve native feature verification receipts
@@ -137,6 +140,12 @@ jobs:
         run: node test_windows_release.cjs
       - name: Verify packaged image rename, split layout and sidebar persistence
         run: node test_latest_release_native.cjs
+      - name: Verify current destination with a real packaged download
+        run: |
+          $env:CURRENT_FOLDER_EXECUTABLE = "$PWD/dist/视频制作OS-win32-x64/视频制作OS.exe"
+          $env:CURRENT_FOLDER_EVIDENCE = "$PWD/test-artifacts/latest-release-native/current-download-folder"
+          node test_current_download_folder_native.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify packaged GitHub Star, version check and retained update state
         run: node test_github_updates_native.cjs
       - name: Preserve native feature verification receipts

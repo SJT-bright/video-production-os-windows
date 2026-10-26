@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('creatorAPI', Object.freeze({
   automation: (name, args = {}) => ipcRenderer.invoke('creator:automation', { name, arguments: args }),
   getConfig: () => ipcRenderer.invoke('creator:get-config'),
   getDownloadEpisodes: () => ipcRenderer.invoke('creator:get-download-episodes'),
+  setDownloadFolder: payload => ipcRenderer.invoke('creator:set-download-folder', payload),
   advanceDownloadEpisode: payload => ipcRenderer.invoke('creator:advance-download-episode', payload),
   selectDownloadEpisode: payload => ipcRenderer.invoke('creator:select-download-episode', payload),
   onDownloadEpisodesChanged: callback => subscribe('creator:download-episodes-changed', callback),
