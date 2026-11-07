@@ -139,6 +139,7 @@ function createController(filePath) {
     workspaceNavigation: Promise.resolve(), activeView: null, assetView: null, assetViewAttached: false,
     chromeOverlaysHidden: false, platformViewsRequestedHidden: false,
     platformBackdropSequence: 0, platformBackdropPending: null,
+    browserProjectId: 'fixture',
     activeServiceId: null, activeMode: initial?.activeMode || 'image',
     activeTabId: null, tabSequence: 0, browserBounds: { x: 410, y: 112, width: 900, height: 700 },
     assetPanelState: { open: false, layout: 'overlay', width: 520 },
@@ -147,7 +148,8 @@ function createController(filePath) {
     restoringBrowserSession: false, closingWorkspace: false, browserSessionRestored: false, lastBrowserSnapshot: '',
     browserSessionStore: {
       load: () => store.load(),
-      save: snapshot => {
+      save: (projectId, snapshot) => {
+        assert.equal(projectId, 'fixture');
         if (failWrites) throw new Error('injected disk full');
         const saved = store.save(snapshot);
         writes.push(saved);

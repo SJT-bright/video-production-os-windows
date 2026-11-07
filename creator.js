@@ -483,7 +483,7 @@ function renderProject() {
   const project = state.config?.project;
   const label = project?.name || (state.projectId === 'inspiration' ? '灵感生成' : '当前剧本');
   el.currentProject.textContent = `${label} ⌄`;
-  el.currentProject.title = `当前：${label}。下拉快速切换剧本`;
+  el.currentProject.title = `当前：${label}。切换会保存网页地址并关闭当前网页；网页内未提交的内容请先保存`;
   el.currentProject.setAttribute('aria-label', `当前剧本：${label}，下拉选择其他剧本`);
 }
 
@@ -628,36 +628,39 @@ async function openProjectMenu() {
 }
 
 async function applyProjectChange(project) {
-  if (!project?.id || project.id === state.projectId) {
-    if (project) {
-      state.config.project = project;
-      renderProject();
-    }
+  if (!project?.id) return;
+  // SSE and native notifications can arrive out of order after a quick switch.
+  // Read the current project and its browser snapshot together from main.
+  const config = await API.getConfig();
+  const current = config.project || project;
+  if (current.id === state.projectId) {
+    state.config.project = current;
+    renderProject();
     return;
   }
   closeProjectMenu();
+  closeTabContextMenu();
+  closeFindBar();
   if (!saveWorkspace(true)) throw new Error('原剧本工作区未保存，未切换创作材料');
-  // 原生模式通知和面板自动保存可在 getConfig 等待期间到达。
-  // 先获取配置，再同步切换键/重置/加载；不能把目标键暴露给尚未加载的空工作区。
-  const config = await API.getConfig();
-  if (!saveWorkspace(true)) throw new Error('原剧本工作区未保存，未切换创作材料');
-  state.projectId = project.id;
+  state.projectId = current.id;
   resetProjectWorkspace();
   state.config = config;
-  state.config.project = state.config.project || project;
+  state.mode = config.browser?.mode || state.mode;
   loadWorkspace();
+  state.browser = null;
+  browserChromeSignature = '';
+  state.activeService = effectiveServiceForMode(state.mode);
+  renderProject();
+  renderMode();
+  if (config.browser) applyBrowserState(config.browser);
   state.downloads.clear();
   for (const download of await API.getDownloads()) state.downloads.set(download.id, download);
   try { await loadProduction(true); }
   catch (error) {
     state.production = { available: false, context: null, inbox: [], stats: {}, error: error.message };
   }
-  state.activeService = effectiveServiceForMode(state.mode);
-  renderProject();
-  renderMode();
-  if (state.browser) applyBrowserState(state.browser);
   await loadAssetItems();
-  showToast(`已切换到「${project.name}」`);
+  showToast(`已切换到「${current.name}」`);
 }
 
 function visibleTabs() {
@@ -4854,7 +4857,7 @@ async function selectService(serviceId) {
   el.addressInput.setAttribute('aria-invalid', 'false');
   el.loadDot.classList.add('loading');
   try {
-    const browser = await API.selectService(serviceId, state.mode);
+    const browser = await API.selectService(serviceId, state.mode, state.projectId);
     if (browser) applyBrowserState(browser);
     queueBoundsUpdate();
   } catch (error) {
@@ -4891,11 +4894,12 @@ async function restoreModeBrowser(mode = state.mode) {
   state.modeSwitchPending = true;
   document.querySelectorAll('.mode-button').forEach(button => { button.disabled = true; });
   try {
-    const browser = await API.setMode(mode, effectiveServiceForMode(mode));
+    const browser = await API.setMode(mode, effectiveServiceForMode(mode), state.projectId);
     if (browser?.mode !== mode || !Array.isArray(browser.tabs)
       || browser.tabs.some(tab => !['image', 'video'].includes(tab.mode))) {
       throw new Error('桌面浏览器版本不匹配，请保存网页内容后完全退出并重新打开应用。');
     }
+    if (browser.projectId && browser.projectId !== state.projectId) return false;
     // 只有原生浏览器确认成功，才提交界面模式；失败时保留原标签和草稿。
     captureTemplateCreateDraft();
     // 读取用户此刻的折叠选择，两个模式共享它，不因新模式有没有模板而重开。
@@ -5519,7 +5523,7 @@ function bindSplitControls() {
 let browserChromeSignature = '';
 
 function applyBrowserState(browser) {
-  if (!browser) return;
+  if (!browser || (browser.projectId && browser.projectId !== state.projectId)) return;
   if (browser.mode && browser.mode !== state.mode) return;
   const split = normalizeSplit(browser.split);
   // Resizing changes geometry, not tab contents. Avoid replacing the entire
@@ -5614,12 +5618,12 @@ async function clearBrowserTabs() {
   if (state.modeSwitchPending || !state.browser?.tabs?.length) return;
   el.clearBrowserTabs.disabled = true;
   try {
-    const browser = await API.clearTabs();
+    const browser = await API.clearTabs(state.projectId);
     if (browser?.clearCancelled) return;
     applyBrowserState(browser);
     closePlatformPopover();
     queueBoundsUpdate();
-    showToast('已清空全部网页；登录和素材保留');
+    showToast('已清空本剧本的网页；其他剧本不受影响');
   } catch (error) {
     showToast(desktopBrowserError(error, '清空网页失败'));
   } finally { renderPlatforms(); }
@@ -5630,7 +5634,7 @@ async function duplicateTab(tab) {
   const service = serviceById(tab.serviceId);
   const label = serviceLabel(service);
   try {
-    const browser = await API.openTab(tab.serviceId, tab.mode, tab.id);
+    const browser = await API.openTab(tab.serviceId, tab.mode, tab.id, state.projectId);
     if (browser) applyBrowserState(browser);
     queueBoundsUpdate();
     showToast(`已复制「${label}」标签，可同时开多个并行使用`);
@@ -5647,7 +5651,7 @@ async function duplicateActiveTab() {
   }
   el.duplicateTab.disabled = true;
   try {
-    const browser = await API.openTab(state.activeService, state.mode);
+    const browser = await API.openTab(state.activeService, state.mode, null, state.projectId);
     if (browser) applyBrowserState(browser);
     closePlatformPopover();
     queueBoundsUpdate();
@@ -5672,7 +5676,7 @@ async function openAddressInNewTab() {
   }
   try {
     // 复制当前平台再导航：新标签沿用同一登录分区，原网页保持不动
-    await API.openTab(state.activeService, state.mode);
+    await API.openTab(state.activeService, state.mode, null, state.projectId);
     await navigateToAddress();
   } catch (error) {
     showToast(error.message || '新标签打开失败');
@@ -5690,7 +5694,7 @@ async function navigateToAddress() {
   el.addressGo.disabled = true;
   el.addressInput.setAttribute('aria-invalid', 'false');
   try {
-    const browser = await API.navigateUrl(address);
+    const browser = await API.navigateUrl(address, state.projectId);
     el.addressInput.blur();
     if (browser) applyBrowserState(browser);
   } catch (error) {
@@ -5733,7 +5737,7 @@ function renderBrowserRecovery(browser) {
 async function reloadCurrentPlatform() {
   el.browserRecoveryReload.disabled = true;
   try {
-    const reloaded = await API.navigate('reload');
+    const reloaded = await API.navigate('reload', state.projectId);
     if (!reloaded) await selectService(state.activeService);
   } catch (error) {
     showToast(`重新加载失败：${error.message}`);
@@ -6319,7 +6323,7 @@ function bindEvents() {
   document.querySelectorAll('[data-nav]').forEach(button => {
     button.addEventListener('click', () => {
       const action = button.dataset.action || button.dataset.nav;
-      API.navigate(action).catch(error => showToast(error.message));
+      API.navigate(action, state.projectId).catch(error => showToast(error.message));
     });
   });
   new ResizeObserver(queueBoundsUpdate).observe(el.browserStage);
@@ -6422,7 +6426,7 @@ function bindEvents() {
     }
     if (event.key === 'F5') {
       event.preventDefault();
-      API.navigate('reload').catch(error => showToast(error.message));
+      API.navigate('reload', state.projectId).catch(error => showToast(error.message));
       return;
     }
     if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
@@ -6449,12 +6453,12 @@ function bindEvents() {
     // 强制刷新（对标浏览器 Shift+刷新）：忽略缓存重新加载平台页
     if (lower === 'r' && event.shiftKey) {
       event.preventDefault();
-      API.navigate('hard-reload').catch(error => showToast(error.message));
+      API.navigate('hard-reload', state.projectId).catch(error => showToast(error.message));
       return;
     }
     if (lower === 'r') {
       event.preventDefault();
-      API.navigate('reload').catch(error => showToast(error.message));
+      API.navigate('reload', state.projectId).catch(error => showToast(error.message));
       return;
     }
     // 撤销关闭标签（对标浏览器 Ctrl/⌘+Shift+T）：主进程最近关闭栈按时间恢复
@@ -6492,12 +6496,12 @@ function bindEvents() {
     }
     if (event.key === '[') {
       event.preventDefault();
-      API.navigate('back').catch(error => showToast(error.message));
+      API.navigate('back', state.projectId).catch(error => showToast(error.message));
       return;
     }
     if (event.key === ']') {
       event.preventDefault();
-      API.navigate('forward').catch(error => showToast(error.message));
+      API.navigate('forward', state.projectId).catch(error => showToast(error.message));
       return;
     }
     if (event.key === '=' || event.key === '+') {

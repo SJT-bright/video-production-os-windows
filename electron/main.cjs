@@ -32,7 +32,7 @@ const {
   planTabDestroyed,
 } = require('./split-view-state.cjs');
 const { createCreatorPlatformStore } = require('./creator-platforms.cjs');
-const { createBrowserSessionStore } = require('./browser-session.cjs');
+const { createProjectBrowserSessionStore } = require('./browser-session.cjs');
 const { createCreatorFileReadPolicy, authorizeSelectedCreatorFileRead, observeCreatorUploadFailures } = require('./creator-file-access.cjs');
 const { buildCreatorContextMenuTemplate } = require('./creator-context-menu.cjs');
 const { classifyDownload, resolveDownloadTarget, createBrowserDownloadDeletion, resolveSelectedDownloadDirectory, sanitizeFilename, uniquePath } = require('./download-router.cjs');
@@ -180,12 +180,18 @@ const ALLOWED_TAB_MENU_ACTIONS = new Set([
 ]);
 // 这四个动作在 creator 页 DOM 菜单里是红色危险项；native 通道不传外观，菜单窗按白名单 id 补齐。
 const TAB_MENU_DANGER_ACTIONS = new Set(['close-left', 'close-others', 'close-right', 'close']);
-const browserSessionStore = createBrowserSessionStore({
-  filePath: path.join(app.getPath('userData'), 'creator-browser-session.json'),
+let browserProjectId = creativeProjectStore.active().id;
+const migrationOwner = creativeProjectStore.list().find(project =>
+  project.folder === '逼我退差价' || project.folder === '逼我退差价？');
+const browserSessionStore = createProjectBrowserSessionStore({
+  filePath: path.join(app.getPath('userData'), 'creator-project-browser-sessions.json'),
+  legacyFilePath: path.join(app.getPath('userData'), 'creator-browser-session.json'),
+  legacyOwnerId: migrationOwner?.id || browserProjectId,
+  initialProjectId: browserProjectId,
   onWarning: message => console.warn(`[browser-session] ${message}`),
 });
-const initialBrowserSession = browserSessionStore.load();
-let initializedModes = { image: false, video: false, ...initialBrowserSession?.initializedModes };
+const initialBrowserSession = browserSessionStore.load(browserProjectId);
+let initializedModes = { image: true, video: true, ...initialBrowserSession?.initializedModes };
 let restoringBrowserSession = false;
 let closingWorkspace = false;
 let browserSessionRestored = false;
@@ -612,6 +618,7 @@ function browserState() {
   if (!tab || tab.view.webContents.isDestroyed()) {
     const service = serviceById(activeServiceId);
     return {
+      projectId: browserProjectId,
       mode: activeMode,
       tabId: activeTabId,
       serviceId: activeServiceId,
@@ -625,6 +632,7 @@ function browserState() {
   }
   const contents = tab.view.webContents;
   return {
+    projectId: browserProjectId,
     mode: tab.mode,
     tabId: tab.id,
     serviceId: tab.serviceId,
@@ -661,7 +669,7 @@ function pushBrowserState() {
   sendCreator('creator:browser-state', browserState());
 }
 
-function persistBrowserSession() {
+function persistBrowserSession({ required = false } = {}) {
   if (restoringBrowserSession || closingWorkspace || !browserSessionRestored) return;
   const snapshot = {
     schemaVersion: 1,
@@ -676,13 +684,15 @@ function persistBrowserSession() {
   };
   const serialized = JSON.stringify(snapshot);
   if (serialized === lastBrowserSnapshot) return;
-  try { browserSessionStore.save(snapshot); lastBrowserSnapshot = serialized; }
-  catch (error) { logDiagnostic('browser-session-save', error); }
+  try { browserSessionStore.save(browserProjectId, snapshot); lastBrowserSnapshot = serialized; }
+  catch (error) {
+    logDiagnostic('browser-session-save', error);
+    if (required) throw new Error('网页记录未能保存，已保留当前剧本，请稍后重试', { cause: error });
+  }
 }
 
-function restoreBrowserSession() {
+function restoreBrowserSession(saved = browserSessionStore.load(browserProjectId)) {
   if (browserSessionRestored) return;
-  const saved = browserSessionStore.load();
   restoringBrowserSession = true;
   try {
     if (saved) {
@@ -701,11 +711,43 @@ function restoreBrowserSession() {
           : [...browserTabs.values()].find(tab => tab.mode === mode)?.id || null;
       }
       if (lastModeTabs[activeMode]) activateTab(lastModeTabs[activeMode]);
+    } else {
+      initializedModes = { image: true, video: true };
     }
   } finally {
     restoringBrowserSession = false;
     browserSessionRestored = true;
   }
+}
+
+// One synchronous transition for native selection and local HTTP create/activate.
+function prepareProjectBrowserSwitch(nextId) {
+  if (nextId === browserProjectId) return;
+  if ([...activeDownloadItems.values()].some(item => ['progressing', 'paused'].includes(item.record?.state))) {
+    throw new Error('还有下载任务，请完成或取消下载后再切换剧本');
+  }
+  const saved = browserSessionStore.load(nextId);
+  persistBrowserSession({ required: true });
+  return () => {
+    browserSessionRestored = false;
+    closeTabMenuWindowNow();
+    closeFloatVideoWindow('project-changed');
+    splitViewSession = disableSplit();
+    for (const tab of [...browserTabs.values()]) destroyTab(tab);
+    activeView = null;
+    activeTabId = null;
+    activeServiceId = null;
+    lastModeTabs.image = lastModeTabs.video = null;
+    closedTabHistory.length = 0;
+    browserProjectId = nextId;
+    lastBrowserSnapshot = '';
+    if (creatorWindow && !creatorWindow.isDestroyed()) {
+      restoreBrowserSession(saved);
+      sendCreator('creator:project-changed', creativeProjectStore.active());
+      applyCreatorLayout();
+      pushBrowserState();
+    }
+  };
 }
 
 function showEmptyBrowserMode(mode) {
@@ -731,19 +773,20 @@ function showEmptyBrowserMode(mode) {
 
 async function confirmClearBrowserTabs() {
   const win = creatorWindow;
+  const projectId = browserProjectId;
   const cancelled = () => ({ ...browserState(), clearCancelled: true });
   if (!browserTabs.size || !win || win.isDestroyed()) return cancelled();
   const { response } = await dialog.showMessageBox(win, {
     type: 'question',
     title: '确认清空网页',
-    message: '确定清空全部网页吗？',
-    detail: '将关闭图片模式和视频模式的全部标签，网页中未提交的内容可能丢失。网站登录、剧本和素材会保留。',
+    message: '确定清空本剧本的网页吗？',
+    detail: '将关闭本剧本在图片和视频模式的全部标签。其他剧本的标签、网站登录和素材会保留。',
     buttons: ['取消', '清空网页'],
     defaultId: 0,
     cancelId: 0,
     noLink: true,
   });
-  if (response !== 1 || win.isDestroyed()) return cancelled();
+  if (response !== 1 || win.isDestroyed() || browserProjectId !== projectId) return cancelled();
   return clearBrowserTabs();
 }
 
@@ -757,7 +800,7 @@ function clearBrowserTabs() {
     initializedModes: { image: true, video: true },
   };
   // 先落盘，再关闭网页；写入失败时保留所有标签，并把错误交给界面。
-  browserSessionStore.save(emptySnapshot);
+  browserSessionStore.save(browserProjectId, emptySnapshot);
   lastBrowserSnapshot = JSON.stringify(emptySnapshot);
   initializedModes = { image: true, video: true };
   restoringBrowserSession = true;
@@ -1113,6 +1156,7 @@ function configureSession(serviceId, ses) {
     const service = serviceById(serviceId);
     if (!service) { event.preventDefault(); return; }
     const downloadingTab = sourceContents ? downloadOwners.get(sourceContents) : tabById(activeTabId);
+    if (downloadingTab && downloadingTab.projectId !== browserProjectId) { event.preventDefault(); return; }
     const displayLabel = downloadingTab && downloadingTab.serviceId === serviceId
       ? serviceTabLabel(downloadingTab)
       : service.label;
@@ -1639,6 +1683,8 @@ function createTab(serviceId, mode, { activate = true, id, initialUrl, customNam
     return { action: 'allow', overrideBrowserWindowOptions: securePopupOptions(ses) };
   });
   contents.on('did-create-window', childWindow => {
+    tab.popups.add(childWindow);
+    childWindow.once('closed', () => tab.popups.delete(childWindow));
     downloadOwners.set(childWindow.webContents, tab);
     installCreatorContextMenu(childWindow.webContents, childWindow);
   });
@@ -1654,6 +1700,8 @@ function createTab(serviceId, mode, { activate = true, id, initialUrl, customNam
     pinned: !!pinned,
     audible: false,
     needsLoad: deferLoad,
+    projectId: browserProjectId,
+    popups: new Set(),
     view,
     session: ses,
     displayLabel: '',
@@ -1825,6 +1873,8 @@ function switchBrowserMode(mode, preferredServiceId) {
 }
 
 function destroyTab(tab) {
+  ++tab.loadSeq;
+  for (const popup of tab.popups || []) if (!popup.isDestroyed()) popup.destroy();
   if (tab.loadTimer) { clearTimeout(tab.loadTimer); tab.loadTimer = null; }
   if (lastModeTabs[tab.mode] === tab.id) lastModeTabs[tab.mode] = null;
   let splitChanged = false;
@@ -2417,33 +2467,28 @@ async function createMainWindow(pickerMode = '') {
   return navigateWorkspace('main', pickerMode ? { projectPicker: modeOrDefault(pickerMode) } : {});
 }
 
-let creatorProjectId = '';
-
 async function createCreatorWindow(initialRequest = 'image') {
   const request = initialRequest && typeof initialRequest === 'object' ? initialRequest : { mode: initialRequest };
-  const mode = modeOrDefault(request.mode);
+  let mode = modeOrDefault(request.mode);
   const requestedProjectId = String(request.projectId || '').trim();
-  // The HTTP create/activate endpoint can update the store before this IPC.
-  // Compare with the project shown by the creator, not the already-updated store.
-  const previousProjectId = creatorProjectId || creativeProjectStore.active()?.id || '';
+  const previousProjectId = browserProjectId;
   if (requestedProjectId && requestedProjectId !== creativeProjectStore.active()?.id) assetDeleteProjectEpoch++;
   const project = requestedProjectId ? creativeProjectStore.activate(requestedProjectId) : creativeProjectStore.active();
   if (!project) throw new Error('请先选择一个剧本或灵感工作区');
-  creatorProjectId = project.id;
   // 换剧本：正在置顶的单视频不再属于当前剧本，立即关浮窗并通知左栏还原卡片（绝不拖出旧剧本文件）。
   if (floatVideoState && floatVideoState.projectId !== project.id) closeFloatVideoWindow('project-changed');
   productionStore?.activateProject(project.id);
   serverModule.broadcastCreativeProjects?.();
   serverModule.broadcastCreativeAssets?.();
   serverModule.broadcastProduction?.();
-  activeMode = mode;
-  const projectChanged = !!(requestedProjectId && previousProjectId && requestedProjectId !== previousProjectId);
+  const projectChanged = previousProjectId !== project.id;
+  if (projectChanged) mode = activeMode;
+  else activeMode = mode;
   const { reused } = await navigateWorkspace('creator', { mode, project: project.id });
-  if (projectChanged) exitSplitToActivePage();
+  if (creativeProjectStore.active()?.id !== project.id) return { ok: true, reused, project: creativeProjectStore.active() };
   setImmediate(() => { recoverVideoDownloads().catch(error => logDiagnostic('video-download-recovery', error)); });
   if (reused) {
-    sendCreator('creator:project-changed', project);
-    sendCreator('creator:set-mode', mode);
+    if (!projectChanged) sendCreator('creator:set-mode', mode);
     sendDownloadEpisodes(project);
   }
   if (assetView && !assetView.webContents.isDestroyed()) { assetViewGeneration += 1; assetView.webContents.reloadIgnoringCache(); }
@@ -3673,16 +3718,19 @@ function registerIpc() {
 
   ipcMain.handle('creator:select-service', (event, payload = {}) => {
     requireTrusted(event, 'creator');
+    if (payload.projectId && payload.projectId !== browserProjectId) throw new Error('剧本已切换，请重试');
     return selectServiceTab(String(payload.serviceId || ''), payload.mode);
   });
 
   ipcMain.handle('creator:set-mode', (event, payload = {}) => {
     requireTrusted(event, 'creator');
+    if (payload.projectId && payload.projectId !== browserProjectId) throw new Error('剧本已切换，请重试');
     return switchBrowserMode(payload.mode, payload.serviceId);
   });
 
   ipcMain.handle('creator:open-tab', (event, payload = {}) => {
     requireTrusted(event, 'creator');
+    if (payload.projectId && payload.projectId !== browserProjectId) throw new Error('剧本已切换，请重试');
     // 多开：同一平台再开一个独立网页（类似浏览器的“复制标签页”），
     // 指定 afterTabId 时新标签插到源标签旁边，可无限多开并行对话。
     const sourceTabId = String(payload.afterTabId || '');
@@ -3762,8 +3810,9 @@ function registerIpc() {
     return closeTab(String(payload.tabId || ''));
   });
 
-  ipcMain.handle('creator:clear-tabs', event => {
+  ipcMain.handle('creator:clear-tabs', (event, projectId) => {
     requireTrusted(event, 'creator');
+    if (projectId && projectId !== browserProjectId) throw new Error('剧本已切换，请重试');
     return confirmClearBrowserTabs();
   });
 
@@ -3794,8 +3843,9 @@ function registerIpc() {
     return focusSplitPaneNow(pane, { programmatic: true });
   });
 
-  ipcMain.handle('creator:navigate', (event, action) => {
+  ipcMain.handle('creator:navigate', (event, action, projectId) => {
     requireTrusted(event, 'creator');
+    if (projectId && projectId !== browserProjectId) throw new Error('剧本已切换，请重试');
     if (!activeView || !ALLOWED_NAV_ACTIONS.has(action)) return false;
     dismissAssetOverlay();
     const contents = activeView.webContents;
@@ -3818,8 +3868,9 @@ function registerIpc() {
     return true;
   });
 
-  ipcMain.handle('creator:navigate-url', (event, address) => {
+  ipcMain.handle('creator:navigate-url', (event, address, projectId) => {
     requireTrusted(event, 'creator');
+    if (projectId && projectId !== browserProjectId) throw new Error('剧本已切换，请重试');
     if (!activeView || !activeServiceId) throw new Error('请先选择一个创作平台');
     const url = normalizeBrowserAddress(address);
     const activeTab = tabById(activeTabId);
@@ -4081,7 +4132,7 @@ function registerIpc() {
     if (selection.projectId === creativeProjectStore.active()?.id) {
       return { ok: true, unchanged: true, project: creativeProjectStore.active() };
     }
-    // Reuse the existing project transition; keep browser tabs and login sessions alive.
+    // Switch saved project tabs while keeping the shared website login partitions.
     return createCreatorWindow({ mode, projectId: selection.projectId });
   });
 
@@ -4502,6 +4553,7 @@ if (!gotSingleInstanceLock) {
   });
 
   app.whenReady().then(async () => {
+    creativeProjectStore.setActiveChangeHandler(prepareProjectBrowserSwitch);
     initDiagnostics();
     app.on('child-process-gone', (_event, details) => logDiagnostic('child-process', JSON.stringify(details)));
     configureApplicationMenu();

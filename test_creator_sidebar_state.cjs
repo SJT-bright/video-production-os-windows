@@ -8,6 +8,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { _electron } = require('playwright');
+const { createCreativeProjectStore } = require('./creative-projects.cjs');
 
 const globalKey = 'videoOS.creator.global.v2';
 const projectPrefix = 'videoOS.creator.project.v2.';
@@ -48,6 +49,8 @@ async function main() {
     fs.mkdirSync(path.join(assets, alphaName, '人物资产', longName), { recursive: true });
     fs.mkdirSync(path.join(assets, betaName, '场景资产'), { recursive: true });
     fs.mkdirSync(dataDir); fs.mkdirSync(obsidian);
+    const fixtureProjects = createCreativeProjectStore({ filePath: path.join(dataDir, 'creative-projects.json'), assetRoot: assets });
+    fixtureProjects.activate(fixtureProjects.list().find(project => project.name === alphaName).id);
     const env = { ...process.env, CREATOR_BROWSER_TEST: '1', VIDEO_OS_SMOKE_TEST: '0', VIDEO_OS_TAB_MENU_TEST: '0',
       VIDEO_OS_PORT: String(await freePort()), VIDEO_OS_PROJECT_ROOT: projectRoot, VIDEO_OS_TEST_PROJECT_ROOT: projectRoot,
       VIDEO_OS_DATA_DIR: dataDir, VIDEO_OS_USER_DATA: profile, OBSIDIAN_VAULT_PATH: obsidian,
@@ -88,21 +91,24 @@ async function main() {
         && !document.querySelector(`.mode-button[data-mode="${value}"]`).disabled, value);
     };
     if ((await browser()).mode !== 'image') await mode('image');
+    if (!(await browser()).tabId) await creator.evaluate(() => window.creatorAPI.openTab('gpt', 'image'));
     const sourceTabId = (await browser()).tabId;
-    await application.evaluate(({ BrowserWindow }) => {
+    const bindPlatformProbe = () => until(() => application.evaluate(({ BrowserWindow }) => {
       const host = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().includes('/creator.html'));
       const view = host.contentView.children.find(view => view.webContents?.getURL().includes('/creator-fixture.html?service='));
-      if (!view) throw new Error('Source platform missing');
+      if (!view || view.webContents.isLoading()) return false;
       globalThis.__sidebarNativeProbe = { host, contents: view.webContents, navigations: 0, loads: 0 };
       view.webContents.on('did-navigate', () => globalThis.__sidebarNativeProbe.navigations++);
       view.webContents.on('did-finish-load', () => globalThis.__sidebarNativeProbe.loads++);
-    });
+      return true;
+    }), 'active platform ready');
+    await bindPlatformProbe();
     const platformSnapshot = () => application.evaluate(() => {
       const p = globalThis.__sidebarNativeProbe;
       return { id: p.contents.id, url: p.contents.getURL(), destroyed: p.contents.isDestroyed(),
         navigations: p.navigations, loads: p.loads };
     });
-    const baseline = await platformSnapshot(); report.platformBefore = baseline;
+    let baseline = await platformSnapshot(); report.platformBefore = baseline;
     const platformUnchanged = async label => assert.deepEqual(await platformSnapshot(), baseline, label);
     const readAccordions = () => creator.evaluate(ids => Object.fromEntries(Object.entries(ids)
       .map(([key, id]) => [key, document.getElementById(id).open])), accordions);
@@ -173,6 +179,8 @@ async function main() {
     await setAccordions({ prompt: true, scripts: true, assets: false });
     await creator.locator('#promptEditor').fill('甲剧本-图片260ms防抖竞态输入');
     await activate(beta);
+    assert.equal((await browser()).tabs.length, 0);
+    await until(() => application.evaluate(() => globalThis.__sidebarNativeProbe.contents.isDestroyed()), 'old project WebContents closed');
     await expectAccordions({ prompt: true, scripts: true, assets: false }, 'Shared accordions across projects');
     await formHidden('Another project must not inherit an unsubmitted creation form');
     assert.equal(await creator.locator('#promptEditor').inputValue(), '');
@@ -191,7 +199,10 @@ async function main() {
     assert.equal(projectStorage.alpha.templateCreateDrafts.image.name, '甲图片模板草稿');
     assert.equal(projectStorage.alpha.templateCreateDrafts.video.name, '甲视频模板草稿');
     assert.equal(projectStorage.beta.templateCreateDrafts.image.name, '乙图片模板草稿');
-    await platformUnchanged('Switching projects must not reload original platform');
+    assert.equal((await browser()).tabId, sourceTabId);
+    await bindPlatformProbe();
+    baseline = await platformSnapshot();
+    assert.notEqual(baseline.id, report.platformBefore.id);
     report.checks.projectDraftsIsolatedAndDebounceSafe = true;
     report.checks.newTemplateDraftsProjectIsolated = true;
 

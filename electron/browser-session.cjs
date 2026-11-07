@@ -107,4 +107,39 @@ function createBrowserSessionStore({ filePath, onWarning } = {}) {
   };
 }
 
-module.exports = { BROWSER_SESSION_SCHEMA_VERSION, MAX_TAB_NAME_LENGTH, createBrowserSessionStore };
+// Keep the old flat file intact for rollback. The first atomic write binds its
+// records to exactly one project, even if a different project is open at upgrade.
+function createProjectBrowserSessionStore({ filePath, legacyFilePath, legacyOwnerId, initialProjectId, onWarning }) {
+  const legacy = createBrowserSessionStore({ filePath: legacyFilePath, onWarning });
+  let document;
+  try {
+    document = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (document.schemaVersion !== 2 || !isObject(document.projects)) throw new Error('剧本网页记录格式无效');
+    for (const snapshot of Object.values(document.projects)) normalizeSnapshot(snapshot);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    const previous = legacy.load();
+    document = { schemaVersion: 2, projects: {} };
+    if (previous) document.projects[legacyOwnerId] = previous;
+    else if (!fs.existsSync(legacyFilePath)) {
+      // Retain the original first-run welcome page on a fresh installation.
+      document.projects[initialProjectId] = normalizeSnapshot({ schemaVersion: 1, activeMode: 'image', tabs: [] });
+    }
+    writeAtomically(filePath, document);
+  }
+  return {
+    load(projectId) {
+      const id = normalizeId(projectId, '剧本 ID');
+      return Object.hasOwn(document.projects, id) ? normalizeSnapshot(document.projects[id]) : null;
+    },
+    save(projectId, snapshot) {
+      const id = normalizeId(projectId, '剧本 ID');
+      const normalized = normalizeSnapshot(snapshot);
+      const next = { ...document, projects: { ...document.projects, [id]: normalized } };
+      writeAtomically(filePath, next);
+      document = next;
+    },
+  };
+}
+
+module.exports = { BROWSER_SESSION_SCHEMA_VERSION, MAX_TAB_NAME_LENGTH, createBrowserSessionStore, createProjectBrowserSessionStore };

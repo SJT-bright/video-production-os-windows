@@ -13,7 +13,7 @@ const DATA_JSON_FILES = Object.freeze([
   'creative-projects.json', 'media-sources.json', 'library-sources.json', 'library-links.json',
   'float-video-bounds.json', 'creator-workflows/workflows.json',
 ]);
-const PROFILE_JSON_FILES = Object.freeze(['creator-browser-session.json', 'creator-platforms.json']);
+const PROFILE_JSON_FILES = Object.freeze(['creator-browser-session.json', 'creator-project-browser-sessions.json', 'creator-platforms.json']);
 
 function sha256(file) { return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'); }
 

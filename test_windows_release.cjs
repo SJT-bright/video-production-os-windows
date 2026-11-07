@@ -50,9 +50,9 @@ async function run() {
       // waits for every restored WebContents, including intentionally unloaded
       // background tabs. Wake only this isolated fixture's tabs through MCP.
       launched.catch(() => {});
-      const sessionFile = path.join(profile, 'creator-browser-session.json');
+      const sessionFile = path.join(profile, 'creator-project-browser-sessions.json');
       const saved = fs.existsSync(sessionFile) ? JSON.parse(fs.readFileSync(sessionFile, 'utf8')) : null;
-      if (saved?.tabs.length) {
+      if (Object.values(saved?.projects || {}).some(project => project.tabs.length)) {
         const connectionFile = path.join(profile, 'workspace', '视频制作OS', 'data', 'creator-automation-connection.json');
         const call = async (name, args = {}) => {
           const c = JSON.parse(fs.readFileSync(connectionFile, 'utf8'));
@@ -119,7 +119,8 @@ async function run() {
     assert.equal(cancelled.clearCancelled, true, 'cancel must keep the webpages');
     const cancelState = await page.evaluate(() => window.creatorAPI.automation('browser_state'));
     assert.deepEqual(cancelState.tabs.map(tab => tab.id).sort(), tabIds);
-    const savedAfterCancel = JSON.parse(fs.readFileSync(path.join(profile, 'creator-browser-session.json'), 'utf8'));
+    const scoped = JSON.parse(fs.readFileSync(path.join(profile, 'creator-project-browser-sessions.json'), 'utf8'));
+    const savedAfterCancel = scoped.projects[cancelled.projectId];
     assert.deepEqual(savedAfterCancel.tabs.map(tab => tab.id).sort(), tabIds, 'cancel must preserve the saved session');
     await application.evaluate(() => { globalThis.__releaseClearResponse = 1; });
     const confirmed = await page.evaluate(() => window.creatorAPI.clearTabs());

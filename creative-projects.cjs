@@ -135,9 +135,12 @@ function createCreativeProjectStore(options = {}) {
 
   let document = readDocument(filePath, onWarning);
 
-  const commit = next => {
+  let prepareActiveChange;
+  const prepareCommit = id => id !== document.activeProjectId ? prepareActiveChange?.(id) : undefined;
+  const commit = (next, finish = prepareCommit(next.activeProjectId)) => {
     writeDocument(filePath, next);
     document = next;
+    finish?.();
   };
 
   const discoverFolders = () => {
@@ -279,6 +282,9 @@ function createCreativeProjectStore(options = {}) {
       const project = document.projects.find(item => nameKey(item.name) === key || nameKey(item.folder) === key);
       return project ? publicProject(project) : null;
     },
+    setActiveChangeHandler(handler) {
+      prepareActiveChange = handler;
+    },
     create(input = {}) {
       reconcile();
       const name = normalizeName(input.name);
@@ -291,7 +297,6 @@ function createCreativeProjectStore(options = {}) {
       }
       const absolute = path.join(assetRoot, name);
       if (fs.existsSync(absolute)) throw new Error('创作资产库中已经存在同名文件夹');
-      fs.mkdirSync(absolute);
       const createdAt = nowIso();
       const project = {
         id: `project-${crypto.randomUUID()}`,
@@ -301,13 +306,15 @@ function createCreativeProjectStore(options = {}) {
         createdAt,
         updatedAt: createdAt,
       };
+      const finish = prepareCommit(project.id) || null;
+      fs.mkdirSync(absolute);
       try {
         ensureStructure(project);
         commit({
           version: CREATIVE_PROJECTS_SCHEMA_VERSION,
           activeProjectId: project.id,
           projects: [...document.projects, project],
-        });
+        }, finish);
       } catch (error) {
         try {
           const entries = fs.readdirSync(absolute);
@@ -332,7 +339,6 @@ function createCreativeProjectStore(options = {}) {
         if (discovered) return publicProject(discovered);
       }
       const createdAt = nowIso();
-      fs.mkdirSync(absolute);
       const project = {
         id: `project-${crypto.randomUUID()}`,
         name,
@@ -341,12 +347,14 @@ function createCreativeProjectStore(options = {}) {
         createdAt,
         updatedAt: createdAt,
       };
+      const finish = prepareCommit(project.id) || null;
+      fs.mkdirSync(absolute);
       ensureStructure(project);
       commit({
         version: CREATIVE_PROJECTS_SCHEMA_VERSION,
         activeProjectId: project.id,
         projects: [...document.projects, project],
-      });
+      }, finish);
       return publicProject(project);
     },
     activate(id) {
