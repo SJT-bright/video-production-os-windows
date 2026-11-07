@@ -51,8 +51,11 @@ async function run() {
       // background tabs. Wake only this isolated fixture's tabs through MCP.
       launched.catch(() => {});
       const sessionFile = path.join(profile, 'creator-project-browser-sessions.json');
-      const saved = fs.existsSync(sessionFile) ? JSON.parse(fs.readFileSync(sessionFile, 'utf8')) : null;
-      if (Object.values(saved?.projects || {}).some(project => project.tabs.length)) {
+      const registryFile = path.join(profile, 'workspace', '视频制作OS', 'data', 'creative-projects.json');
+      const registry = fs.existsSync(registryFile) ? JSON.parse(fs.readFileSync(registryFile, 'utf8')) : null;
+      const scoped = fs.existsSync(sessionFile) ? JSON.parse(fs.readFileSync(sessionFile, 'utf8')) : null;
+      const saved = scoped?.projects?.[registry?.activeProjectId];
+      if (saved?.tabs.length) {
         const connectionFile = path.join(profile, 'workspace', '视频制作OS', 'data', 'creator-automation-connection.json');
         const call = async (name, args = {}) => {
           const c = JSON.parse(fs.readFileSync(connectionFile, 'utf8'));
@@ -138,6 +141,9 @@ async function run() {
     assert.equal(cleared.tabs.length, 0);
     assert.equal(fs.existsSync(path.join(appRoot, 'data')), false);
     console.log('WINDOWS_EXE_LAUNCH_PASS: packaged=true userData=true restartTabs=true cancelPreservesTabs=true confirmClearsTabs=true clearRemembered=true');
+  } catch (error) {
+    console.error('WINDOWS_EXE_LAUNCH_FAILURE:', error);
+    throw error;
   } finally {
     await application?.close();
     // Electron's renderer / crash-handler processes can release their Windows
