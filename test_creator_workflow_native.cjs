@@ -80,6 +80,12 @@ async function until(fn, label, timeout = 16000) {
 
     await startDownload('batch1'); await startDownload('batch2');
     const batchChoice1 = await chooser();
+    await until(() => {
+      const file = path.join(data, 'video-download-review/reviews.json');
+      if (!fs.existsSync(file)) return false;
+      const entries = Object.values(JSON.parse(fs.readFileSync(file)).entries);
+      return entries.length === 2 && entries.every(entry => entry.completed);
+    }, '两条下载已结束，仍等待分类');
     const beta = await api('create', { name: '隔离剧本乙' });
     await batchChoice1.locator('[data-choice="editable"]').click();
     const batchChoice2 = await chooser();

@@ -4,8 +4,8 @@
 
 ## 下载最新版
 
-- [Mac 最新版](https://github.com/SJT-bright/video-production-os/releases/latest)：v1.3.15包名为 `VideoProductionOS-Mac-v1.3.16-Universal.zip`，解压后打开 App。包含 Apple Silicon 和 Intel 架构；本地 ad-hoc 签名，未经过 Apple 公证。
-- [Windows 最新版](https://github.com/SJT-bright/video-production-os-windows/releases/latest)：v1.3.15包名为 `VideoProductionOS-Windows-v1.3.16-x64.zip`，完整解压后双击 `视频制作OS.exe`，不能只移动 EXE。
+- [Mac 最新版](https://github.com/SJT-bright/video-production-os/releases/latest)：v1.3.15包名为 `VideoProductionOS-Mac-v1.3.17-Universal.zip`，解压后打开 App。包含 Apple Silicon 和 Intel 架构；本地 ad-hoc 签名，未经过 Apple 公证。
+- [Windows 最新版](https://github.com/SJT-bright/video-production-os-windows/releases/latest)：v1.3.15包名为 `VideoProductionOS-Windows-v1.3.17-x64.zip`，完整解压后双击 `视频制作OS.exe`，不能只移动 EXE。
 - [Mac 源码](https://github.com/SJT-bright/video-production-os) · [Windows 源码](https://github.com/SJT-bright/video-production-os-windows) · [更新说明](RELEASE-NOTES.md)
 
 GitHub 自动生成的 Source code ZIP 是源码，不是可直接运行的 App。安装包无个人剧本、素材、数据库或网站登录配置。新用户会建立自己的工作区；升级时只替换软件，不删除用户数据目录。

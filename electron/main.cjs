@@ -723,7 +723,8 @@ function restoreBrowserSession(saved = browserSessionStore.load(browserProjectId
 // One synchronous transition for native selection and local HTTP create/activate.
 function prepareProjectBrowserSwitch(nextId) {
   if (nextId === browserProjectId) return;
-  if ([...activeDownloadItems.values()].some(item => ['progressing', 'paused'].includes(item.record?.state))) {
+  if ([...activeDownloadItems.values()].some(transfer => transfer.item && !transfer.finished
+    && ['progressing', 'paused'].includes(transfer.record?.state))) {
     throw new Error('还有下载任务，请完成或取消下载后再切换剧本');
   }
   const saved = browserSessionStore.load(nextId);
