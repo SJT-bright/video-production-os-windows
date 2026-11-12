@@ -462,6 +462,29 @@ try {
   assert.equal(store.listInboxPage({ projectId: projectB, offset: 200 }).items.length, 2);
   assert.equal(store.snapshot(projectA).stats.inbox, 2, 'B 的分页入库不得污染 A 的统计');
 
+  {
+ const reg=(s,p=store.activeProjectId())=>store.registerManagedAsset({projectId:p,assetPath:s,kind:'image'});
+ const old=path.join(runRoot,'创作资产库/剧本/生成图片/a.png'), target=path.join(runRoot,'创作资产库/剧本/人物资产/a.png');
+ const source=reg(old), stale=reg(target);
+ store.relocateAsset(old,target);
+ assert.equal(store.db.prepare('select path from asset_refs where id=?').get(source.id).path,target);
+ assert.match(store.db.prepare('select path from asset_refs where id=?').get(stale.id).path,/.asset-history/);
+ const exact=path.join(runRoot,'创作资产库/剧本/生成图片/b.png'), legacy=path.join(runRoot,'旧盘/创作资产库/剧本/生成图片/b.png');
+ const ex=reg(exact),leg=reg(legacy);store.relocateAsset(exact,target+'b');
+ assert.equal(store.db.prepare('select path from asset_refs where id=?').get(leg.id).path,legacy);
+ const legacyC=reg(legacy+'c');store.relocateAsset(exact+'c',target+'c');
+ assert.equal(store.db.prepare('select path from asset_refs where id=?').get(legacyC.id).path,target+'c');
+ const f=path.join(runRoot,'目录甲'),g=path.join(runRoot,'目录乙');
+ const fa=reg(path.join(f,'a.png')),fb=reg(path.join(g,'a.png'));
+ store.relocateFolder(f,g);
+ assert.equal(store.db.prepare('select path from asset_refs where id=?').get(fa.id).path,path.join(g,'a.png'));
+ assert.match(store.db.prepare('select path from asset_refs where id=?').get(fb.id).path,/.asset-history/);
+ const cross=reg(target+'cross','q'), before=reg(old+'cross');
+ assert.throws(()=>store.relocateAsset(old+'cross',target+'cross'),e=>e.code==='CROSS_PROJECT_ASSET');
+ assert.equal(store.db.prepare('select path from asset_refs where id=?').get(before.id).path,old+'cross');
+ assert.equal(store.health().ok,true);
+  }
+
   const health = store.health();
   assert.equal(health.ok, true);
   assert.deepEqual(health.integrity, [{ integrity_check: 'ok' }]);

@@ -320,21 +320,57 @@ class ProductionStore {
       // 目录迁移过的项目里，旧记录可能带旧盘符/旧根目录；用“创作资产库”起的尾部路径兜底匹配。
       const tail = oldClean.includes('创作资产库') ? oldClean.slice(oldClean.indexOf('创作资产库')) : oldClean;
       // Exact suffix, not LIKE: underscores/percent signs in filenames are literal.
-      const assets = this.db.prepare('UPDATE asset_refs SET path = ? WHERE path = ? OR substr(path, length(path) - length(?) + 1) = ?')
-        .run(newClean, oldClean, tail, tail).changes;
-      const inbox = this.db.prepare(
-        'UPDATE inbox_items SET asset_path = ?, filename = ?, updated_at = ? WHERE asset_path = ? OR substr(asset_path, length(asset_path) - length(?) + 1) = ?',
-      ).run(newClean, String(newFilename || path.basename(newClean)), nowIso(), oldClean, tail, tail).changes;
+      // Prefer the exact current identity. A migrated copy of the ledger can
+      // also contain the same suffix under an older machine's root.
+      const exact = this.db.prepare('SELECT * FROM asset_refs WHERE path = ?').get(oldClean);
+      const matches = exact ? [exact] : this.db.prepare(
+        'SELECT * FROM asset_refs WHERE substr(path, length(path) - length(?) + 1) = ?',
+      ).all(tail, tail);
+      if (matches.length > 1) throw productionError('存在多条旧路径记录，无法确定要移动的素材', 409, 'AMBIGUOUS_ASSET_PATH');
+      let assets = 0;
+      for (const source of matches) {
+        this.retireRelocationTarget(source, newClean);
+        assets += this.db.prepare('UPDATE asset_refs SET path = ? WHERE id = ?').run(newClean, source.id).changes;
+      }
+      let inbox = 0;
+      const updateInbox = this.db.prepare(
+        'UPDATE inbox_items SET asset_path = ?, filename = ?, updated_at = ? WHERE asset_id = ? OR (asset_id IS NULL AND asset_path = ?)',
+      );
+      for (const source of matches) {
+        inbox += updateInbox.run(newClean, String(newFilename || path.basename(newClean)), nowIso(), source.id, source.path).changes;
+      }
+      if (!matches.length) {
+        inbox += updateInbox.run(newClean, String(newFilename || path.basename(newClean)), nowIso(), null, oldClean).changes;
+      }
       return { assets, inbox };
     });
+  }
+
+  // A file may have left a historical registration at a currently empty
+  // destination. Preserve that ID and its references instead of deleting it.
+  retireRelocationTarget(source, destination) {
+    const target = this.db.prepare('SELECT * FROM asset_refs WHERE path = ?').get(destination);
+    if (!target || target.id === source.id) return;
+    if (target.project_id !== source.project_id) {
+      throw productionError('目标路径的素材记录属于另一个剧本', 409, 'CROSS_PROJECT_ASSET');
+    }
+    const retired = path.join(path.dirname(destination), '.asset-history', target.id, crypto.randomUUID(), path.basename(destination));
+    this.db.prepare('UPDATE asset_refs SET path = ? WHERE id = ?').run(retired, target.id);
+    this.db.prepare('UPDATE inbox_items SET asset_path = ?, updated_at = ? WHERE asset_id = ?')
+      .run(retired, nowIso(), target.id);
   }
 
   relocateFolder(oldPath, newPath) {
     const prefix = `${oldPath}${path.sep}`;
     const destination = `${newPath}${path.sep}`;
     return this.transaction(() => {
-      const assets = this.db.prepare('UPDATE asset_refs SET path = ? || substr(path, length(?) + 1) WHERE substr(path, 1, length(?)) = ?')
-        .run(destination, prefix, prefix, prefix).changes;
+      const sources = this.db.prepare('SELECT * FROM asset_refs WHERE substr(path, 1, length(?)) = ?').all(prefix, prefix);
+      let assets = 0;
+      for (const source of sources) {
+        const next = destination + source.path.slice(prefix.length);
+        this.retireRelocationTarget(source, next);
+        assets += this.db.prepare('UPDATE asset_refs SET path = ? WHERE id = ?').run(next, source.id).changes;
+      }
       const inbox = this.db.prepare('UPDATE inbox_items SET asset_path = ? || substr(asset_path, length(?) + 1), updated_at = ? WHERE substr(asset_path, 1, length(?)) = ?')
         .run(destination, prefix, nowIso(), prefix, prefix).changes;
       return { assets, inbox };

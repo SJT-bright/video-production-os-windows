@@ -156,6 +156,14 @@ FORM: 现有桌面工作台的 Operate 模式扩展；高密度、标准控件�
             <div class="script-actions">
               <button class="text-action" id="addScriptGroup" type="button">＋ 新建分组</button>
               <span class="script-hint">拖入 txt / docx 自动导入（可按 第X集 自动拆分）· 或按 第01集 / 前10集 / 自定义名称 建组</span>
+              <button class="text-action script-remove script-clear-button" id="clearScripts" type="button" aria-expanded="false" aria-controls="clearScriptsPrompt" disabled>删除全部</button>
+            </div>
+            <div class="script-clear-prompt" id="clearScriptsPrompt" role="group" aria-labelledby="clearScriptsMessage" hidden>
+              <p id="clearScriptsMessage"></p>
+              <div class="script-clear-actions">
+                <button class="text-action" id="cancelClearScripts" type="button">取消</button>
+                <button class="text-action script-remove" id="confirmClearScripts" type="button">确认删除</button>
+              </div>
             </div>
             <div class="script-groups" id="scriptGroups" aria-live="polite"></div>
           </div>

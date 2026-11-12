@@ -6,7 +6,7 @@ on:
       tag:
         description: 'Verified release tag'
         required: true
-        default: 'v1.3.17'
+        default: 'v1.3.18'
 
 permissions:
   contents: write
@@ -37,7 +37,8 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - name: Build redistributable audio component for both Mac architectures
         run: |
-          curl --fail --location --retry 3 --output FFmpeg-6.1.1-source.tar.xz https://ffmpeg.org/releases/ffmpeg-6.1.1.tar.xz
+          curl --fail --location --retry 4 --retry-all-errors --connect-timeout 20 --output FFmpeg-6.1.1-source.tar.xz https://github.com/SJT-bright/video-production-os/releases/download/v1.3.17/FFmpeg-6.1.1-source.tar.xz
+          echo "8684f4b00f94b85461884c3719382f1261f0d9eb3d59640a1f4ac0873616f968  FFmpeg-6.1.1-source.tar.xz" | shasum -a 256 -c -
           bash scripts/build-ffmpeg.sh "$PWD/FFmpeg-6.1.1-source.tar.xz" darwin arm64 "$VIDEO_OS_FFMPEG_BUILD_ROOT"
           bash scripts/build-ffmpeg.sh "$PWD/FFmpeg-6.1.1-source.tar.xz" darwin x64 "$VIDEO_OS_FFMPEG_BUILD_ROOT"
           node prepare-media-tools.cjs darwin universal --redistributable
@@ -58,6 +59,10 @@ jobs:
       - name: Verify current destination with a real packaged download
         run: |
           CURRENT_FOLDER_EXECUTABLE="$PWD/dist/public-release/视频制作 OS-darwin-universal/视频制作 OS.app/Contents/MacOS/VideoProductionOS" CURRENT_FOLDER_EVIDENCE="$PWD/test-artifacts/latest-release-native/current-download-folder" node test_current_download_folder_native.cjs
+      - name: Verify packaged script bulk deletion
+        env:
+          SIDEBAR_TEST_EXECUTABLE: dist/public-release/视频制作 OS-darwin-universal/视频制作 OS.app/Contents/MacOS/VideoProductionOS
+        run: node test_creator_sidebar_state.cjs
       - name: Verify packaged GitHub Star, version check and retained update state
         run: node test_github_updates_native.cjs
       - name: Preserve native feature verification receipts
@@ -122,7 +127,7 @@ jobs:
       - name: Build redistributable Windows audio component
         shell: msys2 {0}
         run: |
-          curl --fail --location --retry 4 --retry-all-errors --connect-timeout 20 --output FFmpeg-6.1.1-source.tar.xz https://github.com/SJT-bright/video-production-os/releases/download/v1.3.16/FFmpeg-6.1.1-source.tar.xz
+          curl --fail --location --retry 4 --retry-all-errors --connect-timeout 20 --output FFmpeg-6.1.1-source.tar.xz https://github.com/SJT-bright/video-production-os/releases/download/v1.3.17/FFmpeg-6.1.1-source.tar.xz
           echo "8684f4b00f94b85461884c3719382f1261f0d9eb3d59640a1f4ac0873616f968  FFmpeg-6.1.1-source.tar.xz" | sha256sum -c -
           bash scripts/build-ffmpeg.sh "$PWD/FFmpeg-6.1.1-source.tar.xz" win32 x64 "$PWD/media-builds"
       - name: Prepare verified audio component
@@ -147,6 +152,10 @@ jobs:
           $env:CURRENT_FOLDER_EVIDENCE = "$PWD/test-artifacts/latest-release-native/current-download-folder"
           node test_current_download_folder_native.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify packaged script bulk deletion
+        env:
+          SIDEBAR_TEST_EXECUTABLE: dist/视频制作OS-win32-x64/视频制作OS.exe
+        run: node test_creator_sidebar_state.cjs
       - name: Verify packaged GitHub Star, version check and retained update state
         run: node test_github_updates_native.cjs
       - name: Preserve native feature verification receipts

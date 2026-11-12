@@ -289,6 +289,90 @@ async function main() {
     report.checks.dropTargetSynchronizesAndLongNamesBounded = true;
     report.checks.compactSidebarDoesNotExposeEmptyForm = true;
     report.platformAfter = await platformSnapshot();
+
+    // Import different fixtures through the panel in both projects.
+    const storedProject = project => creator.evaluate(key =>
+      JSON.parse(localStorage.getItem(key)), projectPrefix + project.id);
+    const clear = creator.locator('#clearScripts');
+    const confirmation = creator.locator('#clearScriptsPrompt');
+    const scriptCount = creator.locator('#scriptAccordionCount');
+    const importFixture = (project, files) => creator.evaluate(({ key, files }) => {
+      const stored = JSON.parse(localStorage.getItem(key) || '{}');
+      localStorage.setItem(key, JSON.stringify({ ...stored, fixtureUnrelatedField: '保留' }));
+      const dataTransfer = new DataTransfer();
+      for (const name of files) dataTransfer.items.add(new File([`测试正文：${name}`], name + '.txt'));
+      document.getElementById('scriptAccordion').dispatchEvent(new DragEvent('drop', {
+        bubbles: true, cancelable: true, dataTransfer,
+      }));
+    }, { key: projectPrefix + project.id, files });
+    await activate(beta);
+    await importFixture(beta, ['乙剧第1集']);
+    await until(async () => await scriptCount.textContent() === '1 组 · 1 段', 'other project seeded');
+    await activate(alpha);
+    await setAccordions({ prompt: false, scripts: true, assets: false });
+    await importFixture(alpha, ['甲剧第1集', '甲剧第2集']);
+    await until(async () => await scriptCount.textContent() === '2 组 · 2 段', 'two groups imported');
+    const alphaBefore = await storedProject(alpha);
+    const betaBefore = await storedProject(beta);
+    await bindPlatformProbe();
+    baseline = await platformSnapshot();
+    await clear.click();
+    assert.match(await confirmation.textContent(), /侧栏测试剧本甲.*2 组、2 段/);
+    await creator.locator('#scriptAccordion').screenshot({ path: path.join(evidenceRoot, 'script-delete-confirmation.png') });
+    await creator.locator('#cancelClearScripts').click();
+    assert.ok(await confirmation.isHidden());
+    assert.deepEqual(await storedProject(alpha), alphaBefore);
+    await platformUnchanged('Cancel script deletion keeps the platform view');
+    await clear.click();
+    await activate(beta);
+    assert.ok(await confirmation.isHidden(), 'A pending deletion must close on project switch');
+    await until(async () => await scriptCount.textContent() === '1 组 · 1 段', 'other project loaded');
+    await activate(alpha);
+    await until(async () => await scriptCount.textContent() === '2 组 · 2 段', 'first project restored');
+    await bindPlatformProbe();
+    baseline = await platformSnapshot();
+    await clear.click();
+    // Fail the project write once to ensure the original content is restored and confirmation can be retried.
+    await creator.evaluate(key => {
+      const write = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (name, value) {
+        if (name === key && JSON.parse(value).scripts?.groups.length === 0) {
+          Storage.prototype.setItem = write;
+          throw new DOMException('Fixture write failure', 'QuotaExceededError');
+        }
+        return write.call(this, name, value);
+      };
+    }, projectPrefix + alpha.id);
+    const confirmDelete = creator.locator('#confirmClearScripts');
+    await confirmDelete.click();
+    assert.ok(await confirmation.isVisible());
+    assert.equal(await scriptCount.textContent(), '2 组 · 2 段');
+    assert.deepEqual(await storedProject(alpha), alphaBefore);
+    await creator.evaluate(() => {
+      const file = new File(['尚未完成的导入'], '慢速导入.txt');
+      const read = file.arrayBuffer.bind(file);
+      const gate = new Promise(resolve => { window.__releaseScriptRead = resolve; });
+      file.arrayBuffer = () => gate.then(read);
+      window.__pendingScriptImport = importScriptFiles([file], '');
+    });
+    await confirmDelete.click();
+    await creator.evaluate(() => {
+      window.__releaseScriptRead();
+      return window.__pendingScriptImport;
+    });
+    assert.ok(await confirmation.isHidden());
+    assert.ok(await clear.isDisabled());
+    assert.equal(await scriptCount.textContent(), '0 组');
+    await platformUnchanged('Confirm script deletion keeps the platform view');
+    await refresh();
+    assert.equal(await scriptCount.textContent(), '0 组');
+    assert.deepEqual(await storedProject(alpha), { ...alphaBefore, scripts: { groups: [] } });
+    assert.deepEqual(await storedProject(beta), betaBefore);
+    await activate(beta);
+    await until(async () => await scriptCount.textContent() === '1 组 · 1 段', 'other project kept its script');
+    report.checks.clearScriptsCancelFailureProjectIsolationAndRefresh = true;
+    report.checks.clearScriptsPlatformRetained = true;
+
     report.projectStorageProof = { alphaId: alpha.id, betaId: beta.id,
       alphaPromptImage: projectStorage.alpha.prompts.image, betaPromptImage: projectStorage.beta.prompts.image,
       alphaCreationDraftModes: Object.keys(projectStorage.alpha.templateCreateDrafts) };

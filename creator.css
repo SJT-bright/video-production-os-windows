@@ -529,6 +529,15 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .script-actions { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .script-actions .text-action { flex: none; min-height: 26px; padding: 3px 4px; font-size: 11px; }
 .script-hint { min-width: 0; overflow: hidden; color: var(--faint); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.script-clear-button { margin-left: auto; white-space: nowrap; }
+.script-clear-prompt {
+  margin-bottom: 8px; padding: 8px 10px; border: 1px solid rgba(255,59,48,.26);
+  border-radius: 11px; background: rgba(255,59,48,.06);
+}
+.script-clear-prompt p { margin: 0; color: var(--text); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.script-clear-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+.script-clear-actions .text-action { min-height: 26px; font-size: 11px; }
+.script-clear-actions #confirmClearScripts { color: #a8231a; font-weight: 700; }
 .script-groups { display: grid; gap: 6px; }
 .script-group { border: 1px solid var(--line); border-radius: 11px; background: rgba(255,255,255,.72); overflow: hidden; }
 .script-group.expanded { border-color: color-mix(in srgb, var(--mode) 42%, var(--line)); background: #fff; }

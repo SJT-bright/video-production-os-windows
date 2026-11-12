@@ -483,6 +483,33 @@ async function expectRollback(before, relative, target) {
     assert.equal(fs.readFileSync(abs(sidecar(copyPath)), 'utf8'), promptText);
     await api('/api/creative-projects', { action: 'activate', id: c.id });
     expectInfo(await asset(c.id, cPath), cId, 'processing');
+    // A deleted/moved file can leave a stale ledger destination. The image
+    // must move without losing either the source ID or historical inbox links.
+    await api('/api/creative-projects', { action: 'activate', id: a.id });
+    const imageSource = `${relocated(office)}/分类移动回归.png`;
+    const imageTarget = `${relocated(finalRoot)}/分类移动回归.png`;
+    fs.writeFileSync(abs(imageSource), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j0wAAAABJRU5ErkJggg==', 'base64'));
+    await rpc('seedDownload', { input: { id: 'image-source', savePath: abs(imageSource), filename: '分类移动回归.png', kind: 'image', mode: 'image' }, snapshot: { projectId: a.id } });
+    await rpc('seedDownload', { input: { id: 'image-stale-destination', savePath: abs(imageTarget), filename: '分类移动回归.png', kind: 'image', mode: 'image' }, snapshot: { projectId: a.id } });
+    const sourceId = (await asset(a.id, imageSource)).assetId;
+    const staleBefore = (await rpc('ledger')).inbox.find(row => row.download_key === 'image-stale-destination');
+    const imageBytes = fs.readFileSync(abs(imageSource));
+    const movedImage = (await api(`/api/creative-assets/move?project=${a.id}`, { path: imageSource, folder: relocated(finalRoot) })).path;
+    assert.deepEqual(fs.readFileSync(abs(movedImage)), imageBytes);
+    assert.equal(movedImage, imageTarget);
+    assert.equal((await asset(a.id, movedImage)).assetId, sourceId);
+    assert.ok(!fs.existsSync(abs(imageSource)) && fs.existsSync(abs(imageTarget)));
+    const imageLedger = await rpc('ledger');
+    const retired = imageLedger.assets.find(row => row.id === staleBefore.asset_id);
+    assert.ok(retired.path.includes('.asset-history'));
+    assert.equal(imageLedger.inbox.find(row => row.download_key === 'image-stale-destination').asset_path, retired.path);
+    assert.equal(imageLedger.inbox.find(row => row.download_key === 'image-source').asset_path, abs(imageTarget));
+    const roundTrip = (await api(`/api/creative-assets/move?project=${a.id}`, { path: imageTarget, folder: relocated(office) })).path;
+    assert.deepEqual(fs.readFileSync(abs(roundTrip)), imageBytes);
+    assert.equal((await asset(a.id, roundTrip)).assetId, sourceId);
+    await stop(); await start();
+    assert.equal((await asset(a.id, imageSource)).assetId, sourceId);
+    console.log('PASS: 图片跨分类历史路径冲突、往返移动、原身份和历史关联保留、重启');
     console.log('ASSET_WORKFLOW_PASS ' + JSON.stringify({ assets: expected.size, persistentIdentity: true,
       ordinaryMoveStatus: true, folderRename: true, designatedReclassification: true,
       copyLineage: true, recreatedCopyIdentity: true, concurrentCopy: true, changedCopySource: true,

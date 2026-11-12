@@ -69,6 +69,7 @@ const el = Object.fromEntries([
   'hiddenPlatforms', 'hiddenPlatformList', 'restoreAllPlatforms',
   'draftStatus',
   'promptAccordion', 'promptAccordionCount', 'scriptAccordion', 'scriptAccordionCount', 'addScriptGroup', 'scriptGroups', 'assetAccordion', 'assetAccordionCount',
+  'clearScripts', 'clearScriptsPrompt', 'clearScriptsMessage', 'cancelClearScripts', 'confirmClearScripts',
   'promptTemplateList',
   'templateCreate', 'templateCreateForm', 'templateCreateName', 'templateCreateBody', 'cancelTemplateCreate',
   'quickFolderTree', 'quickDropTarget', 'quickDropTargetHint', 'quickViewNotice', 'quickFileInput',
@@ -240,6 +241,7 @@ function resetProjectWorkspace() {
   // 剧本面板按剧本项目存储：切换后由 loadWorkspace 读入新剧本的分组。
   state.scripts = { groups: [] };
   expandedScriptGroups.clear(); expandedScriptItems.clear();
+  closeClearScripts();
   // 框选导入序列属于旧剧本：整体清空，防止把旧项目资产拖进新项目上下文。
   state.quickSelectionOrder.length = 0;
   state.quickSelectMode = false;
@@ -1650,9 +1652,48 @@ function scriptUid(prefix) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function closeClearScripts({ restoreFocus = false } = {}) {
+  el.clearScriptsPrompt.hidden = true;
+  el.clearScripts.setAttribute('aria-expanded', 'false');
+  if (restoreFocus) el.clearScripts.focus();
+}
+
+function openClearScripts() {
+  const { groups } = state.scripts;
+  if (!groups.length) return;
+  if (!el.clearScriptsPrompt.hidden) { closeClearScripts({ restoreFocus: true }); return; }
+  const totalItems = groups.reduce((sum, group) => sum + group.items.length, 0);
+  const projectName = state.config?.project?.name;
+  const projectLabel = projectName ? `「${projectName}」` : '当前项目';
+  el.clearScriptsMessage.textContent = `删除${projectLabel}中的 ${groups.length} 组、${totalItems} 段剧本？此操作不可撤销。`;
+  el.clearScriptsPrompt.hidden = false;
+  el.clearScripts.setAttribute('aria-expanded', 'true');
+  el.cancelClearScripts.focus();
+}
+
+function clearScriptGroups() {
+  const previous = state.scripts;
+  if (el.clearScriptsPrompt.hidden || !el.scriptAccordion.open || !previous.groups.length) return;
+  state.scripts = { groups: [] };
+  if (!saveWorkspace(true)) {
+    state.scripts = previous;
+    return;
+  }
+  expandedScriptGroups.clear();
+  expandedScriptItems.clear();
+  for (const group of previous.groups) {
+    for (const item of group.items) scriptDrafts.delete(item.id);
+  }
+  renderScripts();
+  el.addScriptGroup.focus();
+  showToast('已删除当前项目的全部剧本分组');
+}
+
 function renderScripts() {
   const groups = state.scripts.groups;
   const totalItems = groups.reduce((sum, group) => sum + group.items.length, 0);
+  closeClearScripts();
+  el.clearScripts.disabled = !groups.length;
   el.scriptAccordionCount.textContent = groups.length ? `${groups.length} 组 · ${totalItems} 段` : '0 组';
   el.scriptGroups.replaceChildren();
   if (!groups.length) {
@@ -2110,6 +2151,7 @@ function splitScriptByEpisodes(text) {
 // 拖拽导入剧本文件。保护一：目标分组达到 100 段上限后，统计并提示被丢弃的剩余段数，不再静默丢弃。
 // 保护二：单段文本超过 20 万字时截断保留前 20 万字入库并计数提示，与 loadWorkspace 的截尾兜底一致。
 async function importScriptFiles(files, targetGroupId) {
+  const scripts = state.scripts;
   let groupsCreated = 0;
   let itemsAdded = 0;
   let splitCount = 0;
@@ -2128,9 +2170,12 @@ async function importScriptFiles(files, targetGroupId) {
       showToast(`读取失败 ${file.name}：${error.message}`);
       continue;
     }
+    // 清空或切换后，尚未读完的文件不得回填原列表或写入另一个剧本。
+    if (state.scripts !== scripts) return;
     text = text.replace(/\r\n/g, '\n').trim();
     if (!text) { showToast(`文件是空的：${file.name}`); continue; }
-    let group = targetGroupId ? state.scripts.groups.find(candidate => candidate.id === targetGroupId) : null;
+    if (!el.clearScriptsPrompt.hidden) closeClearScripts({ restoreFocus: true });
+    let group = targetGroupId ? scripts.groups.find(candidate => candidate.id === targetGroupId) : null;
     if (!group) {
       if (state.scripts.groups.length >= 200) { showToast('分组已达上限（200 组）'); break; }
       group = { id: scriptUid('sg'), name: file.name.replace(/\.[^.]+$/, '').slice(0, 60), items: [] };
@@ -6156,10 +6201,20 @@ function bindEvents() {
   });
   el.scriptAccordion.addEventListener('toggle', () => {
     state.accordions.scripts = el.scriptAccordion.open;
+    if (!el.scriptAccordion.open) closeClearScripts();
     saveWorkspace();
     queueBoundsUpdate();
   });
   el.addScriptGroup.addEventListener('click', addScriptGroup);
+  el.clearScripts.addEventListener('click', openClearScripts);
+  el.cancelClearScripts.addEventListener('click', () => closeClearScripts({ restoreFocus: true }));
+  el.confirmClearScripts.addEventListener('click', clearScriptGroups);
+  el.clearScriptsPrompt.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeClearScripts({ restoreFocus: true });
+  });
   wireScriptImportDrop();
   el.assetAccordion.addEventListener('toggle', () => {
     state.accordions.assets = el.assetAccordion.open;
