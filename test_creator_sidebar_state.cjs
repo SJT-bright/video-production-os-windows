@@ -16,7 +16,17 @@ const accordions = { prompt: 'promptAccordion', scripts: 'scriptAccordion', asse
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(read, label, timeout = 16000) {
   const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) { const value = await read(); if (value) return value; await delay(40); }
+  while (Date.now() < deadline) {
+    let value;
+    try { value = await read(); }
+    catch (error) {
+      // Chromium may collect a pending inspector read when native views change.
+      // Poll again within the original deadline; never retry writes/assertions.
+      if (!String(error.message).includes('Resulting promise was garbage collected')) throw error;
+    }
+    if (value) return value;
+    await delay(40);
+  }
   throw new Error(`Timed out: ${label}`);
 }
 async function freePort() {

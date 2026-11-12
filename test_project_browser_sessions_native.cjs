@@ -11,7 +11,12 @@ const { createCreativeProjectStore } = require('./creative-projects.cjs');
 async function until(read, label) {
   const deadline = Date.now() + 15000;
   do {
-    const value = await read();
+    let value;
+    try { value = await read(); }
+    catch (error) {
+      // Retry only transient inspector reads, without extending the deadline.
+      if (!String(error.message).includes('Resulting promise was garbage collected')) throw error;
+    }
     if (value) return value;
     await new Promise(resolve => setTimeout(resolve, 50));
   } while (Date.now() < deadline);
